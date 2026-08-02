@@ -1,0 +1,158 @@
+{
+  "authority": {
+    "android": "16",
+    "device": "tegu",
+    "reference_build": "CP1A.260305.018",
+    "required_vbmeta_keys": [
+      "ro.boot.vbmeta.digest",
+      "ro.boot.vbmeta.size",
+      "ro.boot.vbmeta.avb_version",
+      "ro.boot.avb_version"
+    ],
+    "sdk": 36
+  },
+  "schema_version": 2,
+  "strict_exclusions": [
+    "AshLooper",
+    "AshReXcue",
+    "BetterKnownInstalled",
+    "BKI"
+  ],
+  "targets": {
+    "playintegrityfix": {
+      "accepted_hashes": {
+        "autopif.sh": [
+          "1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1",
+          "67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a"
+        ],
+        "autopif_ota.sh": [
+          "cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1"
+        ],
+        "security_patch.sh": [
+          "a21fa1444ad870ad2ba09cb2a45a0576361df6062369d13f05fbf0db78f29476"
+        ]
+      },
+      "managed_paths": [
+        "autopif.sh",
+        "autopif_ota.sh",
+        "pif.prop",
+        "security_patch.sh"
+      ],
+      "module_ids": [
+        "playintegrityfix"
+      ],
+      "monitor": {
+        "branch": "inject_s",
+        "expected_head": "ea93222c58f90108cef0c02a11e66bdfdf4b21b6",
+        "repository": "KOWX712/PlayIntegrityFix"
+      },
+      "observed_only_hashes": {
+        "action.sh": [
+          "245168235a0e36172bf77a58fe0b39b5d3e2faf83c8845d90b404cfca3bc07af"
+        ],
+        "post-fs-data.sh": [
+          "aba3ff2dbec9912b616d08a4cc9904ef02bea8a94e75fccfcfbb75cf7f09f5d3"
+        ],
+        "service.sh": [
+          "02b171bfce8476dffb97ccaa4d8dbf2ad068d9d4c46ba7032c25cc332f32d09a"
+        ]
+      },
+      "preserved_paths": [
+        "action.sh",
+        "post-fs-data.sh",
+        "service.sh",
+        "common_func.sh",
+        "webroot/**",
+        "zygisk/**"
+      ],
+      "reviewed_sources": [
+        {
+          "commit": "35c7f59191c0bdc96f2024cb3fad8f3fa1a51570",
+          "ref": "inject-s v4.7.1"
+        },
+        {
+          "commit": "ea93222c58f90108cef0c02a11e66bdfdf4b21b6",
+          "ref": "source snapshot"
+        }
+      ],
+      "strategy": "configuration-preserving targeted transformation"
+    },
+    "ta-utl": {
+      "accepted_hashes": {
+        "prop.sh": [
+          "fffa4d98aafb444594480ccaecbdbc083fee8e860418f86cc55e2422dc7a647f"
+        ]
+      },
+      "managed_paths": [
+        "prop.sh"
+      ],
+      "module_ids": [
+        "TA_utl",
+        ".TA_utl"
+      ],
+      "monitor": {
+        "branch": "main",
+        "expected_head": "8572ead0e18ced53fb1623f9a674068046713ee7",
+        "repository": "KOWX712/Tricky-Addon-Update-Target-List"
+      },
+      "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file",
+      "reviewed_ref": "v4.4 installed writer contract",
+      "strategy": "exact v4.4 prop.sh transformation; VBMeta block only"
+    },
+    "trickystore": {
+      "asset_sha256": "2f5e73fcba0e4e43b6e96b38f333cbe394873e3a81cf8fe1b831c2fbd6c46ea9",
+      "managed_path": "/data/adb/tricky_store/security_patch.txt",
+      "module_ids": [
+        "tricky_store"
+      ],
+      "monitor": {
+        "branch": "release",
+        "expected_head": "55d65f305e04110b87210d86cc12b64a1b7e151d",
+        "repository": "5ec1cff/TrickyStore"
+      },
+      "reviewed_ref": "1.4.1",
+      "strategy": "external contract"
+    },
+    "vbmeta-fixer": {
+      "managed_templates": {
+        "service.sh": "134fbfc6263bb19f3612643ccbf078bb0a265dbdc59b102531fa85b8ff674ded"
+      },
+      "module_ids": [
+        "vbmeta-fixer"
+      ],
+      "monitor": {
+        "branch": "main",
+        "expected_head": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
+        "repository": "Zenlua/Android-VBMeta-Fixer"
+      },
+      "reviewed_commit": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
+      "strategy": "exact service replacement; sole managed runtime VBMeta owner"
+    },
+    "yurikey": {
+      "managed_templates": {
+        "apply.sh": "ce4d6ce0e30af2c606846975d5778a87bbe27615358d49d97d39cab536a97a1d",
+        "clear-all.sh": "cd0af4eb16c7c422cdd9210afb5939fcdd638aac5acd3af4387860e91e1f0181",
+        "service.sh": "c5590491b50fb457ac836db1b887059db2f4a1a15e40aff919bcea16f36f4498"
+      },
+      "module_ids": [
+        "Yurikey"
+      ],
+      "monitor": {
+        "branch": "main",
+        "expected_head": "628d9d8ee9810b97516574475c0e28cdd6d4c026",
+        "repository": "Yurii0307/yurikey"
+      },
+      "reviewed_sources": [
+        {
+          "commit": "628d9d8ee9810b97516574475c0e28cdd6d4c026",
+          "ref": "3.0.5"
+        },
+        {
+          "commit": "49d8e04cd256a8ac1df637dd816b112de6de2b36",
+          "ref": "3.0.6"
+        }
+      ],
+      "strategy": "exact writer replacement"
+    }
+  }
+}

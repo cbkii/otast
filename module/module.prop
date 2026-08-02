@@ -1,0 +1,7 @@
+id=otast
+name=OTAST — OTA Source of Truth
+version=v1.0.0-rc.3
+versionCode=100003
+author=cbkii
+description=Transactional OTA identity authority and target-module consistency for Pixel 9a Android 16
+updateJson=https://raw.githubusercontent.com/cbkii/otast/main/update.json

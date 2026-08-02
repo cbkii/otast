@@ -1,0 +1,32 @@
+# Generated artifacts and evidence
+dist/
+reports/
+*.log
+*.tmp
+
+# Private device fixtures
+.device-fixtures/
+fixtures-private/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+
+# Local environments and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+service-account.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

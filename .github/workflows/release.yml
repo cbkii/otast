@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Validate only or publish the current module version
+        required: true
+        type: choice
+        options: [validate, publish]
+        default: validate
+      version:
+        description: Exact module version, for example v1.0.0-rc.2
+        required: true
+        type: string
+        default: v1.0.0-rc.2
+      draft:
+        description: Create the GitHub release as a draft
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout selected commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install shell validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y busybox shellcheck unzip zip
+
+      - name: Verify requested version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          module_version=$(awk -F= '$1 == "version" {print $2}' module/module.prop)
+          [[ "$module_version" == "$REQUESTED_VERSION" ]] || {
+            printf 'Requested version %s differs from module.prop %s\n' "$REQUESTED_VERSION" "$module_version" >&2
+            exit 1
+          }
+          [[ "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || exit 1
+
+      - name: Full exact-package qualification
+        run: bash scripts/test.sh --full
+
+      - name: Build release assets
+        run: bash scripts/build-release.sh
+
+      - name: Summarize assets
+        run: |
+          sha256sum dist/otast-*.zip | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish owner-requested release
+        if: inputs.operation == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          [[ "$GITHUB_ACTOR" == "$GITHUB_REPOSITORY_OWNER" ]] || {
+            printf 'Only the repository owner may publish.\n' >&2
+            exit 1
+          }
+          args=(release create "$VERSION" "dist/otast-${VERSION}.zip" "dist/otast-${VERSION}.zip.sha256" --target "$GITHUB_SHA" --title "OTAST $VERSION" --notes-file CHANGELOG.md)
+          [[ "$DRAFT" == true ]] && args+=(--draft)
+          [[ "$VERSION" == *-* ]] && args+=(--prerelease)
+          gh "${args[@]}"
