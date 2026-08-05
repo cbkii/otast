@@ -41,6 +41,9 @@ fi
 if [[ $mode != quick ]]; then
     if ! command -v shellcheck >/dev/null 2>&1; then
         otast_script_error 'ShellCheck is required for standard/full tests; run scripts/bootstrap-termux.sh'
+    elif ! shellcheck --shell=busybox /dev/null >/dev/null 2>&1; then
+        shellcheck_version=$(shellcheck --version 2>/dev/null | awk -F': ' '/^version:/ {print $2; exit}') || shellcheck_version=unknown
+        otast_script_error "ShellCheck ${shellcheck_version:-unknown} does not support --shell=busybox; install ShellCheck v0.11.0 or newer"
     else
         mapfile -d '' host_scripts < <(find "$REPO_ROOT/scripts" -type f -name '*.sh' -print0 | sort -z)
         if ((${#host_scripts[@]} > 0)); then
