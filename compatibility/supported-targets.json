@@ -139,7 +139,7 @@
       ],
       "monitor": {
         "branch": "main",
-        "expected_head": "628d9d8ee9810b97516574475c0e28cdd6d4c026",
+        "expected_head": "5330b77c0b797e580c582d43e91ceae5b450dce6",
         "repository": "Yurii0307/yurikey"
       },
       "reviewed_sources": [

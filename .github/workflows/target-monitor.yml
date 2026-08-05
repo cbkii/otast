@@ -1,38 +1,89 @@
-name: Target monitor
+name: Target Monitor
 
 on:
   schedule:
-    - cron: '17 3 * * 1,5'
+    - cron: '17 7 * * 1,4'
   workflow_dispatch:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
-  group: target-monitor
-  cancel-in-progress: true
+  group: target-monitor-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPORT_DIR: ${{ github.workspace }}/reports/target-monitor-action-${{ github.run_id }}-${{ github.run_attempt }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Compare reviewed upstream heads
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: bash scripts/monitor-targets.sh
-
-      - name: Add report to summary
-        if: always()
+      - name: Run authenticated target monitor
+        id: monitor
+        shell: bash
         run: |
-          if [[ -f reports/target-monitor/target-monitor.md ]]; then
-            cat reports/target-monitor/target-monitor.md >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          python3 scripts/otast-maintenance.py monitor \
+            --output "$REPORT_DIR" \
+            --no-cleanup
+          monitor_rc=$?
+          set -e
+
+          echo "rc=$monitor_rc" >>"$GITHUB_OUTPUT"
+
+          case "$monitor_rc" in
+            0)
+              echo "result=SUPPORTED" >>"$GITHUB_OUTPUT"
+              ;;
+            10)
+              echo "result=REVIEW_REQUIRED" >>"$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "result=ERROR" >>"$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Reconcile target issues
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f $REPORT_DIR/target-monitor.json ]]; then
+            python3 scripts/otast-maintenance.py issues-sync \
+              --report "$REPORT_DIR/target-monitor.json" \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            echo "No monitor JSON was produced; issue reconciliation skipped." >&2
           fi
+
+      - name: Publish workflow summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f $REPORT_DIR/target-monitor.md ]]; then
+            cat "$REPORT_DIR/target-monitor.md" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "Target monitor produced no Markdown report." >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload monitor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-monitor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REPORT_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Fail only on monitor errors
+        if: always() && steps.monitor.outputs.rc != '0' && steps.monitor.outputs.rc != '10'
+        shell: bash
+        run: |
+          echo "Target monitoring failed before a reliable comparison completed." >&2
+          exit 1
