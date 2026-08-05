@@ -92,7 +92,7 @@
       ],
       "monitor": {
         "branch": "main",
-        "expected_head": "8572ead0e18ced53fb1623f9a674068046713ee7",
+        "expected_head": "a42941c0584f684647d3b3cd837f49c7e16c0fe1",
         "repository": "KOWX712/Tricky-Addon-Update-Target-List"
       },
       "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file",
