@@ -53,6 +53,13 @@ class PublicRepositoryContractTests(unittest.TestCase):
         for path in (ROOT / "scripts").rglob("*.sh"):
             self.assertEqual(path.stat().st_mode & 0o777, 0o755, path.relative_to(ROOT).as_posix())
 
+        for relative in (
+            "scripts/otast-maintenance.py",
+            "scripts/otast_safety_guard.py",
+            "scripts/upstream-target-package.py",
+        ):
+            self.assertEqual((ROOT / relative).stat().st_mode & 0o777, 0o755, relative)
+
     def test_capture_allowlist_is_narrow(self) -> None:
         capture = (ROOT / "scripts/capture-device-fixture.sh").read_text(encoding="utf-8")
         allowed_modules = {
