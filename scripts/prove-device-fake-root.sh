@@ -12,6 +12,7 @@ python3 "$SCRIPT_DIR/otast_safety_guard.py" non-root "prove device fake root" >/
 fixture=
 name=
 evidence=
+module_zip=
 restore_clone=0
 
 usage() {
@@ -22,6 +23,7 @@ Options:
   --fixture PATH|latest   Sanitized device fixture. Default: latest.
   --name NAME             Fake-root/proof name. Default: tegu-proof-<UTC>.
   --evidence DIR          Evidence directory. Default: ~/.local/state/otast-proof/NAME.
+  --module-zip PATH       Prove this exact validated candidate ZIP without rebuilding it.
   --restore-clone         Prove Restore in a separate disposable clone.
   -h, --help              Show this help.
 
@@ -61,6 +63,11 @@ while (($#)); do
             evidence=$2
             shift 2
             ;;
+        --module-zip)
+            (($# >= 2)) || { printf 'STOP: --module-zip requires a value.\n' >&2; exit 2; }
+            module_zip=$2
+            shift 2
+            ;;
         --restore-clone)
             restore_clone=1
             shift
@@ -94,6 +101,14 @@ case $fixture in
     "$fixture_root"/*) ;;
     *) printf 'STOP: fixture is outside %s: %s\n' "$fixture_root" "$fixture" >&2; exit 1 ;;
 esac
+
+if [[ -n $module_zip ]]; then
+    [[ -f $module_zip && ! -L $module_zip ]] || {
+        printf 'STOP: candidate module ZIP is missing or unsafe: %s\n' "$module_zip" >&2
+        exit 1
+    }
+    module_zip=$(cd -- "$(dirname -- "$module_zip")" >/dev/null 2>&1 && pwd -P)/$(basename -- "$module_zip") || exit 1
+fi
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ) || exit 1
 name=${name:-tegu-proof-$stamp}
@@ -135,7 +150,9 @@ printf 'Fixture:  %s\n' "$fixture"
 printf 'Name:     %s\n' "$name"
 printf 'Evidence: %s\n' "$evidence"
 
-bash "$SCRIPT_DIR/reset-fake-magisk-root.sh" "$fixture" "$name" \
+reset_args=("$fixture" "$name")
+[[ -z $module_zip ]] || reset_args+=("$module_zip")
+bash "$SCRIPT_DIR/reset-fake-magisk-root.sh" "${reset_args[@]}" \
     >"$evidence/00-reset.log" 2>&1
 rc=$?
 cat "$evidence/00-reset.log"
@@ -184,7 +201,9 @@ restore_root=
 if ((restore_clone == 1)); then
     restore_name=${name}-restore
     restore_root=${HOME:?}/.cache/otast/fake-roots/$restore_name
-    bash "$SCRIPT_DIR/reset-fake-magisk-root.sh" "$fixture" "$restore_name" \
+    restore_reset_args=("$fixture" "$restore_name")
+    [[ -z $module_zip ]] || restore_reset_args+=("$module_zip")
+    bash "$SCRIPT_DIR/reset-fake-magisk-root.sh" "${restore_reset_args[@]}" \
         >"$evidence/20-restore-reset.log" 2>&1 || {
         cat "$evidence/20-restore-reset.log" >&2
         exit 1
@@ -219,6 +238,7 @@ OTAST_FIXTURE='$fixture'
 OTAST_FAKE_ROOT='$fake_root'
 OTAST_RESTORE_ROOT='$restore_root'
 OTAST_MODULE_SHA256='$candidate_sha'
+OTAST_MODULE_ZIP='$module_zip'
 OTAST_GIT_HEAD='$git_head'
 OTAST_RESTORE_RESULT='$restore_result'
 OTAST_PROOF_UTC='$stamp'
@@ -235,6 +255,7 @@ SECOND_APPLY_NOOP=PASS
 FINAL_VERIFY=PASS
 RESTORE_CLONE=$restore_result
 MODULE_SHA256=$candidate_sha
+MODULE_ZIP=$module_zip
 GIT_HEAD=$git_head
 FIXTURE=$fixture
 FAKE_ROOT=$fake_root

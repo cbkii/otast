@@ -256,7 +256,10 @@ otast qualify --fixture latest
 
 The final qualifier runs full tests/ShellCheck, privacy, deterministic builds,
 commit binding, source packaging, synthetic lifecycle, device-derived proof,
-Restore proof and analysis export. It performs no Git or GitHub writes.
+Restore proof and analysis export. The qualifier passes that exact already-built ZIP
+through the primary and Restore-clone proofs; those stages never rebuild a second
+candidate with different `release.properties` commit binding. It performs no Git or
+GitHub writes.
 
 ## Safety guard
 

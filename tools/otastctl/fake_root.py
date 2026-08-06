@@ -507,8 +507,19 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         return evidence
 
 
-def clone_fixture_root(repo_root: Path, fixture: Path, destination: Path, allowed_root: Path) -> dict[str, object]:
-    """Reset a private sanitized fixture and install the exact candidate ZIP."""
+def clone_fixture_root(
+    repo_root: Path,
+    fixture: Path,
+    destination: Path,
+    allowed_root: Path,
+    module_zip: Path | None = None,
+) -> dict[str, object]:
+    """Reset a private sanitized fixture and install one exact candidate ZIP.
+
+    Release qualification supplies the deterministic ZIP it already built.
+    Rebuilding here would change ``release.properties`` commit binding and prove
+    a different artifact.
+    """
 
     from .fixture import reset_fixture
 
@@ -527,8 +538,14 @@ def clone_fixture_root(repo_root: Path, fixture: Path, destination: Path, allowe
         if module_dir.exists():
             shutil.rmtree(module_dir)
         with tempfile.TemporaryDirectory(prefix="otast-candidate-", dir=allowed_root) as raw:
-            module_zip = build_module(repo_root, Path(raw))
-            _extract_exact_zip(module_zip, module_dir)
+            if module_zip is None:
+                candidate_zip = build_module(repo_root, Path(raw))
+            else:
+                if module_zip.is_symlink() or not module_zip.is_file():
+                    raise OtastError(f"candidate module ZIP is missing or unsafe: {module_zip}")
+                candidate_zip = module_zip.resolve()
+                validate_module_zip(candidate_zip)
+            _extract_exact_zip(candidate_zip, module_dir)
             marker = adb_root / ".otast-fake-root"
             _write(marker, "1\n", 0o600)
             evidence = {
@@ -536,8 +553,9 @@ def clone_fixture_root(repo_root: Path, fixture: Path, destination: Path, allowe
                 "result": "PASS",
                 "fixture": str(fixture),
                 "destination": str(destination),
-                "module_zip": module_zip.name,
-                "module_sha256": sha256_file(module_zip),
+                "module_zip": candidate_zip.name,
+                "module_sha256": sha256_file(candidate_zip),
+                "candidate_source": "supplied" if module_zip is not None else "built",
             }
             atomic_write(destination / "candidate-module.json", stable_json(evidence).encode(), 0o600)
             return evidence

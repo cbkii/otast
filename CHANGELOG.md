@@ -2,6 +2,13 @@
 
 All notable user-visible changes are recorded here.
 
+## v1.0.0 — initial stable release
+
+- Promote the fully qualified v1.0.0 release candidate to the first stable release without expanding the managed runtime surface.
+- Bind device-derived and Restore-clone proof to the exact commit-specific release ZIP rather than a rebuilt candidate.
+- Add authenticated Termux maintenance, target monitoring, bounded report cleanup and clearer review/error outcomes.
+- Pin CI and release validation to ShellCheck v0.11.0 and preserve executable source entrypoint modes.
+
 ## v1.0.0-rc.3 — reboot-boundary and live-contract correction
 
 - Separate immutable platform identity checks from runtime VBMeta outputs managed by OTAST.

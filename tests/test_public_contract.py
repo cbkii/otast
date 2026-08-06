@@ -60,6 +60,18 @@ class PublicRepositoryContractTests(unittest.TestCase):
         ):
             self.assertEqual((ROOT / relative).stat().st_mode & 0o777, 0o755, relative)
 
+    def test_release_qualification_proves_exact_built_zip(self) -> None:
+        qualifier = (ROOT / "scripts/qualify-release-candidate.sh").read_text(encoding="utf-8")
+        proof = (ROOT / "scripts/prove-device-fake-root.sh").read_text(encoding="utf-8")
+        reset = (ROOT / "scripts/reset-fake-magisk-root.sh").read_text(encoding="utf-8")
+        cli = (ROOT / "tools/otastctl/cli.py").read_text(encoding="utf-8")
+        self.assertIn('--module-zip "$zip_a"', qualifier)
+        self.assertIn("--module-zip PATH", proof)
+        self.assertIn('reset_args+=("$module_zip")', proof)
+        self.assertIn('restore_reset_args+=("$module_zip")', proof)
+        self.assertIn('clone_args+=(--module-zip "$candidate_zip")', reset)
+        self.assertIn('clone.add_argument("--module-zip"', cli)
+
     def test_capture_allowlist_is_narrow(self) -> None:
         capture = (ROOT / "scripts/capture-device-fixture.sh").read_text(encoding="utf-8")
         allowed_modules = {

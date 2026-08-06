@@ -71,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     clone.add_argument("source")
     clone.add_argument("destination")
     clone.add_argument("--allowed-root", required=True)
+    clone.add_argument("--module-zip", help="install this exact validated candidate ZIP")
     return parser
 
 
@@ -122,7 +123,14 @@ def main(argv: list[str] | None = None) -> int:
             reset_fixture(_root(args.source), _root(args.destination), _root(args.allowed_root))
             print(_root(args.destination))
         elif args.command == "fixture-clone":
-            report = clone_fixture_root(repo, _root(args.source), _root(args.destination), _root(args.allowed_root))
+            module_zip = _root(args.module_zip) if args.module_zip else None
+            report = clone_fixture_root(
+                repo,
+                _root(args.source),
+                _root(args.destination),
+                _root(args.allowed_root),
+                module_zip=module_zip,
+            )
             print(stable_json(report), end="")
         else:  # pragma: no cover
             parser.error("unknown command")

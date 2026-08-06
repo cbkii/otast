@@ -157,7 +157,13 @@ analysis_zip=
 if ((skip_device == 0)); then
     proof_name=tegu-qualified-$stamp
     proof_dir=${HOME:?}/.local/state/otast-proof/$proof_name
-    prove_args=(--fixture "$fixture" --name "$proof_name" --evidence "$proof_dir" --restore-clone)
+    prove_args=(
+        --fixture "$fixture"
+        --name "$proof_name"
+        --evidence "$proof_dir"
+        --module-zip "$zip_a"
+        --restore-clone
+    )
     run_gate 08-device-proof bash "$SCRIPT_DIR/prove-device-fake-root.sh" "${prove_args[@]}" || exit $?
 
     proof_env=$proof_dir/proof.env

@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
+from tools.otastctl.build import build_module
 from tools.otastctl.fake_root import clone_fixture_root
 from tools.otastctl.fixture import reset_fixture, sanitize_fixture
-from tools.otastctl.util import OtastError
+from tools.otastctl.util import OtastError, sha256_file
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,13 +49,18 @@ class FixtureTests(unittest.TestCase):
             fixture = base / "fixture"
             (fixture / "data/adb").mkdir(parents=True)
             (fixture / "data/adb/ota.prop").write_text("fixture-authority\n", encoding="utf-8")
+            candidate = build_module(ROOT, base / "candidate", commit_sha="a" * 40)
             allowed = base / "cache"
             destination = allowed / "run"
-            report = clone_fixture_root(ROOT, fixture, destination, allowed)
+            report = clone_fixture_root(ROOT, fixture, destination, allowed, module_zip=candidate)
             module = destination / "data/adb/modules/otast"
             self.assertEqual(report["result"], "PASS")
+            self.assertEqual(report["candidate_source"], "supplied")
+            self.assertEqual(report["module_sha256"], sha256_file(candidate))
             self.assertIn("id=otast\n", (module / "module.prop").read_text(encoding="utf-8"))
-            self.assertTrue((module / "release.properties").is_file())
+            with zipfile.ZipFile(candidate) as archive:
+                expected_release = archive.read("release.properties")
+            self.assertEqual((module / "release.properties").read_bytes(), expected_release)
             self.assertEqual((module / "runtime/entry.sh").stat().st_mode & 0o777, 0o755)
             self.assertEqual((module / "runtime/common.sh").stat().st_mode & 0o777, 0o644)
 
