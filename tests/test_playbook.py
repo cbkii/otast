@@ -435,6 +435,56 @@ class PlaybookContractTests(unittest.TestCase):
                     with self.assertRaises(module.GuardError):
                         module.assert_fake_root(real_root)
 
+    def test_guard_accepts_only_relative_internal_fake_root_symlinks(self) -> None:
+        spec = importlib.util.spec_from_file_location("otast_safety_guard_links", GUARD)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as raw_home:
+            home = Path(raw_home)
+            root = home / ".cache/otast/fake-roots/links"
+            adb = root / "data/adb"
+            target = adb / "modules/.TA_utl/prop.sh"
+            target.parent.mkdir(parents=True)
+            target.write_text("ok\n", encoding="utf-8")
+            (adb / ".otast-fake-root").write_text("1\n", encoding="utf-8")
+            link = adb / "modules/TA_utl-link"
+            link.symlink_to(".TA_utl/prop.sh")
+            checked = root.resolve(strict=True)
+
+            records = module.audit_internal_symlinks(checked)
+            self.assertEqual(records[0]["path"], "data/adb/modules/TA_utl-link")
+            self.assertEqual(records[0]["target"], ".TA_utl/prop.sh")
+
+            link.unlink()
+            link.symlink_to("/etc/passwd")
+            with self.assertRaises(module.GuardError):
+                module.audit_internal_symlinks(checked)
+
+            link.unlink()
+            outside = home / "outside"
+            outside.write_text("outside\n", encoding="utf-8")
+            link.symlink_to(os.path.relpath(outside, link.parent))
+            with self.assertRaises(module.GuardError):
+                module.audit_internal_symlinks(checked)
+
+            link.unlink()
+            link.symlink_to("missing")
+            with self.assertRaises(module.GuardError):
+                module.audit_internal_symlinks(checked)
+
+    def test_analysis_export_preserves_only_guarded_internal_symlinks(self) -> None:
+        content = (REPO / "scripts/export-fake-root-analysis.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn('find "$fake_root" -type l', content)
+        self.assertIn('symlink-tree "$fake_root"', content)
+        self.assertIn("stat.S_IFLNK | 0o777", content)
+        self.assertIn("allowed_symlink_root", content)
+        self.assertIn("fake-root-symlinks.json", content)
+
     def test_upstream_output_root_is_strictly_cache_contained(self) -> None:
         with tempfile.TemporaryDirectory() as raw_home:
             home = Path(raw_home)

@@ -93,11 +93,6 @@ esac
 python3 "$SCRIPT_DIR/otast_safety_guard.py" fake-root "$fake_root" \
     --operation "fake-root analysis export" >/dev/null || exit $?
 
-if find "$fake_root" -type l -print -quit | grep -q .; then
-    printf 'STOP: fake root contains a symlink; refusing ambiguous export.\n' >&2
-    exit 1
-fi
-
 for forbidden in \
     'keybox*.xml' '*.pem' '*.key' '*.p12' '*.pfx' '*.jks' \
     '*.db' '*.sqlite' '*.sqlite3' 'magisk.db'; do
@@ -131,6 +126,10 @@ trap cleanup EXIT INT TERM
 chmod 0700 "$workspace" 2>/dev/null || true
 bundle=$workspace/otast-post-patch-fake-root-$stamp
 mkdir -p "$bundle/logs" || exit 1
+
+python3 "$SCRIPT_DIR/otast_safety_guard.py" symlink-tree "$fake_root" \
+    --operation "fake-root analysis export symlink audit" \
+    >"$bundle/fake-root-symlinks.json" || exit $?
 
 python3 "$SCRIPT_DIR/otast_safety_guard.py" fake-root "$fake_root" \
     --operation "fake-root export report" >/dev/null || exit $?
@@ -206,7 +205,9 @@ EOF
 
 cat >"$bundle/EXPORT-POLICY.txt" <<'EOF'
 This archive was exported from a previously sanitized OTAST fake root.
-The exporter rejects symlinks, keybox files, private-key formats and databases.
+The exporter preserves only relative symlinks whose strict resolved targets remain
+inside that same disposable root. Absolute, escaping, broken and cyclic links are
+rejected, as are keybox files, private-key formats and databases.
 It may still contain device identity and installed-module metadata. Keep it private.
 EOF
 
@@ -222,12 +223,36 @@ from pathlib import Path
 source = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2]).resolve()
 base = source.parent
+allowed_symlink_root = (source / "fake-root").resolve(strict=True)
 
 with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
     for path in sorted(source.rglob("*"), key=lambda item: item.relative_to(base).as_posix()):
         relative = path.relative_to(base).as_posix()
         if path.is_symlink():
-            raise SystemExit(f"symlink rejected during ZIP creation: {relative}")
+            raw_target = os.readlink(path)
+            if os.path.isabs(raw_target):
+                raise SystemExit(f"absolute symlink rejected during ZIP creation: {relative}")
+            try:
+                path.relative_to(allowed_symlink_root)
+            except ValueError as exc:
+                raise SystemExit(
+                    f"symlink outside fake-root subtree rejected during ZIP creation: {relative}"
+                ) from exc
+            lexical_target = Path(os.path.abspath(path.parent / raw_target))
+            try:
+                lexical_target.relative_to(allowed_symlink_root)
+                path.resolve(strict=True).relative_to(allowed_symlink_root)
+            except (ValueError, FileNotFoundError, RuntimeError, OSError) as exc:
+                raise SystemExit(
+                    f"unsafe symlink rejected during ZIP creation: {relative} -> {raw_target}"
+                ) from exc
+            info = zipfile.ZipInfo(relative)
+            info.date_time = (2020, 1, 1, 0, 0, 0)
+            info.external_attr = ((stat.S_IFLNK | 0o777) & 0xFFFF) << 16
+            info.create_system = 3
+            archive.writestr(info, raw_target.encode("utf-8"))
+            continue
+
         info = zipfile.ZipInfo(relative + ("/" if path.is_dir() else ""))
         info.date_time = (2020, 1, 1, 0, 0, 0)
         mode = path.stat().st_mode

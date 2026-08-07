@@ -137,6 +137,79 @@ def assert_fake_root(path: Path, operation: str = "fake-root operation") -> Path
     return resolved_root
 
 
+def audit_internal_symlinks(root: Path) -> list[dict[str, str]]:
+    """Return safe fake-root symlinks or fail closed.
+
+    Sanitized fixtures may preserve relative links whose strict resolved targets
+    remain inside the same disposable fake root. Absolute, escaping, broken, or
+    cyclic links are rejected.
+    """
+    root_resolved = root.resolve(strict=True)
+    records: list[dict[str, str]] = []
+
+    for current, dirnames, filenames in os.walk(
+        root_resolved, topdown=True, followlinks=False
+    ):
+        current_path = Path(current)
+        for name in sorted(set(dirnames + filenames)):
+            path = current_path / name
+            try:
+                info = path.lstat()
+            except FileNotFoundError as exc:
+                raise GuardError(
+                    f"fake-root entry disappeared during symlink audit: {path}"
+                ) from exc
+            if not stat.S_ISLNK(info.st_mode):
+                continue
+
+            raw_target = os.readlink(path)
+            relative_path = path.relative_to(root_resolved)
+            if os.path.isabs(raw_target):
+                raise GuardError(
+                    f"fake-root symlink has an absolute target: "
+                    f"{relative_path} -> {raw_target}"
+                )
+
+            lexical_target = _absolute_without_resolving(path.parent / raw_target)
+            try:
+                lexical_target.relative_to(root_resolved)
+            except ValueError as exc:
+                raise GuardError(
+                    f"fake-root symlink lexically escapes the root: "
+                    f"{relative_path} -> {raw_target}"
+                ) from exc
+
+            try:
+                resolved_target = path.resolve(strict=True)
+            except (FileNotFoundError, RuntimeError, OSError) as exc:
+                raise GuardError(
+                    f"fake-root symlink is broken or cyclic: "
+                    f"{relative_path} -> {raw_target}"
+                ) from exc
+            try:
+                resolved_relative = resolved_target.relative_to(root_resolved)
+            except ValueError as exc:
+                raise GuardError(
+                    f"fake-root symlink resolves outside the root: "
+                    f"{relative_path} -> {raw_target}"
+                ) from exc
+
+            records.append(
+                {
+                    "path": relative_path.as_posix(),
+                    "target": raw_target,
+                    "resolved_target": resolved_relative.as_posix(),
+                }
+            )
+
+        # Never descend through directory symlinks.
+        dirnames[:] = [
+            name for name in dirnames if not (current_path / name).is_symlink()
+        ]
+
+    return sorted(records, key=lambda item: item["path"])
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="OTAST local non-root and path-containment guard")
     sub = root.add_subparsers(dest="command", required=True)
@@ -147,6 +220,12 @@ def parser() -> argparse.ArgumentParser:
     fake = sub.add_parser("fake-root", help="validate a marked disposable fake root")
     fake.add_argument("path")
     fake.add_argument("--operation", default="fake-root operation")
+
+    links = sub.add_parser(
+        "symlink-tree", help="validate and list safe internal fake-root symlinks"
+    )
+    links.add_argument("path")
+    links.add_argument("--operation", default="fake-root symlink audit")
 
     upstream = sub.add_parser("upstream-root", help="validate an upstream evidence/cache path")
     upstream.add_argument("path")
@@ -163,6 +242,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "fake-root":
             path = assert_fake_root(Path(args.path), args.operation)
             value = {"result": "PASS", "fake_root": str(path), "uid": os.geteuid()}
+        elif args.command == "symlink-tree":
+            path = assert_fake_root(Path(args.path), args.operation)
+            links = audit_internal_symlinks(path)
+            value = {
+                "result": "PASS",
+                "fake_root": str(path),
+                "symlink_count": len(links),
+                "symlinks": links,
+                "uid": os.geteuid(),
+            }
         elif args.command == "upstream-root":
             path = assert_upstream_cache_path(Path(args.path), args.label)
             value = {"result": "PASS", "path": str(path), "uid": os.geteuid()}
