@@ -1,0 +1,46 @@
+name: Apply Flexible Release Hardening
+
+on:
+  push:
+    branches:
+      - agent/flexible-self-healing-release
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/flexible-self-healing-release
+          fetch-depth: 0
+
+      - name: Apply exact baseline safety patch
+        shell: bash
+        run: |
+          printf '%s  %s\n' '508b4648c7fd1241934cbd1afcfed18d2f0c2821085b3546df5f13e89b8cce82' .agent-flex-release/baseline-safety.patch | sha256sum -c -
+          git apply --check .agent-flex-release/baseline-safety.patch
+          git apply .agent-flex-release/baseline-safety.patch
+          git diff --check
+          bash -n scripts/release-device.sh
+
+      - name: Validate hardening
+        shell: bash
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" privacy-scan --json
+
+      - name: Commit hardening
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- scripts/release-device.sh tests/test_release_device.py
+          git diff --cached --check
+          git commit -m 'fix(release): verify staged baseline before restore'
+          git push origin HEAD:agent/flexible-self-healing-release
