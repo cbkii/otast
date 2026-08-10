@@ -15,11 +15,8 @@ class OtastError(RuntimeError):
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def stable_json(data: object) -> str:
@@ -61,7 +58,18 @@ def copy_tree_no_follow(source: Path, destination: Path) -> None:
 
 
 def iter_regular_files(root: Path) -> Iterable[Path]:
-    for path in sorted(root.rglob("*")):
+    import os
+    found_paths = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dpath = Path(dirpath)
+        for d in dirnames:
+            path = dpath / d
+            if path.is_symlink():
+                found_paths.append(path)
+        for f in filenames:
+            path = dpath / f
+            found_paths.append(path)
+    for path in sorted(found_paths):
         if path.is_symlink() or not path.is_file():
             continue
         yield path

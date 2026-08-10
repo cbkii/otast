@@ -49,12 +49,13 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
     shutil.rmtree(output_two, ignore_errors=True)
     first = build_module(root, output_one)
     second = build_module(root, output_two)
-    if sha256_file(first) != sha256_file(second):
+    first_hash = sha256_file(first)
+    if first_hash != sha256_file(second):
         raise OtastError("module build is not deterministic")
     result: dict[str, object] = {
         "version": metadata["version"],
         "version_code": int(metadata["versionCode"]),
-        "module_sha256": sha256_file(first),
+        "module_sha256": first_hash,
         "privacy": "PASS",
         "deterministic": True,
     }

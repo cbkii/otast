@@ -35,23 +35,31 @@ def _patterns() -> list[tuple[str, re.Pattern[str]]]:
 
 def scan_repository(root: Path) -> list[str]:
     findings: list[str] = []
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root)
-        if any(part in SKIP_PARTS for part in rel.parts):
+    import os
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_PARTS)
+        rel_dir = Path(dirpath).relative_to(root)
+        if any(part in SKIP_PARTS for part in rel_dir.parts):
             continue
-        if path.is_symlink():
-            findings.append(f"symlink:{rel.as_posix()}")
-            continue
-        if path.is_dir():
-            continue
-        if path.name.lower() in FORBIDDEN_NAMES:
-            findings.append(f"forbidden-name:{rel.as_posix()}")
-        if path.suffix.lower() not in TEXT_SUFFIXES or path.stat().st_size > 2 * 1024 * 1024:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
+        dpath = Path(dirpath)
+        for f in sorted(filenames):
+            if f in SKIP_PARTS:
+                continue
+            path = dpath / f
+            rel = path.relative_to(root)
+            if path.is_symlink():
+                findings.append(f"symlink:{rel.as_posix()}")
+                continue
+            if not path.is_file():
+                continue
+            if path.name.lower() in FORBIDDEN_NAMES:
+                findings.append(f"forbidden-name:{rel.as_posix()}")
+            if path.suffix.lower() not in TEXT_SUFFIXES or path.stat().st_size > 2 * 1024 * 1024:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
         for label, pattern in _patterns():
             if rel.as_posix() == "tools/otastctl/privacy.py" and label in {"private-key", "termux-home"}:
                 continue

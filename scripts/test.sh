@@ -69,26 +69,24 @@ if [[ $mode == full && $OTAST_SCRIPT_ERRORS -eq 0 ]]; then
     }
     trap cleanup_clean_room EXIT INT TERM
     source_zip=$temp_root/otast-public-ready.zip
-    run_required 'Build clean public source archive' otast_python -m tools.otastctl --repo-root "$REPO_ROOT" package-source --output "$source_zip" || true
-    if ((OTAST_SCRIPT_ERRORS == 0)); then
-        run_required 'Validate clean public source archive' otast_python -m tools.otastctl --repo-root "$REPO_ROOT" validate-source "$source_zip" || true
-    fi
-    if ((OTAST_SCRIPT_ERRORS == 0)); then
+
+    # Run clean-room stages sequentially and break out upon failure
+    while true; do
+        run_required 'Build clean public source archive' otast_python -m tools.otastctl --repo-root "$REPO_ROOT" package-source --output "$source_zip" || break
+        run_required 'Validate clean public source archive' otast_python -m tools.otastctl --repo-root "$REPO_ROOT" validate-source "$source_zip" || break
+
         mkdir -p -- "$temp_root/extracted" || otast_script_fatal 'Cannot create clean-room extraction directory'
-        run_required 'Extract clean-room archive' unzip -q "$source_zip" -d "$temp_root/extracted" || true
-    fi
-    if ((OTAST_SCRIPT_ERRORS == 0)); then
+        run_required 'Extract clean-room archive' unzip -q "$source_zip" -d "$temp_root/extracted" || break
+
         extracted=$temp_root/extracted/otast
         while IFS= read -r -d '' path; do
             chmod 0600 -- "$path" || otast_script_fatal "Cannot flatten clean-room source mode: $path"
         done < <(find "$extracted" -type f -print0)
-        run_required 'Restore clean-room source modes after flattened extraction' bash "$extracted/scripts/restore-source-modes.sh" || true
-        if ((OTAST_SCRIPT_ERRORS == 0)); then
-            run_required 'Run extracted repository from unrelated directory' bash -c 'cd / && bash "$1/scripts/test.sh" --quick' _ "$extracted" || true
-        fi
-    fi
-    if ((OTAST_SCRIPT_ERRORS == 0)); then
-        run_required 'Initialise clean local Git repository' git -C "$extracted" init -q -b main || true
+
+        run_required 'Restore clean-room source modes after flattened extraction' bash "$extracted/scripts/restore-source-modes.sh" || break
+        run_required 'Run extracted repository from unrelated directory' bash -c 'cd / && bash "$1/scripts/test.sh" --quick' _ "$extracted" || break
+
+        run_required 'Initialise clean local Git repository' git -C "$extracted" init -q -b main || break
         if git -C "$extracted" rev-parse --verify HEAD >/dev/null 2>&1; then
             otast_script_error 'Clean public archive unexpectedly contains Git history'
         fi
@@ -99,7 +97,8 @@ if [[ $mode == full && $OTAST_SCRIPT_ERRORS -eq 0 ]]; then
         if ! git -C "$extracted" add --all --dry-run >/dev/null 2>&1; then
             otast_script_error 'Clean public archive cannot be staged in Git'
         fi
-    fi
+        break
+    done
 fi
 
 otast_script_summary

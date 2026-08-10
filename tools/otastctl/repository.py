@@ -29,13 +29,28 @@ REQUIRED = {
 
 def _source_files(root: Path) -> list[Path]:
     files: list[Path] = []
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root)
-        if any(part in EXCLUDED_PARTS for part in rel.parts):
+    import os
+    found_paths = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_PARTS]
+        rel_dir = Path(dirpath).relative_to(root)
+        if any(part in EXCLUDED_PARTS for part in rel_dir.parts):
             continue
+        dpath = Path(dirpath)
+        for d in dirnames:
+            path = dpath / d
+            if path.is_symlink():
+                found_paths.append(path)
+        for f in filenames:
+            if f in EXCLUDED_PARTS or f.endswith(tuple(EXCLUDED_SUFFIXES)):
+                continue
+            path = dpath / f
+            found_paths.append(path)
+    for path in sorted(found_paths):
+        rel = path.relative_to(root)
         if path.is_symlink():
             raise OtastError(f"public source tree contains a symlink: {rel}")
-        if not path.is_file() or path.suffix in EXCLUDED_SUFFIXES:
+        if not path.is_file():
             continue
         files.append(path)
     return files
