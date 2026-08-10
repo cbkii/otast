@@ -356,6 +356,7 @@ ensure_draft() {
         *) fatal "draft target is not an immutable commit SHA: $target"; return 1 ;;
     esac
     [[ ${#target} -eq 40 || ${#target} -eq 64 ]] || { fatal 'draft target commit SHA has wrong length'; return 1; }
+    [[ $target =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || { fatal "draft target is not an immutable full commit SHA: $target"; return 1; }
     DRAFT_TARGET=$target
     return 0
 }
@@ -532,6 +533,10 @@ if [[ $PHASE == START ]]; then
             fatal 'existing managed state is not CURRENT; do not auto-restore drifted state'
             exit $?
         }
+        grep -q '^CURRENT[[:space:]]' "$LOG_DIR/baseline-verify.log" || {
+    fatal 'existing managed state Verify returned success without CURRENT evidence'
+    exit $?
+}
         run_live restore "$LOG_DIR/baseline-restore.log" || exit $?
         BASELINE_RESULT=PASS
         PHASE=BASELINE_REBOOT

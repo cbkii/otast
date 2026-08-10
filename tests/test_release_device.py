@@ -119,6 +119,8 @@ class ReleaseDeviceTests(unittest.TestCase):
         ):
             self.assertIn(token, text)
         self.assertIn("existing managed state is not CURRENT", text)
+        self.assertIn("existing managed state Verify returned success without CURRENT evidence", text)
+        self.assertIn("draft target is not an immutable full commit SHA", text)
         self.assertIn("managed state remains after Restore/reboot", text)
 
     def test_release_wizard_help_needs_no_device_or_network(self) -> None:
