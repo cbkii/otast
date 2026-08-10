@@ -23,7 +23,8 @@
       "accepted_hashes": {
         "autopif.sh": [
           "1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1",
-          "67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a"
+          "67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a",
+          "04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213"
         ],
         "autopif_ota.sh": [
           "cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1"
@@ -43,7 +44,7 @@
       ],
       "monitor": {
         "branch": "inject_s",
-        "expected_head": "ea93222c58f90108cef0c02a11e66bdfdf4b21b6",
+        "expected_head": "8b4a00cef9536dc9c8428d392725eacf364605a9",
         "repository": "KOWX712/PlayIntegrityFix"
       },
       "observed_only_hashes": {
@@ -73,6 +74,10 @@
         {
           "commit": "ea93222c58f90108cef0c02a11e66bdfdf4b21b6",
           "ref": "source snapshot"
+        },
+        {
+          "commit": "8b4a00cef9536dc9c8428d392725eacf364605a9",
+          "ref": "inject_s AutoPIF crawler refresh reviewed 2026-08-10"
         }
       ],
       "strategy": "configuration-preserving targeted transformation"
@@ -92,7 +97,7 @@
       ],
       "monitor": {
         "branch": "main",
-        "expected_head": "a42941c0584f684647d3b3cd837f49c7e16c0fe1",
+        "expected_head": "eab6fa9104e6a3d895d258b8f976478c81244220",
         "repository": "KOWX712/Tricky-Addon-Update-Target-List"
       },
       "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file",
