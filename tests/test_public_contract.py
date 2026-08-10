@@ -57,6 +57,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
             "scripts/otast-maintenance.py",
             "scripts/otast_safety_guard.py",
             "scripts/upstream-target-package.py",
+            "scripts/validate-device-release-proof.py",
         ):
             self.assertEqual((ROOT / relative).stat().st_mode & 0o777, 0o755, relative)
 
@@ -102,6 +103,12 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("contents: write", workflow)
         self.assertIn('--target "$GITHUB_SHA"', workflow)
         self.assertIn('[[ "$GITHUB_ACTOR" == "$GITHUB_REPOSITORY_OWNER" ]]', workflow)
+        self.assertIn("options: [validate, draft, publish]", workflow)
+        self.assertIn("validate-device-release-proof.py", workflow)
+        self.assertIn('gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest', workflow)
+        publish = workflow.split("  publish:\n", 1)[1]
+        self.assertNotIn("build-release.sh", publish)
+        self.assertNotIn("gh release create", publish)
 
     def test_source_tree_has_no_symlinks_or_unsafe_git_path(self) -> None:
         git_path = ROOT / ".git"

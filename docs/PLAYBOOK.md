@@ -16,6 +16,32 @@ otast help
 The kit installer can add guarded source lines to `~/.bashrc` with
 `--shell-init`.
 
+## Stable release — one command
+
+The normal owner-facing v1 release interface is deliberately one resumable
+command:
+
+```bash
+otast release
+```
+
+The command creates or reuses the exact GitHub draft, verifies and installs that
+asset on the owned Pixel, drives the changing Apply across a real reboot, proves
+post-reboot Verify, proves the second Apply is a no-op, Restores the original
+managed files, proves the post-Restore reboot, uploads sanitized proof, and then
+asks to publish that same draft without rebuilding it.
+
+Whenever it requests a reboot, wait for Android to finish booting and run the
+**same command again**:
+
+```bash
+otast release
+```
+
+No lifecycle subcommands need to be memorised. `otast release --status` shows the
+private resumable phase without changing anything. See [`RELEASE.md`](RELEASE.md)
+for the release contract and recovery options.
+
 ## Normal module-development cycle
 
 ```bash
