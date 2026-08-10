@@ -109,8 +109,10 @@ jobs:
               printf 'Draft already has a device proof; refusing to replace its proven asset.\n' >&2
               exit 1
             }
-            gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || \
-              gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --yes
+            gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || {
+              gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --yes || exit 1
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" >/dev/null 2>&1 || true
+            }
           fi
 
           gh release create "$VERSION" \
