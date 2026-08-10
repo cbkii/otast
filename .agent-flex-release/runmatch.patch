@@ -1,0 +1,69 @@
+diff --git a/scripts/release-device.sh b/scripts/release-device.sh
+index 4aba982..fe141dd 100755
+--- a/scripts/release-device.sh
++++ b/scripts/release-device.sh
+@@ -428,18 +428,20 @@ require_new_boot() {
+ }
+ 
+ workflow_run_id() {
+-    local title head exclude_id json
++    local title head since json
+     title=$1
+     head=$2
+-    exclude_id=${3:-0}
++    since=$3
+     json=$(gh run list -R "$REPO_SLUG" --workflow "$WORKFLOW" --branch main \
+         --event workflow_dispatch --limit 30 \
+         --json databaseId,displayTitle,headSha,status,conclusion,createdAt 2>/dev/null) || return 1
+-    EXPECTED_TITLE=$title EXPECTED_HEAD=$head EXCLUDE_ID=$exclude_id python3 -c '
++    EXPECTED_TITLE=$title EXPECTED_HEAD=$head SINCE=$since python3 -c '
+ import json, os, sys
+ runs=json.load(sys.stdin)
+-exclude=int(os.environ.get("EXCLUDE_ID") or 0)
+-items=[r for r in runs if r.get("displayTitle")==os.environ["EXPECTED_TITLE"] and int(r.get("databaseId") or 0) != exclude]
++since=os.environ.get("SINCE") or ""
++items=[r for r in runs if r.get("displayTitle")==os.environ["EXPECTED_TITLE"]]
++if since:
++    items=[r for r in items if (r.get("createdAt") or "") >= since]
+ if os.environ.get("EXPECTED_HEAD"):
+     exact=[r for r in items if r.get("headSha")==os.environ["EXPECTED_HEAD"]]
+     if exact: items=exact
+@@ -475,13 +477,13 @@ watch_run() {
+ }
+ 
+ dispatch_release_workflow() {
+-    local operation head title run_id before_id attempt dispatch_try
++    local operation head title run_id attempt dispatch_try dispatch_at
+     operation=$1
+     head=$(remote_main_sha 2>/dev/null) || head=
+     title="Release $operation $VERSION"
+-    before_id=$(workflow_run_id "$title" "$head" 0 2>/dev/null) || before_id=0
+     for ((dispatch_try=1; dispatch_try<=2; dispatch_try+=1)); do
+         info "Dispatching GitHub Actions from latest main: $title"
++        dispatch_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1
+         gh workflow run "$WORKFLOW" -R "$REPO_SLUG" --ref main \
+             -f "operation=$operation" -f "version=$VERSION" >/dev/null 2>&1 || {
+             warn "cannot dispatch Release workflow (attempt $dispatch_try/2)"
+@@ -490,7 +492,7 @@ dispatch_release_workflow() {
+         }
+         run_id=
+         for ((attempt=1; attempt<=30; attempt+=1)); do
+-            run_id=$(workflow_run_id "$title" "$head" "$before_id") || run_id=
++            run_id=$(workflow_run_id "$title" "$head" "$dispatch_at") || run_id=
+             [[ -n $run_id ]] && break
+             sleep 4
+         done
+diff --git a/tests/test_release_device.py b/tests/test_release_device.py
+index 1a1ef32..f5cec44 100644
+--- a/tests/test_release_device.py
++++ b/tests/test_release_device.py
+@@ -100,6 +100,9 @@ class ReleaseDeviceTests(unittest.TestCase):
+             "refresh_local_main_best_effort",
+             "ensure_host_command",
+             "delete_draft_best_effort",
++            "dispatch_at=$(date -u",
++            "createdAt",
++            "SINCE=$since",
+             "BASELINE_RESULT=NEEDS_VERIFY",
+             "baseline-verify-after-activation.log",
+             "Draft assets are missing/corrupt before device proof",
