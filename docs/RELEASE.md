@@ -24,6 +24,17 @@ Once physical testing starts, that exact ZIP is locked for the attempt. If `main
 moves while the phone is rebooting, OTAST continues the already-tested asset
 rather than silently swapping a different build into the middle of the lifecycle.
 
+### Legacy proof migration
+
+New physical-device proofs use schema 2. The validator also accepts an existing
+schema-1 proof only as a migration/recovery aid for a release attempt that began
+before the latest-main release flow was installed. A legacy proof does **not** gain
+trust from its recorded commit SHA: commit metadata is ignored for publication.
+It must still match the current draft byte-for-byte through `module_sha256`, match
+the release version/device, and satisfy the same required lifecycle evidence.
+Therefore compatibility can resume an interrupted proven release, but cannot make
+a proof for one ZIP authorize a different ZIP.
+
 ## What `otast release` does
 
 The wizard automatically:
@@ -55,7 +66,8 @@ immediately halting:
 - an old draft with no device proof is replaced automatically from latest `main`;
 - a missing/corrupt draft asset before physical testing causes one automatic draft rebuild;
 - interrupted runtime transactions use `boot-recover` before Apply/Verify/Restore retry;
-- a staged-but-not-active OTAST module gets an additional activation reboot;
+- a staged-but-not-active OTAST module gets an additional activation reboot, then
+  its pre-existing managed state must Verify `CURRENT` before automatic Restore;
 - a late writer that makes the second Apply change files gets bounded settling reboots;
 - lingering records after Restore get one additional boot-recover/Restore/reboot cycle;
 - if an unrecoverable failure occurs after OTAST has modified managed state, the
