@@ -58,18 +58,7 @@ def copy_tree_no_follow(source: Path, destination: Path) -> None:
 
 
 def iter_regular_files(root: Path) -> Iterable[Path]:
-    import os
-    found_paths = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dpath = Path(dirpath)
-        for d in dirnames:
-            path = dpath / d
-            if path.is_symlink():
-                found_paths.append(path)
-        for f in filenames:
-            path = dpath / f
-            found_paths.append(path)
-    for path in sorted(found_paths):
+    for path in sorted(root.rglob("*")):
         if path.is_symlink() or not path.is_file():
             continue
         yield path
