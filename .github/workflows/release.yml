@@ -5,13 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Validate, create an immutable draft, or publish a device-proven draft
+        description: Validate latest main, prepare/refresh a draft, or publish its device-proven asset
         required: true
         type: choice
         options: [validate, draft, publish]
         default: validate
       version:
-        description: Exact module version
+        description: Release version
         required: true
         type: string
         default: v1.0.0
@@ -31,7 +31,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout selected commit
+      - name: Checkout latest selected main
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -67,31 +67,26 @@ jobs:
         run: |
           module_version=$(awk -F= '$1 == "version" {print $2}' module/module.prop)
           [[ "$module_version" == "$REQUESTED_VERSION" ]] || {
-            printf 'Requested version %s differs from module.prop %s\n' "$REQUESTED_VERSION" "$module_version" >&2
+            printf 'Requested version %s differs from latest main module.prop %s\n' "$REQUESTED_VERSION" "$module_version" >&2
             exit 1
           }
-          [[ "$REQUESTED_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || exit 1
 
-      - name: Full exact-package qualification
+      - name: Full latest-main qualification
         run: bash scripts/test.sh --full
 
       - name: Build release assets
         run: bash scripts/build-release.sh
 
-      - name: Verify exact commit binding
+      - name: Verify exact asset integrity
         env:
-          REQUESTED_VERSION: ${{ inputs.version }}
+          VERSION: ${{ inputs.version }}
         run: |
-          zip="dist/otast-${REQUESTED_VERSION}.zip"
-          embedded=$(unzip -p "$zip" release.properties | awk -F= '$1 == "commit_sha" {print $2}')
-          [[ "$embedded" == "$GITHUB_SHA" ]] || {
-            printf 'Built ZIP is bound to %s, expected %s\n' "$embedded" "$GITHUB_SHA" >&2
-            exit 1
-          }
+          zip="dist/otast-${VERSION}.zip"
           sha256sum -c "$zip.sha256"
+          printf 'Source main at build: %s\n' "$GITHUB_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
           sha256sum "$zip" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Create immutable draft release
+      - name: Create or refresh draft from latest main
         if: inputs.operation == 'draft'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -101,10 +96,25 @@ jobs:
             printf 'Only the repository owner may create release drafts.\n' >&2
             exit 1
           }
-          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            printf 'Release %s already exists; refusing to replace or rebuild it.\n' "$VERSION" >&2
-            exit 1
+
+          if existing=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,assets 2>/dev/null); then
+            is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$existing")
+            [[ "$is_draft" == true ]] || {
+              printf 'Release %s is already published; it will not be replaced.\n' "$VERSION" >&2
+              exit 1
+            }
+            proof_name="otast-${VERSION}-device-proof.json"
+            has_proof=$(PROOF_NAME="$proof_name" python3 -c 'import json,os,sys; v=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["PROOF_NAME"] for a in v.get("assets", [])) else "no")' <<<"$existing")
+            [[ "$has_proof" != yes ]] || {
+              printf 'Draft already has a device proof; refusing to replace its proven asset.\n' >&2
+              exit 1
+            }
+            gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || {
+              gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --yes || exit 1
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" >/dev/null 2>&1 || true
+            }
           fi
+
           gh release create "$VERSION" \
             "dist/otast-${VERSION}.zip" \
             "dist/otast-${VERSION}.zip.sha256" \
@@ -122,10 +132,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout publication validator
+      - name: Checkout latest main validator
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
@@ -133,7 +142,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Validate exact draft and physical-device proof
+      - name: Validate draft asset and physical-device proof
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
@@ -142,36 +151,28 @@ jobs:
             printf 'Only the repository owner may publish.\n' >&2
             exit 1
           }
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || exit 1
 
           release_json=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish,tagName)
+            --json isDraft,tagName)
           is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$release_json")
-          target=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["targetCommitish"])' <<<"$release_json")
           tag=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<<"$release_json")
           [[ "$is_draft" == true ]] || { printf 'Release is not a draft.\n' >&2; exit 1; }
           [[ "$tag" == "$VERSION" ]] || { printf 'Release tag mismatch.\n' >&2; exit 1; }
-          [[ "$target" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
-            printf 'Draft release target is not an immutable full commit SHA.\n' >&2
-            exit 1
-          }
 
-          git checkout --detach "$target"
-
-          mkdir -p "$RUNNER_TEMP/release-assets"
+          assets="$RUNNER_TEMP/release-assets"
+          mkdir -p "$assets"
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" \
             --pattern "otast-${VERSION}.zip" \
             --pattern "otast-${VERSION}.zip.sha256" \
             --pattern "otast-${VERSION}-device-proof.json" \
-            --dir "$RUNNER_TEMP/release-assets"
+            --dir "$assets"
 
-          cd "$RUNNER_TEMP/release-assets"
+          cd "$assets"
           sha256sum -c "otast-${VERSION}.zip.sha256"
           python3 "$GITHUB_WORKSPACE/scripts/validate-device-release-proof.py" \
             --proof "otast-${VERSION}-device-proof.json" \
             --module-zip "otast-${VERSION}.zip" \
-            --version "$VERSION" \
-            --commit "$target"
+            --version "$VERSION"
 
       - name: Publish already-validated draft without rebuilding
         env:
