@@ -67,6 +67,23 @@ class ReleaseDeviceTests(unittest.TestCase):
             value = module.validate_proof(proof, module_zip, version="v1.0.0")
             self.assertEqual(value["module_sha256"], module_sha)
 
+    def test_device_proof_accepts_schema1_only_as_asset_bound_migration(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, module_sha = self.make_proof(Path(raw))
+            value = json.loads(proof.read_text(encoding="utf-8"))
+            value["schema_version"] = 1
+            value.pop("source_commit", None)
+            value["commit_sha"] = "this-legacy-commit-is-diagnostic-only"
+            proof.write_text(json.dumps(value) + "\n", encoding="utf-8")
+
+            accepted = module.validate_proof(proof, module_zip, version="v1.0.0")
+            self.assertEqual(accepted["module_sha256"], module_sha)
+
+            module_zip.write_bytes(module_zip.read_bytes() + b"different")
+            with self.assertRaises(module.ProofError):
+                module.validate_proof(proof, module_zip, version="v1.0.0")
+
     def test_device_proof_accepts_already_current_first_apply(self) -> None:
         module = load_validator()
         with tempfile.TemporaryDirectory() as raw:
