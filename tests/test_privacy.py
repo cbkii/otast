@@ -23,6 +23,42 @@ class PrivacyTests(unittest.TestCase):
             with self.assertRaises(OtastError):
                 require_public_safe(root)
 
+    def test_every_eligible_file_is_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "first.txt").write_text(
+                "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456\n", encoding="utf-8"
+            )
+            (root / "last.txt").write_text("safe\n", encoding="utf-8")
+            findings = scan_repository(root)
+            self.assertIn("github-token:first.txt", findings)
+
+    def test_empty_and_skipped_directories_are_harmless(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "empty").mkdir()
+            skipped = root / "reports"
+            skipped.mkdir()
+            skipped.joinpath("bad.txt").write_text(
+                "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456\n", encoding="utf-8"
+            )
+            self.assertEqual(scan_repository(root), [])
+
+    def test_file_and_directory_symlinks_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target_file = root / "target.txt"
+            target_file.write_text("safe\n", encoding="utf-8")
+            target_dir = root / "target-dir"
+            target_dir.mkdir()
+            file_link = root / "file-link"
+            dir_link = root / "dir-link"
+            file_link.symlink_to(target_file.name)
+            dir_link.symlink_to(target_dir.name, target_is_directory=True)
+            findings = scan_repository(root)
+            self.assertIn("symlink:file-link", findings)
+            self.assertIn("symlink:dir-link", findings)
+
 
 if __name__ == "__main__":
     unittest.main()
