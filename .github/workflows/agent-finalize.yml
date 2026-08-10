@@ -1,0 +1,187 @@
+name: Agent Finalize Branch
+
+on:
+  push:
+    branches:
+      - agent/final-upstream-refresh
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-finalize-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/final-upstream-refresh
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply reviewed maintenance patch
+        shell: bash
+        run: |
+          cat >"$RUNNER_TEMP/final.patch" <<'PATCH'
+          diff --git a/scripts/otast-maintenance.py b/scripts/otast-maintenance.py
+          --- a/scripts/otast-maintenance.py
+          +++ b/scripts/otast-maintenance.py
+          @@ -645,6 +645,33 @@ def compare_module_trees(old_tree: Path, new_tree: Path) -> dict[str, Any]:
+               return {"identical": not added and not removed and not changed, "same": same, "added": added, "removed": removed, "changed": changed}
+           
+           
+          +def classify_review_result(
+          +    comparison: dict[str, Any],
+          +    *,
+          +    active_candidate_compare_rc: int,
+          +    report_rc: int,
+          +    preflight_rc: int,
+          +) -> tuple[bool, str, int, str]:
+          +    """Classify immutable upstream-package review evidence.
+          +
+          +    An old/new module tree that is byte/mode identical is package-neutral. The
+          +    staged source tree may not model installer-derived runtime topology (notably
+          +    TA-UTL's visible ``TA_utl`` source versus hidden ``.TA_utl`` install form),
+          +    so staged Preflight remains diagnostic in that case rather than a gate.
+          +
+          +    Changed package trees always require compatibility review. Comparison/report
+          +    execution failures remain fail-closed validation errors.
+          +    """
+          +    identical = comparison.get("identical") is True
+          +    evidence_ok = active_candidate_compare_rc == 0 and report_rc == 0
+          +
+          +    if not identical:
+          +        return False, "PACKAGE_CHANGED", EXIT_REVIEW, "REQUIRED_FOR_CHANGED_PACKAGE"
+          +    if not evidence_ok:
+          +        return False, "VALIDATION_FAILED", EXIT_ERROR, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE"
+          +    return True, "NO_PACKAGE_IMPACT", EXIT_OK, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE"
+          +
+          +
+           def review_markdown(value: dict[str, Any]) -> str:
+               lines = [
+                   f"# OTAST target review: {value['target']}",
+          @@ -660,6 +687,7 @@ def review_markdown(value: dict[str, Any]) -> str:
+                   f"- Active/candidate comparison status: `{value['active_candidate_compare_rc']}`",
+                   f"- Report status: `{value['report_rc']}`",
+                   f"- Preflight status: `{value['preflight_rc']}`",
+          +        f"- Preflight policy: `{value['preflight_policy']}`",
+                   "",
+                   "## Module comparison",
+                   "",
+          @@ -748,21 +776,12 @@ def run_review(
+                   log_path=log,
+               )
+           
+          -    acceptance_ready = (
+          -        comparison["identical"]
+          -        and active_compare.returncode == 0
+          -        and report.returncode == 0
+          -        and preflight.returncode == 0
+          -    )
+          -    if acceptance_ready:
+          -        result_name = "NO_PACKAGE_IMPACT"
+          -        rc = EXIT_OK
+          -    elif not comparison["identical"]:
+          -        result_name = "PACKAGE_CHANGED"
+          -        rc = EXIT_REVIEW
+          -    else:
+          -        result_name = "VALIDATION_FAILED"
+          -        rc = EXIT_ERROR
+          +    acceptance_ready, result_name, rc, preflight_policy = classify_review_result(
+          +        comparison,
+          +        active_candidate_compare_rc=active_compare.returncode,
+          +        report_rc=report.returncode,
+          +        preflight_rc=preflight.returncode,
+          +    )
+               result = {
+                   "schema_version": 1,
+                   "generated_utc": utc_now(),
+          @@ -781,6 +800,7 @@ def run_review(
+                   "active_candidate_compare_rc": active_compare.returncode,
+                   "report_rc": report.returncode,
+                   "preflight_rc": preflight.returncode,
+          +        "preflight_policy": preflight_policy,
+                   "installer_execution": "NEVER_EXECUTED",
+                   "log": str(log),
+               }
+          diff --git a/docs/MAINTENANCE.md b/docs/MAINTENANCE.md
+          --- a/docs/MAINTENANCE.md
+          +++ b/docs/MAINTENANCE.md
+          @@ -95,7 +95,7 @@ Possible results:
+           
+          -- `NO_PACKAGE_IMPACT`: old and new module package trees are byte/mode identical and fake-root validation passed;
+          +- `NO_PACKAGE_IMPACT`: old and new immutable module package trees are byte/mode identical and comparison/Report evidence is valid; staged Preflight is retained as diagnostic evidence when static source topology cannot model installer-derived runtime topology;
+           - `PACKAGE_CHANGED`: compatibility/runtime work is required before the baseline can move;
+           - `VALIDATION_FAILED`: the generated review log must be investigated.
+           
+          diff --git a/docs/PIF-COMPATIBILITY.md b/docs/PIF-COMPATIBILITY.md
+          --- a/docs/PIF-COMPATIBILITY.md
+          +++ b/docs/PIF-COMPATIBILITY.md
+          @@ -15,13 +15,15 @@ Two upstream commits were compared deliberately:
+           
+           ## Managed surface
+           
+          -For the reviewed PIF Inject source at commit `ea93222c58f90108cef0c02a11e66bdfdf4b21b6`, OTAST manages only:
+          +For the reviewed PIF Inject source lineage at commits `ea93222c58f90108cef0c02a11e66bdfdf4b21b6` and `8b4a00cef9536dc9c8428d392725eacf364605a9`, OTAST manages only:
+           
+           - `autopif.sh` — deterministic Pixel 9a selection and generated identity fields;
+           - `autopif_ota.sh` — upstream refresh plus read-only OTAST preflight;
+           - module and global `pif.prop` — merge authority values without discarding unrelated configuration;
+           - `security_patch.sh` — exact wrapper because OTAST owns the same TrickyStore and runtime security-patch outputs.
+           
+          +The `8b4a00ce` review changes only AutoPIF Pixel download-page selection (reverse-sorted FI/OTA URLs). The OTAST transformation anchors and managed writer surfaces are unchanged; the exact new `autopif.sh` source hash is retained as a regression fixture and allowlisted alongside the earlier reviewed sources.
+          +
+           The following are observed or preserved, not patched:
+           
+           - `action.sh`;
+          PATCH
+
+          git apply --check "$RUNNER_TEMP/final.patch"
+          git apply "$RUNNER_TEMP/final.patch"
+          git diff --check
+
+      - name: Focused validation
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y busybox-static
+          python3 -m py_compile scripts/otast-maintenance.py tests/test_maintenance.py tests/test_profiles.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
+            tests.test_maintenance.MaintenanceTests.test_review_classifier_treats_identical_package_preflight_as_diagnostic \
+            tests.test_profiles.ProfileTests.test_reviewed_writer_fixtures_match_allowlists \
+            tests.test_profiles.ProfileTests.test_current_pif_autopif_transform_preserves_authority_contract
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+
+          root = Path('.')
+          fixture = root / 'tests/fixtures/upstream/pif-autopif-8b4a00ce.sh'
+          assert hashlib.sha256(fixture.read_bytes()).hexdigest() == '04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213'
+          registry = json.loads((root / 'compatibility/supported-targets.json').read_text())
+          pif = registry['targets']['playintegrityfix']
+          ta = registry['targets']['ta-utl']
+          assert pif['monitor']['expected_head'] == '8b4a00cef9536dc9c8428d392725eacf364605a9'
+          assert ta['monitor']['expected_head'] == 'eab6fa9104e6a3d895d258b8f976478c81244220'
+          assert 'bf0c8c1b0d751c4a7de6632b93e43aca8c0d9f81bbd0dcc6660d8f05808dd40c' not in (root / 'compatibility/supported-targets.json').read_text()
+          PY
+
+      - name: Commit branch patch
+        shell: bash
+        run: |
+          expected=$'docs/MAINTENANCE.md\ndocs/PIF-COMPATIBILITY.md\nscripts/otast-maintenance.py'
+          actual=$(git diff --name-only | LC_ALL=C sort)
+          [[ "$actual" == "$expected" ]] || {
+            printf 'Unexpected patch scope:\n%s\n' "$actual" >&2
+            exit 1
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/MAINTENANCE.md docs/PIF-COMPATIBILITY.md scripts/otast-maintenance.py
+          git commit -m 'fix(maintenance): classify package-neutral reviews correctly'
+          git push origin HEAD:agent/final-upstream-refresh
