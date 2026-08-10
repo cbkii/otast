@@ -100,6 +100,8 @@ class ReleaseDeviceTests(unittest.TestCase):
             "refresh_local_main_best_effort",
             "ensure_host_command",
             "delete_draft_best_effort",
+            "BASELINE_RESULT=NEEDS_VERIFY",
+            "baseline-verify-after-activation.log",
             "Draft assets are missing/corrupt before device proof",
             "run_boot_recover_best_effort",
             "Apply failed; recovering transaction state and retrying once",

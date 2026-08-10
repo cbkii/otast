@@ -858,7 +858,8 @@ if [[ $PHASE == START ]]; then
         phase_banner 'RESTORE EXISTING OTAST STATE TO CLEAN BASELINE'
         if ! su -c 'test -f /data/adb/modules/otast/runtime/entry.sh' >/dev/null 2>&1; then
             if su -c 'test -f /data/adb/modules_update/otast/runtime/entry.sh' >/dev/null 2>&1; then
-                warn 'OTAST runtime is staged but not active; rebooting once to activate it before baseline recovery.'
+                warn 'OTAST runtime is staged but not active; rebooting once to activate it before baseline verification.'
+                BASELINE_RESULT=NEEDS_VERIFY
                 PHASE=BASELINE_REBOOT
                 request_reboot
                 exit $?
@@ -889,9 +890,32 @@ if [[ $PHASE == START ]]; then
 fi
 
 if [[ $PHASE == BASELINE_REBOOT ]]; then
-    phase_banner 'CONFIRM CLEAN BASELINE REBOOT'
+    phase_banner 'CONFIRM/RECOVER CLEAN BASELINE REBOOT'
     require_new_boot || exit $?
     if has_managed_state; then
+        if [[ $BASELINE_RESULT == NEEDS_VERIFY ]]; then
+            if ! su -c 'test -f /data/adb/modules/otast/runtime/entry.sh' >/dev/null 2>&1; then
+                fatal 'staged OTAST runtime did not become active after reboot; existing managed state cannot be verified safely'
+                exit $?
+            fi
+            if ! verify_with_recovery "$LOG_DIR/baseline-verify-after-activation.log"; then
+                fatal 'existing managed state could not be verified after activating staged runtime'
+                exit $?
+            fi
+            if ! grep -q '^CURRENT[[:space:]]' "$LOG_DIR/baseline-verify-after-activation.log" "$LOG_DIR/baseline-verify-after-activation.log.retry" 2>/dev/null; then
+                fatal 'existing managed state is not proven CURRENT after activating staged runtime; refusing automatic Restore'
+                exit $?
+            fi
+            restore_with_recovery "$LOG_DIR/baseline-restore-after-activation.log" || {
+                fatal 'verified existing managed state could not be restored after activating staged runtime'
+                exit $?
+            }
+            BASELINE_RESULT=PASS
+            RESTORE_RETRIES=0
+            save_state || exit 1
+            request_reboot
+            exit $?
+        fi
         if ((RESTORE_RETRIES < 1)) && su -c 'test -f /data/adb/modules/otast/runtime/entry.sh' >/dev/null 2>&1; then
             RESTORE_RETRIES=$((RESTORE_RETRIES + 1))
             warn 'Managed records remain after Restore/reboot; retrying Restore once, then rebooting again.'
@@ -906,7 +930,12 @@ if [[ $PHASE == BASELINE_REBOOT ]]; then
         fatal 'managed state remains after bounded baseline Restore recovery'
         exit $?
     fi
+    if [[ $BASELINE_RESULT == NEEDS_VERIFY ]]; then
+        warn 'No managed records remain after activating staged runtime; baseline is already clean.'
+        BASELINE_RESULT=PASS
+    fi
     RESTORE_RETRIES=0
+    save_state || exit 1
     prepare_draft_assets || exit $?
     install_exact_draft
     exit $?
