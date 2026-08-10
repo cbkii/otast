@@ -30,6 +30,12 @@ jobs:
       - name: Reconstruct and apply exact patch
         shell: bash
         run: |
+          printf '%s  %s\n' 'bcd0888e734bcdf8a6926b0677bb6521de4b5041de44ae9deb55e30c22d401f5' .agent-release-wizard/01a.part | sha256sum -c -
+          printf '%s  %s\n' 'a9cb9c05ee54d7deec83a710554ab639c66bd1b3e020fe4ef1e6bbec9e391bdd' .agent-release-wizard/01b.part | sha256sum -c -
+          printf '%s  %s\n' '4b60e2888b4fe640b56d5232611898ab1656c385244d61fbdc751b5c9c75635a' .agent-release-wizard/02.patch | sha256sum -c -
+          printf '%s  %s\n' 'c60c499eb7b1000dbf4b5cd2d805ef8afdeecc776fe50bbcfd2ee5feba86a93d' .agent-release-wizard/03.patch | sha256sum -c -
+          printf '%s  %s\n' 'a75509bdb45ad6e1817328bf6521db051f6a665bfdd2c02cc83f39440bfe2378' .agent-release-wizard/04.patch | sha256sum -c -
+
           patch="$RUNNER_TEMP/otast-release-wizard.patch"
           cat \
             .agent-release-wizard/01a.part \
