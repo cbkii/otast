@@ -16,7 +16,7 @@ _otast_playbook_complete() {
     current=${COMP_WORDS[COMP_CWORD]}
     command=${COMP_WORDS[1]:-}
 
-    commands='help commands version doctor status maintain monitor review accept cleanup prepush test audit authority build source synthetic capture fixtures reset refresh upstream action prove export qualify cd'
+    commands='help commands version doctor status maintain monitor review accept cleanup prepush test audit authority build source synthetic capture fixtures reset refresh upstream action prove export qualify release cd'
     actions='report status preflight apply reboot verify restore boot-recover'
     modes='quick standard full'
     mapfile -t target_words < <(_otast_playbook_target_words)
@@ -110,6 +110,9 @@ _otast_playbook_complete() {
             ;;
         qualify)
             mapfile -t COMPREPLY < <(compgen -W '--fixture --output --skip-device --allow-dirty --help' -- "$current")
+            ;;
+        release)
+            mapfile -t COMPREPLY < <(compgen -W '--version --yes --no-reboot --no-publish --status --reset --help' -- "$current")
             ;;
         authority|build|source|audit|capture)
             compopt -o filenames 2>/dev/null || true

@@ -206,7 +206,7 @@ _otast_pb_version() {
     version=$(sed -n 's/^version=//p' "$repo/module/module.prop" | sed -n '1p')
     code=$(sed -n 's/^versionCode=//p' "$repo/module/module.prop" | sed -n '1p')
 
-    printf 'OTAST playbook v5.1\n'
+    printf 'OTAST playbook v5.2\n'
     printf 'Module: %s (%s)\n' "${version:-unknown}" "${code:-unknown}"
     printf 'Repository: %s\n' "$repo"
 }
@@ -238,6 +238,7 @@ ${OTAST_PB_BOLD}PRIMARY WORKFLOW${OTAST_PB_RESET}
     ${OTAST_PB_CYAN}prove${OTAST_PB_RESET}        Prove the exact ZIP against a device-derived fake root.
     ${OTAST_PB_CYAN}export${OTAST_PB_RESET}       Create an uploadable post-patch fake-root analysis ZIP.
     ${OTAST_PB_CYAN}qualify${OTAST_PB_RESET}      Run the complete local release-candidate qualification.
+    ${OTAST_PB_CYAN}release${OTAST_PB_RESET}      Resumable physical-device proof and exact-draft publication.
 
 ${OTAST_PB_BOLD}COMMANDS${OTAST_PB_RESET}
     help [COMMAND]                 Show this page or detailed command help.
@@ -267,15 +268,19 @@ ${OTAST_PB_BOLD}COMMANDS${OTAST_PB_RESET}
     prove [FIXTURE|latest] [NAME]  Run the full device-derived reboot-boundary proof.
     export [ROOT|latest] [ZIP]     Export a verified post-patch analysis archive.
     qualify [OPTIONS]              Run the final local, non-publishing qualification.
+    release [OPTIONS]              Create/prove/publish an exact draft; rerun after reboots.
     cd                             Change the current shell to the repository root.
 
 ${OTAST_PB_BOLD}SAFETY MODEL${OTAST_PB_RESET}
-    - No command commits, pushes, tags, releases or installs the Magisk module.
+    - Development commands do not commit, push, tag, release or install modules.
+    - release is the explicit exception: it installs only the exact draft asset and
+      publishes only after the physical lifecycle proof passes.
     - capture/refresh device are read-only against live /data/adb.
     - upstream ZIPs and installer code are retained in private evidence and never executed.
     - fake roots receive only a static default-extraction model plus inert installer evidence.
     - device capture remains authoritative for installer-generated postimages.
-    - apply, reboot and restore operate only inside ~/.cache/otast/fake-roots.
+    - action/prove apply, reboot and restore only disposable fake roots.
+    - release is the only host command allowed to drive live OTAST runtime actions.
     - qualify stops on dirty/unbound release state unless explicitly run as development.
 
 ${OTAST_PB_BOLD}HELP EXAMPLES${OTAST_PB_RESET}
@@ -549,6 +554,42 @@ DELEGATES TO
     scripts/export-fake-root-analysis.sh
 __HELP__
             ;;
+        release)
+            cat <<'__HELP__'
+OTAST RELEASE
+
+SYNOPSIS
+    otast release [--version VERSION] [--yes] [--no-reboot] [--no-publish]
+    otast release --status
+    otast release --reset [--version VERSION]
+
+PURPOSE
+    One resumable real-device release wizard. The same command is run after each
+    reboot; private phase state determines what comes next. It creates the GitHub
+    draft through Actions when needed, downloads and verifies the exact draft ZIP,
+    restores any existing managed OTAST state to a clean baseline, installs the
+    exact draft through Magisk, and proves:
+
+        Report -> Preflight -> Apply -> reboot -> Verify
+        -> second Apply (NO_CHANGES_REQUIRED) -> Verify -> Restore
+        -> reboot -> final Report
+
+    After PASS it uploads a sanitized proof asset and asks the Release workflow to
+    publish that exact already-validated draft without rebuilding it.
+
+REBOOT UX
+    At every reboot boundary the command persists its phase first. After Android
+    is fully booted, run exactly the same command again: `otast release`.
+
+SAFETY
+    Existing managed state must Verify as CURRENT before automatic baseline Restore.
+    A changed first Apply, post-reboot CURRENT state, second-Apply no-op, successful
+    Restore and a real boot-ID change are all mandatory. Any mismatch stops.
+
+DELEGATES TO
+    scripts/release-device.sh
+__HELP__
+            ;;
         qualify)
             cat <<'__HELP__'
 OTAST QUALIFY
@@ -753,7 +794,7 @@ _otast_pb_commands() {
     cat <<'__COMMANDS__'
 help commands version doctor status maintain monitor review accept cleanup prepush
  test audit authority build source synthetic capture fixtures reset refresh upstream
- action prove export qualify cd
+ action prove export qualify release cd
 __COMMANDS__
 }
 
@@ -1102,7 +1143,7 @@ _otast_pb_dispatch() {
     case $command in
         help|-h|--help|man|commands|version|--version|-V|status|fixtures|fixture-list|cd)
             ;;
-        doctor|env|maintain|upkeep|monitor|review|review-target|accept|accept-target|cleanup|clean-reports|prepush|ready|test|audit|authority|build|package-module|source|package-source|synthetic|fake-synthetic|capture|fixture-capture|reset|fixture-reset|refresh|upstream|target|action|fake-action|prove|proof|export|archive|qualify|finalise|finalize)
+        doctor|env|maintain|upkeep|monitor|review|review-target|accept|accept-target|cleanup|clean-reports|prepush|ready|test|audit|authority|build|package-module|source|package-source|synthetic|fake-synthetic|capture|fixture-capture|reset|fixture-reset|refresh|upstream|target|action|fake-action|prove|proof|export|archive|qualify|finalise|finalize|release|release-v1)
             _otast_pb_require_non_root "otast $command" || return $?
             ;;
     esac
@@ -1227,6 +1268,10 @@ _otast_pb_dispatch() {
         qualify|finalise|finalize)
             repo=$(_otast_pb_repo_root) || return 1
             bash "$repo/scripts/qualify-release-candidate.sh" "$@"
+            ;;
+        release|release-v1)
+            repo=$(_otast_pb_repo_root) || return 1
+            bash "$repo/scripts/release-device.sh" "$@"
             ;;
         cd)
             repo=$(_otast_pb_repo_root) || return 1

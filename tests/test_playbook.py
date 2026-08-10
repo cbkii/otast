@@ -45,6 +45,8 @@ class PlaybookContractTests(unittest.TestCase):
             "scripts/prove-device-fake-root.sh",
             "scripts/export-fake-root-analysis.sh",
             "scripts/qualify-release-candidate.sh",
+            "scripts/release-device.sh",
+            "scripts/validate-device-release-proof.py",
             "scripts/upstream-target-package.py",
             "scripts/otast_safety_guard.py",
             "scripts/otast-maintenance.py",
@@ -58,13 +60,20 @@ class PlaybookContractTests(unittest.TestCase):
     def test_main_help_lists_primary_lifecycle(self) -> None:
         result = self.run_playbook("help")
         self.assertEqual(result.returncode, 0, result.stderr)
-        for command in ("maintain", "review", "accept", "prepush", "synthetic", "capture", "refresh", "upstream", "prove", "export", "qualify"):
+        for command in ("maintain", "review", "accept", "prepush", "synthetic", "capture", "refresh", "upstream", "prove", "export", "qualify", "release"):
             self.assertIn(command, result.stdout)
 
     def test_command_help_describes_reboot_boundary(self) -> None:
         result = self.run_playbook("help", "action")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("apply -> verify fails before reboot -> reboot -> verify passes", result.stdout)
+
+    def test_release_help_is_single_resumable_interface(self) -> None:
+        result = self.run_playbook("help", "release")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run exactly the same command again", result.stdout)
+        self.assertIn("NO_CHANGES_REQUIRED", result.stdout)
+        self.assertIn("publish that exact already-validated draft without rebuilding", result.stdout)
 
     def test_source_mode_defines_otast_function(self) -> None:
         env = os.environ.copy()
@@ -87,7 +96,7 @@ class PlaybookContractTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("OTAST playbook v5.1", result.stdout)
+        self.assertIn("OTAST playbook v5.2", result.stdout)
 
     def test_playbook_does_not_define_unused_colour_symbols(self) -> None:
         content = SCRIPT.read_text(encoding="utf-8")
@@ -126,6 +135,7 @@ class PlaybookContractTests(unittest.TestCase):
             "scripts/prove-device-fake-root.sh",
             "scripts/export-fake-root-analysis.sh",
             "scripts/qualify-release-candidate.sh",
+            "scripts/release-device.sh",
             "scripts/upstream-target-package.py",
             "scripts/otast_safety_guard.py",
             "scripts/otast-maintenance.py",
