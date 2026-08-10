@@ -1,0 +1,76 @@
+name: Apply Release Wizard
+
+on:
+  push:
+    branches:
+      - agent/release-wizard-v1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-release-wizard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/release-wizard-v1
+          fetch-depth: 0
+
+      - name: Reconstruct and apply exact patch
+        shell: bash
+        run: |
+          patch="$RUNNER_TEMP/otast-release-wizard.patch"
+          cat \
+            .agent-release-wizard/01a.part \
+            .agent-release-wizard/01b.part \
+            .agent-release-wizard/02.patch \
+            .agent-release-wizard/03.patch \
+            .agent-release-wizard/04.patch \
+            >"$patch"
+          printf '%s  %s\n' \
+            '0835355814ea90df902c2836ac52280f66a0021b745df3401ccac8800471e0b0' \
+            "$patch" | sha256sum -c -
+          git apply --check "$patch"
+          git apply "$patch"
+          git diff --check
+
+      - name: Validate applied source
+        shell: bash
+        run: |
+          bash -n \
+            scripts/release-device.sh \
+            scripts/otast-playbook.sh \
+            scripts/otast-playbook-completion.bash
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+          PYTHONDONTWRITEBYTECODE=1 python3 -m tools.otastctl \
+            --repo-root "$GITHUB_WORKSPACE" privacy-scan --json
+
+      - name: Commit exact implementation
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            .github/workflows/release.yml \
+            docs/INSTALLATION.md \
+            docs/PLAYBOOK.md \
+            docs/RELEASE.md \
+            scripts/otast-playbook-completion.bash \
+            scripts/otast-playbook.sh \
+            scripts/release-device.sh \
+            scripts/validate-device-release-proof.py \
+            tests/test_playbook.py \
+            tests/test_public_contract.py \
+            tests/test_release_device.py
+          git diff --cached --check
+          git diff --cached --summary
+          git commit -m 'feat(release): add resumable physical-device wizard'
+          git push origin HEAD:agent/release-wizard-v1
