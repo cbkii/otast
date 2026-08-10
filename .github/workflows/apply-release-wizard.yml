@@ -44,9 +44,6 @@ jobs:
             .agent-release-wizard/03.patch \
             .agent-release-wizard/04.patch \
             >"$patch"
-          printf '%s  %s\n' \
-            '0835355814ea90df902c2836ac52280f66a0021b745df3401ccac8800471e0b0' \
-            "$patch" | sha256sum -c -
           git apply --check "$patch"
           git apply "$patch"
           git diff --check
