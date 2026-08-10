@@ -59,13 +59,12 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m tools.otastctl \
             --repo-root "$GITHUB_WORKSPACE" privacy-scan --json
 
-      - name: Commit exact implementation
+      - name: Commit validated non-workflow implementation
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- \
-            .github/workflows/release.yml \
             docs/INSTALLATION.md \
             docs/PLAYBOOK.md \
             docs/RELEASE.md \
