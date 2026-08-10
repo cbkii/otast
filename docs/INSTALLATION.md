@@ -12,13 +12,16 @@
 ## Normal v1 release/install path
 
 For the repository owner, do **not** manually execute the release lifecycle one
-command at a time. The supported release path is the resumable wizard documented
-in [`RELEASE.md`](RELEASE.md):
+command at a time. The supported release path is:
 
 ```bash
 source scripts/otast-playbook.sh
 otast release
 ```
+
+The wizard uses the latest GitHub `main` when preparing a new draft. You do not
+select or pin a commit SHA. Commit identity is diagnostic metadata only; the
+physical proof and final publication are bound to the exact module ZIP SHA-256.
 
 After every requested reboot, wait for Android to finish booting and run the exact
 same command again:
@@ -27,11 +30,12 @@ same command again:
 otast release
 ```
 
-The wizard creates or reuses the exact GitHub draft, verifies its SHA-256 and
-commit binding, installs it through Magisk, performs Report/Preflight/Apply,
-proves the reboot boundary, proves second-Apply idempotency, restores originals,
-performs the final post-Restore report, uploads a sanitized proof and publishes
-only the already-validated draft.
+The wizard handles ordinary repair routes automatically where safe: dependency
+installation, bounded network/Actions retries, stale draft refresh, transaction
+boot-recovery, Apply/Restore retries and settling reboots. Persistent drift or a
+state that cannot be safely verified still stops rather than being hidden.
+
+See [`RELEASE.md`](RELEASE.md) for the full recovery policy.
 
 ## Manual runtime interface
 
@@ -46,9 +50,9 @@ su -c 'sh /data/adb/modules/otast/runtime/entry.sh verify'
 su -c 'sh /data/adb/modules/otast/runtime/entry.sh restore'
 ```
 
-A changing Apply returns `REBOOT_REQUIRED`; Verify is expected only after the
-required reboot. A second Apply on a current system returns
-`NO_CHANGES_REQUIRED`.
+A changing Apply returns `REBOOT_REQUIRED`. An already-current Apply may return
+`NO_CHANGES_REQUIRED`; the release wizard treats that as a valid no-op path rather
+than forcing an artificial failure.
 
 ## Before installing outside the release wizard
 
