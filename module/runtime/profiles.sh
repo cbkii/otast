@@ -110,7 +110,7 @@ otast_plan_pif() {
 
     _otast_plan_transformed_file pif-autopif-$role playintegrityfix "$dir/autopif.sh" 0755 \
       otast_transform_pif_autopif \
-      '1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1,67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a' || return 1
+      '1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1,67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a,04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213' || return 1
 
     _otast_plan_transformed_file pif-autopif-ota-$role playintegrityfix "$dir/autopif_ota.sh" 0755 \
       otast_transform_pif_ota \
