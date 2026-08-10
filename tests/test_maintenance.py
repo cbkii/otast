@@ -167,7 +167,6 @@ class MaintenanceTests(unittest.TestCase):
             os.environ.update(original)
         return type("Result", (), {"returncode": rc, "stdout": stdout.getvalue(), "stderr": stderr.getvalue()})()
 
-
     def test_run_tool_preserves_process_geteuid(self) -> None:
         original_geteuid = os.geteuid
         output = self.repo / "reports/target-monitor-uid-contract"
@@ -313,6 +312,65 @@ class MaintenanceTests(unittest.TestCase):
         self.assertTrue(newest_failed.exists())
         self.assertFalse(old_success.exists())
         self.assertTrue(output.exists())
+
+    @staticmethod
+    def _load_classifier_module():
+        spec = importlib.util.spec_from_file_location("otast_maintenance_classifier", MAINTENANCE)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_review_classifier_treats_identical_package_preflight_as_diagnostic(self) -> None:
+        module = self._load_classifier_module()
+        identical = {"identical": True}
+        changed = {"identical": False}
+
+        ready, result, rc, policy = module.classify_review_result(
+            identical,
+            active_candidate_compare_rc=0,
+            report_rc=0,
+            preflight_rc=1,
+        )
+        self.assertTrue(ready)
+        self.assertEqual(result, "NO_PACKAGE_IMPACT")
+        self.assertEqual(rc, module.EXIT_OK)
+        self.assertEqual(policy, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE")
+
+        ready, result, rc, _ = module.classify_review_result(
+            identical,
+            active_candidate_compare_rc=1,
+            report_rc=0,
+            preflight_rc=1,
+        )
+        self.assertFalse(ready)
+        self.assertEqual(result, "VALIDATION_FAILED")
+        self.assertEqual(rc, module.EXIT_ERROR)
+
+        ready, result, rc, policy = module.classify_review_result(
+            changed,
+            active_candidate_compare_rc=0,
+            report_rc=0,
+            preflight_rc=0,
+        )
+        self.assertFalse(ready)
+        self.assertEqual(result, "PACKAGE_CHANGED")
+        self.assertEqual(rc, module.EXIT_REVIEW)
+        self.assertEqual(policy, "REQUIRED_FOR_CHANGED_PACKAGE")
+
+    def test_review_classifier_fails_closed_when_report_fails(self) -> None:
+        module = self._load_classifier_module()
+        ready, result, rc, policy = module.classify_review_result(
+            {"identical": True},
+            active_candidate_compare_rc=0,
+            report_rc=1,
+            preflight_rc=0,
+        )
+        self.assertFalse(ready)
+        self.assertEqual(result, "VALIDATION_FAILED")
+        self.assertEqual(rc, module.EXIT_ERROR)
+        self.assertEqual(policy, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE")
 
 
 if __name__ == "__main__":

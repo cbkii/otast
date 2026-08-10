@@ -95,7 +95,7 @@ otast review yurikey
 
 Possible results:
 
-- `NO_PACKAGE_IMPACT`: old and new module package trees are byte/mode identical and fake-root validation passed;
+- `NO_PACKAGE_IMPACT`: old and new immutable module package trees are byte/mode identical and comparison/Report evidence is valid; staged Preflight is retained as diagnostic evidence when static source topology cannot model installer-derived runtime topology;
 - `PACKAGE_CHANGED`: compatibility/runtime work is required before the baseline can move;
 - `VALIDATION_FAILED`: the generated review log must be investigated.
 

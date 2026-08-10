@@ -645,6 +645,33 @@ def compare_maps(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]])
     return {"identical": not added and not removed and not changed, "same": same, "added": added, "removed": removed, "changed": changed}
 
 
+def classify_review_result(
+    comparison: dict[str, Any],
+    *,
+    active_candidate_compare_rc: int,
+    report_rc: int,
+    preflight_rc: int,
+) -> tuple[bool, str, int, str]:
+    """Classify immutable upstream-package review evidence.
+
+    An old/new module tree that is byte/mode identical is package-neutral. The
+    staged source tree may not model installer-derived runtime topology (notably
+    TA-UTL's visible ``TA_utl`` source versus hidden ``.TA_utl`` install form),
+    so staged Preflight remains diagnostic in that case rather than a gate.
+
+    Changed package trees always require compatibility review. Comparison/report
+    execution failures remain fail-closed validation errors.
+    """
+    identical = comparison.get("identical") is True
+    evidence_ok = active_candidate_compare_rc == 0 and report_rc == 0
+
+    if not identical:
+        return False, "PACKAGE_CHANGED", EXIT_REVIEW, "REQUIRED_FOR_CHANGED_PACKAGE"
+    if not evidence_ok:
+        return False, "VALIDATION_FAILED", EXIT_ERROR, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE"
+    return True, "NO_PACKAGE_IMPACT", EXIT_OK, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE"
+
+
 def review_markdown(value: dict[str, Any]) -> str:
     lines = [
         f"# OTAST target review: {value['target']}",
@@ -660,6 +687,7 @@ def review_markdown(value: dict[str, Any]) -> str:
         f"- Active/candidate comparison status: `{value['active_candidate_compare_rc']}`",
         f"- Report status: `{value['report_rc']}`",
         f"- Preflight status: `{value['preflight_rc']}`",
+        f"- Preflight policy: `{value['preflight_policy']}`",
         "",
         "## Module comparison",
         "",
@@ -748,21 +776,12 @@ def run_review(root: Path, target_arg: str, observed_arg: str | None, fixture_ar
         log_path=log,
     )
 
-    acceptance_ready = (
-        comparison["identical"]
-        and active_compare.returncode == 0
-        and report.returncode == 0
-        and preflight.returncode == 0
+    acceptance_ready, result_name, rc, preflight_policy = classify_review_result(
+        comparison,
+        active_candidate_compare_rc=active_compare.returncode,
+        report_rc=report.returncode,
+        preflight_rc=preflight.returncode,
     )
-    if acceptance_ready:
-        result_name = "NO_PACKAGE_IMPACT"
-        rc = EXIT_OK
-    elif not comparison["identical"]:
-        result_name = "PACKAGE_CHANGED"
-        rc = EXIT_REVIEW
-    else:
-        result_name = "VALIDATION_FAILED"
-        rc = EXIT_ERROR
     result = {
         "schema_version": 1,
         "generated_utc": utc_now(),
@@ -781,6 +800,7 @@ def run_review(root: Path, target_arg: str, observed_arg: str | None, fixture_ar
         "active_candidate_compare_rc": active_compare.returncode,
         "report_rc": report.returncode,
         "preflight_rc": preflight.returncode,
+        "preflight_policy": preflight_policy,
         "installer_execution": "NEVER_EXECUTED",
         "log": str(log),
     }

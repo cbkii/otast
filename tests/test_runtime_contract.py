@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -61,7 +62,6 @@ class RuntimeContractTests(unittest.TestCase):
         ):
             self.assertIn(key, authority)
 
-
     def test_managed_vbmeta_is_post_reboot_contract_not_preflight_identity(self) -> None:
         authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
         entry = (ROOT / "module/runtime/entry.sh").read_text(encoding="utf-8")
@@ -93,6 +93,21 @@ class RuntimeContractTests(unittest.TestCase):
         for observed in ("action.sh", "post-fs-data.sh", "service.sh"):
             self.assertNotIn(f'"$dir/{observed}"', pif_block)
         self.assertFalse((ROOT / "module/runtime/templates/pif").exists())
+
+    def test_pif_manifest_and_runtime_autopif_allowlists_match(self) -> None:
+        manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
+        manifest_hashes = set(
+            manifest["targets"]["playintegrityfix"]["accepted_hashes"]["autopif.sh"]
+        )
+        profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
+        pif_block = profiles.split("otast_plan_pif()", 1)[1].split("otast_plan_ta_utl()", 1)[0]
+        match = re.search(
+            r"otast_transform_pif_autopif \\\n\s+'([0-9a-f,]+)'",
+            pif_block,
+        )
+        self.assertIsNotNone(match)
+        runtime_hashes = set(match.group(1).split(","))
+        self.assertEqual(runtime_hashes, manifest_hashes)
 
     def test_legacy_governor_and_auto_generator_fail_closed(self) -> None:
         common = (ROOT / "module/runtime/common.sh").read_text(encoding="utf-8")
