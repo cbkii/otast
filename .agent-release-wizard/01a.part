@@ -1,0 +1,346 @@
+diff --git a/scripts/release-device.sh b/scripts/release-device.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..f5d3930338bede8a535d5a77bbd29d70b1461579
+--- /dev/null
++++ b/scripts/release-device.sh
+@@ -0,0 +1,641 @@
++#!/usr/bin/env bash
++# Resumable physical-device release qualification and publication for OTAST.
++# Re-run the same command after each requested reboot; phase state is persisted privately.
++
++SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P) || {
++    printf 'STOP: cannot resolve script directory.\n' >&2
++    exit 1
++}
++REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P) || exit 1
++
++REPO_SLUG=${OTAST_GITHUB_REPO:-cbkii/otast}
++WORKFLOW=release.yml
++YES=0
++NO_REBOOT=0
++NO_PUBLISH=0
++SHOW_STATUS=0
++RESET=0
++VERSION=
++
++usage() {
++    cat <<'EOF'
++Usage: release-device.sh [OPTIONS]
++
++One resumable command for the physical v1 release lifecycle. Re-run this same
++command after each requested reboot; it resumes from private state automatically.
++
++Options:
++  --version VERSION   Release version. Default: module/module.prop version.
++  --yes               Confirm reboot/publication prompts automatically.
++  --no-reboot         Never reboot automatically; print the required boundary.
++  --no-publish        Stop after uploading a PASS device proof to the draft.
++  --status            Show current private release state and exit.
++  --reset             Remove only this wizard's private state for VERSION.
++  -h, --help          Show this help.
++
++The command can create the GitHub draft through Actions, download and verify the
++exact draft ZIP, install it through Magisk, prove Apply/reboot/Verify/no-op/Restore
++across real reboot boundaries, upload a sanitized proof asset, then ask GitHub
++Actions to publish that exact already-validated draft without rebuilding it.
++EOF
++}
++
++fatal() {
++    printf 'STOP: %s\n' "$*" >&2
++    return 1
++}
++
++info() {
++    printf '[INFO] %s\n' "$*"
++}
++
++phase_banner() {
++    printf '\n==================================================\n'
++    printf 'OTAST RELEASE: %s\n' "$1"
++    printf '==================================================\n'
++}
++
++while (($#)); do
++    case $1 in
++        --version)
++            (($# >= 2)) || { printf 'STOP: --version requires a value.\n' >&2; exit 2; }
++            VERSION=$2
++            shift 2
++            ;;
++        --yes) YES=1; shift ;;
++        --no-reboot) NO_REBOOT=1; shift ;;
++        --no-publish) NO_PUBLISH=1; shift ;;
++        --status) SHOW_STATUS=1; shift ;;
++        --reset) RESET=1; shift ;;
++        -h|--help) usage; exit 0 ;;
++        *) printf 'STOP: unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
++    esac
++done
++
++if [[ -z $VERSION ]]; then
++    VERSION=$(sed -n 's/^version=//p' "$REPO_ROOT/module/module.prop" | sed -n '1p')
++fi
++if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]]; then
++    printf 'STOP: invalid release version: %s\n' "$VERSION" >&2
++    exit 2
++fi
++
++STATE_BASE=${HOME:?}/.local/state/otast-release
++STATE_DIR=$STATE_BASE/$VERSION
++STATE_FILE=$STATE_DIR/state.env
++ASSET_DIR=$STATE_DIR/assets
++LOG_DIR=$STATE_DIR/logs
++PROOF_FILE=$STATE_DIR/otast-${VERSION}-device-proof.json
++ZIP_NAME=otast-${VERSION}.zip
++SHA_NAME=$ZIP_NAME.sha256
++ZIP_PATH=$ASSET_DIR/$ZIP_NAME
++SHA_PATH=$ASSET_DIR/$SHA_NAME
++
++if ((RESET)); then
++    if [[ -L $STATE_DIR ]]; then
++        fatal "release state root is a symlink: $STATE_DIR"
++        exit $?
++    fi
++    if [[ -d $STATE_DIR ]]; then
++        rm -rf -- "$STATE_DIR" || { fatal "cannot remove release state: $STATE_DIR"; exit $?; }
++    fi
++    printf 'Reset private release state for %s.\n' "$VERSION"
++    exit 0
++fi
++
++mkdir -p -- "$STATE_DIR" "$ASSET_DIR" "$LOG_DIR" || exit 1
++chmod 0700 -- "$STATE_BASE" "$STATE_DIR" "$ASSET_DIR" "$LOG_DIR" 2>/dev/null || true
++
++PHASE=START
++COMMIT_SHA=
++MODULE_SHA256=
++BOOT_BEFORE=
++BASELINE_RESULT=NOT_REQUIRED
++DRAFT_TARGET=
++
++load_state() {
++    [[ -e $STATE_FILE ]] || return 0
++    [[ -f $STATE_FILE && ! -L $STATE_FILE ]] || { fatal "release state is unsafe: $STATE_FILE"; return 1; }
++    # This file is generated only by save_state below in a private 0700 directory.
++    # shellcheck disable=SC1090
++    source "$STATE_FILE" || { fatal 'cannot read release state'; return 1; }
++    case ${PHASE:-} in
++        START|BASELINE_REBOOT|INSTALL_REBOOT|APPLY_REBOOT|RESTORE_REBOOT|PROOF_READY|PUBLISHING|COMPLETE) ;;
++        *) fatal "unknown release phase in state: ${PHASE:-missing}"; return 1 ;;
++    esac
++    if [[ -n ${COMMIT_SHA:-} && ! $COMMIT_SHA =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
++        fatal 'state commit SHA is malformed'
++        return 1
++    fi
++    if [[ -n ${MODULE_SHA256:-} && ! $MODULE_SHA256 =~ ^[0-9a-f]{64}$ ]]; then
++        fatal 'state module SHA-256 is malformed'
++        return 1
++    fi
++    if [[ -n ${DRAFT_TARGET:-} && ! $DRAFT_TARGET =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]]; then
++        fatal 'state draft target is malformed'
++        return 1
++    fi
++    case ${BASELINE_RESULT:-NOT_REQUIRED} in PASS|NOT_REQUIRED) ;; *) fatal 'state baseline result is malformed'; return 1 ;; esac
++    if [[ -n ${BOOT_BEFORE:-} && ! $BOOT_BEFORE =~ ^[0-9A-Fa-f-]{16,64}$ ]]; then
++        fatal 'state boot ID is malformed'
++        return 1
++    fi
++    return 0
++}
++
++save_state() {
++    local tmp
++    tmp=$STATE_FILE.tmp.$$
++    umask 077
++    {
++        printf 'PHASE=%q\n' "$PHASE"
++        printf 'COMMIT_SHA=%q\n' "$COMMIT_SHA"
++        printf 'MODULE_SHA256=%q\n' "$MODULE_SHA256"
++        printf 'BOOT_BEFORE=%q\n' "$BOOT_BEFORE"
++        printf 'BASELINE_RESULT=%q\n' "$BASELINE_RESULT"
++        printf 'DRAFT_TARGET=%q\n' "$DRAFT_TARGET"
++    } >"$tmp" || return 1
++    chmod 0600 -- "$tmp" || return 1
++    mv -f -- "$tmp" "$STATE_FILE"
++}
++
++load_state || exit $?
++
++if ((SHOW_STATUS)); then
++    printf 'Version:      %s\n' "$VERSION"
++    printf 'Phase:        %s\n' "$PHASE"
++    printf 'Commit:       %s\n' "${COMMIT_SHA:-unknown}"
++    printf 'Module SHA:   %s\n' "${MODULE_SHA256:-unknown}"
++    printf 'State:        %s\n' "$STATE_FILE"
++    exit 0
++fi
++
++for command in gh git python3 unzip sha256sum getprop su grep sed cat sleep date mkdir chmod mv rm; do
++    command -v "$command" >/dev/null 2>&1 || { fatal "required command is missing: $command"; exit $?; }
++done
++
++gh auth status --hostname github.com >/dev/null 2>&1 || {
++    fatal 'GitHub CLI is not authenticated. Run: gh auth login --hostname github.com'
++    exit $?
++}
++
++if ! su -c 'id -u' 2>/dev/null | grep -qx '0'; then
++    fatal 'Magisk root is unavailable to Termux'
++    exit $?
++fi
++if ! su -c 'magisk -V' >/dev/null 2>&1; then
++    fatal 'Magisk CLI is unavailable through root; cannot install the exact draft ZIP'
++    exit $?
++fi
++
++DEVICE=$(getprop ro.product.device 2>/dev/null)
++SDK=$(getprop ro.build.version.sdk 2>/dev/null)
++if [[ $DEVICE != tegu || $SDK != 36 ]]; then
++    fatal "physical release proof requires tegu / SDK 36; observed device=$DEVICE sdk=$SDK"
++    exit $?
++fi
++
++current_boot_id() {
++    cat /proc/sys/kernel/random/boot_id 2>/dev/null
++}
++
++run_live() {
++    local action log rc
++    action=$1
++    log=$2
++    info "Live OTAST: $action"
++    su -c "sh /data/adb/modules/otast/runtime/entry.sh $action" >"$log" 2>&1
++    rc=$?
++    cat "$log"
++    return "$rc"
++}
++
++has_managed_state() {
++    su -c 'for f in /data/adb/otast/records/*.state; do [ -f "$f" ] && exit 0; done; exit 1' >/dev/null 2>&1
++}
++
++request_reboot() {
++    local answer
++    BOOT_BEFORE=$(current_boot_id) || { fatal 'cannot read current boot ID'; return 1; }
++    save_state || { fatal 'cannot persist reboot boundary'; return 1; }
++    printf '\nRequired reboot boundary reached.\n'
++    printf 'After Android is fully booted, run the SAME command again:\n'
++    printf '  otast release\n\n'
++    if ((NO_REBOOT)); then
++        return 10
++    fi
++    if ((YES)); then
++        answer=y
++    elif [[ -t 0 ]]; then
++        printf 'Reboot now? [Y/n] '
++        if IFS= read -r -t 30 answer; then
++            :
++        else
++            printf '\nNo response; reboot was not requested.\n'
++            return 10
++        fi
++        answer=${answer:-y}
++    else
++        return 10
++    fi
++    case $answer in
++        y|Y|yes|YES)
++            info 'Requesting reboot through Magisk root'
++            su -c reboot >/dev/null 2>&1
++            return 10
++            ;;
++        *) return 10 ;;
++    esac
++}
++
++require_new_boot() {
++    local now
++    now=$(current_boot_id) || { fatal 'cannot read current boot ID'; return 1; }
++    if [[ -z $BOOT_BEFORE || $now == "$BOOT_BEFORE" ]]; then
++        printf 'A real reboot is still required before this phase can continue.\n'
++        request_reboot
++        return $?
++    fi
++    BOOT_BEFORE=
++    save_state || return 1
++    return 0
++}
++
++workflow_run_id() {
++    local title head json
++    title=$1
++    head=$2
++    json=$(gh run list -R "$REPO_SLUG" --workflow "$WORKFLOW" --branch main \
++        --event workflow_dispatch --limit 20 \
++        --json databaseId,displayTitle,headSha,status,conclusion,createdAt 2>/dev/null) || return 1
++    EXPECTED_TITLE=$title EXPECTED_HEAD=$head python3 -c '
++import json, os, sys
++runs=json.load(sys.stdin)
++items=[r for r in runs if r.get("displayTitle")==os.environ["EXPECTED_TITLE"] and r.get("headSha")==os.environ["EXPECTED_HEAD"]]
++items.sort(key=lambda r:r.get("createdAt", ""), reverse=True)
++print(items[0]["databaseId"] if items else "")
++' <<<"$json"
++}
++
++watch_run() {
++    local run_id status conclusion attempt json
++    run_id=$1
++    for ((attempt=1; attempt<=240; attempt+=1)); do
++        json=$(gh run view "$run_id" -R "$REPO_SLUG" --json status,conclusion 2>/dev/null) || {
++            if ((attempt % 6 == 0)); then printf '[WARN] cannot read workflow state yet (%s/240)\n' "$attempt" >&2; fi
++            sleep 10
++            continue
++        }
++        status=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' <<<"$json")
++        conclusion=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("conclusion") or "")' <<<"$json")
++        if [[ $status == completed ]]; then
++            if [[ $conclusion == success ]]; then
++                return 0
++            fi
++            gh run view "$run_id" -R "$REPO_SLUG" --log-failed 2>/dev/null || true
++            fatal "GitHub Release workflow concluded: ${conclusion:-unknown}"
++            return 1
++        fi
++        if ((attempt % 6 == 0)); then info "Waiting for GitHub Release workflow ($status)"; fi
++        sleep 10
++    done
++    fatal 'GitHub Release workflow did not complete within 40 minutes'
++    return 1
++}
++
++dispatch_release_workflow() {
++    local operation head title run_id attempt
++    operation=$1
++    head=$(gh api "repos/$REPO_SLUG/commits/main" --jq .sha 2>/dev/null) || {
++        fatal 'cannot resolve current GitHub main commit'
++        return 1
++    }
++    title="Release $operation $VERSION"
++    info "Dispatching GitHub Actions: $title"
++    gh workflow run "$WORKFLOW" -R "$REPO_SLUG" --ref main \
++        -f "operation=$operation" -f "version=$VERSION" >/dev/null || {
++        fatal 'cannot dispatch Release workflow'
++        return 1
++    }
++    run_id=
++    for ((attempt=1; attempt<=30; attempt+=1)); do
++        run_id=$(workflow_run_id "$title" "$head") || run_id=
++        [[ -n $run_id ]] && break
++        sleep 4
++    done
++    [[ -n $run_id ]] || { fatal 'dispatched Release workflow did not appear'; return 1; }
++    info "Watching workflow run $run_id"
++    watch_run "$run_id"
++}
++
++release_json() {
++    gh release view "$VERSION" -R "$REPO_SLUG" \
++        --json isDraft,tagName,targetCommitish,assets 2>/dev/null
++}
++
++ensure_draft() {
++    local json draft tag target
++    json=$(release_json) || json=
++    if [[ -z $json ]]; then
++        dispatch_release_workflow draft || return $?
