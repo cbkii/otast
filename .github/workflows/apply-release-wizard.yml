@@ -33,55 +33,34 @@ jobs:
           path = Path('scripts/release-device.sh')
           text = path.read_text(encoding='utf-8')
 
-          old = '''    case $target in
-                  [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-                  *) fatal "draft target is not an immutable commit SHA: $target"; return 1 ;;
-              esac
-              [[ ${#target} -eq 40 || ${#target} -eq 64 ]] || { fatal 'draft target commit SHA has wrong length'; return 1; }
-          '''
-          new = '''    [[ $target =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
-                  fatal "draft target is not an immutable full commit SHA: $target"
-                  return 1
-              }
-          '''
-          if text.count(old) != 1:
-              raise SystemExit('draft-target hardening anchor was not unique')
-          text = text.replace(old, new, 1)
+          anchor = "    [[ ${#target} -eq 40 || ${#target} -eq 64 ]] || { fatal 'draft target commit SHA has wrong length'; return 1; }\n"
+          addition = anchor + "    [[ $target =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || { fatal \"draft target is not an immutable full commit SHA: $target\"; return 1; }\n"
+          if 'draft target is not an immutable full commit SHA' not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('draft-target single-line anchor was not unique')
+              text = text.replace(anchor, addition, 1)
 
-          old = '''        run_live verify "$LOG_DIR/baseline-verify.log" || {
-                  fatal 'existing managed state is not CURRENT; do not auto-restore drifted state'
-                  exit $?
-              }
-              run_live restore "$LOG_DIR/baseline-restore.log" || exit $?
-          '''
-          new = '''        run_live verify "$LOG_DIR/baseline-verify.log" || {
-                  fatal 'existing managed state is not CURRENT; do not auto-restore drifted state'
-                  exit $?
-              }
-              grep -q '^CURRENT[[:space:]]' "$LOG_DIR/baseline-verify.log" || {
-                  fatal 'existing managed state Verify returned success without CURRENT evidence'
-                  exit $?
-              }
-              run_live restore "$LOG_DIR/baseline-restore.log" || exit $?
-          '''
-          if text.count(old) != 1:
-              raise SystemExit('baseline CURRENT hardening anchor was not unique')
-          text = text.replace(old, new, 1)
+          restore_anchor = '        run_live restore "$LOG_DIR/baseline-restore.log" || exit $?\n'
+          restore_addition = '''        grep -q '^CURRENT[[:space:]]' "$LOG_DIR/baseline-verify.log" || {
+              fatal 'existing managed state Verify returned success without CURRENT evidence'
+              exit $?
+          }
+          ''' + restore_anchor
+          if 'existing managed state Verify returned success without CURRENT evidence' not in text:
+              if text.count(restore_anchor) != 1:
+                  raise SystemExit('baseline restore single-line anchor was not unique')
+              text = text.replace(restore_anchor, restore_addition, 1)
+
           path.write_text(text, encoding='utf-8', newline='\n')
 
           test_path = Path('tests/test_release_device.py')
           tests = test_path.read_text(encoding='utf-8')
-          anchor = '''        self.assertIn("existing managed state is not CURRENT", text)
-                  self.assertIn("managed state remains after Restore/reboot", text)
-          '''
-          replacement = '''        self.assertIn("existing managed state is not CURRENT", text)
-                  self.assertIn("existing managed state Verify returned success without CURRENT evidence", text)
-                  self.assertIn("draft target is not an immutable full commit SHA", text)
-                  self.assertIn("managed state remains after Restore/reboot", text)
-          '''
-          if tests.count(anchor) != 1:
-              raise SystemExit('release hardening test anchor was not unique')
-          tests = tests.replace(anchor, replacement, 1)
+          test_anchor = '        self.assertIn("existing managed state is not CURRENT", text)\n'
+          test_addition = test_anchor + '        self.assertIn("existing managed state Verify returned success without CURRENT evidence", text)\n        self.assertIn("draft target is not an immutable full commit SHA", text)\n'
+          if 'existing managed state Verify returned success without CURRENT evidence' not in tests:
+              if tests.count(test_anchor) != 1:
+                  raise SystemExit('release hardening test anchor was not unique')
+              tests = tests.replace(test_anchor, test_addition, 1)
           test_path.write_text(tests, encoding='utf-8', newline='\n')
           PY
           git diff --check
@@ -102,4 +81,5 @@ jobs:
           git add -- scripts/release-device.sh tests/test_release_device.py
           git diff --cached --check
           git commit -m 'fix(release): harden draft and baseline evidence'
+          git pull --rebase origin agent/release-wizard-v1
           git push origin HEAD:agent/release-wizard-v1
