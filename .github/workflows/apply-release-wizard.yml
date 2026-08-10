@@ -1,9 +1,6 @@
 name: Apply Release Wizard
 
 on:
-  push:
-    branches:
-      - agent/release-wizard-v1
   pull_request:
     branches:
       - main
@@ -16,8 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  apply:
-    if: github.actor != 'github-actions[bot]' && (github.event_name != 'pull_request' || github.head_ref == 'agent/release-wizard-v1')
+  harden:
+    if: github.head_ref == 'agent/release-wizard-v1' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,55 +24,82 @@ jobs:
           ref: agent/release-wizard-v1
           fetch-depth: 0
 
-      - name: Reconstruct and apply exact patch
+      - name: Apply fail-closed hardening
         shell: bash
         run: |
-          printf '%s  %s\n' 'bcd0888e734bcdf8a6926b0677bb6521de4b5041de44ae9deb55e30c22d401f5' .agent-release-wizard/01a.part | sha256sum -c -
-          printf '%s  %s\n' 'a9cb9c05ee54d7deec83a710554ab639c66bd1b3e020fe4ef1e6bbec9e391bdd' .agent-release-wizard/01b.part | sha256sum -c -
-          printf '%s  %s\n' '4b60e2888b4fe640b56d5232611898ab1656c385244d61fbdc751b5c9c75635a' .agent-release-wizard/02.patch | sha256sum -c -
-          printf '%s  %s\n' 'c60c499eb7b1000dbf4b5cd2d805ef8afdeecc776fe50bbcfd2ee5feba86a93d' .agent-release-wizard/03.patch | sha256sum -c -
-          printf '%s  %s\n' 'a75509bdb45ad6e1817328bf6521db051f6a665bfdd2c02cc83f39440bfe2378' .agent-release-wizard/04.patch | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
 
-          patch="$RUNNER_TEMP/otast-release-wizard.patch"
-          cat \
-            .agent-release-wizard/01a.part \
-            .agent-release-wizard/01b.part \
-            .agent-release-wizard/02.patch \
-            .agent-release-wizard/03.patch \
-            .agent-release-wizard/04.patch \
-            >"$patch"
-          git apply --check "$patch"
-          git apply "$patch"
+          path = Path('scripts/release-device.sh')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''    case $target in
+                  [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+                  *) fatal "draft target is not an immutable commit SHA: $target"; return 1 ;;
+              esac
+              [[ ${#target} -eq 40 || ${#target} -eq 64 ]] || { fatal 'draft target commit SHA has wrong length'; return 1; }
+          '''
+          new = '''    [[ $target =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
+                  fatal "draft target is not an immutable full commit SHA: $target"
+                  return 1
+              }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('draft-target hardening anchor was not unique')
+          text = text.replace(old, new, 1)
+
+          old = '''        run_live verify "$LOG_DIR/baseline-verify.log" || {
+                  fatal 'existing managed state is not CURRENT; do not auto-restore drifted state'
+                  exit $?
+              }
+              run_live restore "$LOG_DIR/baseline-restore.log" || exit $?
+          '''
+          new = '''        run_live verify "$LOG_DIR/baseline-verify.log" || {
+                  fatal 'existing managed state is not CURRENT; do not auto-restore drifted state'
+                  exit $?
+              }
+              grep -q '^CURRENT[[:space:]]' "$LOG_DIR/baseline-verify.log" || {
+                  fatal 'existing managed state Verify returned success without CURRENT evidence'
+                  exit $?
+              }
+              run_live restore "$LOG_DIR/baseline-restore.log" || exit $?
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('baseline CURRENT hardening anchor was not unique')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+          test_path = Path('tests/test_release_device.py')
+          tests = test_path.read_text(encoding='utf-8')
+          anchor = '''        self.assertIn("existing managed state is not CURRENT", text)
+                  self.assertIn("managed state remains after Restore/reboot", text)
+          '''
+          replacement = '''        self.assertIn("existing managed state is not CURRENT", text)
+                  self.assertIn("existing managed state Verify returned success without CURRENT evidence", text)
+                  self.assertIn("draft target is not an immutable full commit SHA", text)
+                  self.assertIn("managed state remains after Restore/reboot", text)
+          '''
+          if tests.count(anchor) != 1:
+              raise SystemExit('release hardening test anchor was not unique')
+          tests = tests.replace(anchor, replacement, 1)
+          test_path.write_text(tests, encoding='utf-8', newline='\n')
+          PY
           git diff --check
+          bash -n scripts/release-device.sh
 
-      - name: Validate applied source
+      - name: Validate hardened implementation
         shell: bash
         run: |
-          bash -n \
-            scripts/release-device.sh \
-            scripts/otast-playbook.sh \
-            scripts/otast-playbook-completion.bash
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
           PYTHONDONTWRITEBYTECODE=1 python3 -m tools.otastctl \
             --repo-root "$GITHUB_WORKSPACE" privacy-scan --json
 
-      - name: Commit validated non-workflow implementation
+      - name: Commit hardened implementation
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- \
-            docs/INSTALLATION.md \
-            docs/PLAYBOOK.md \
-            docs/RELEASE.md \
-            scripts/otast-playbook-completion.bash \
-            scripts/otast-playbook.sh \
-            scripts/release-device.sh \
-            scripts/validate-device-release-proof.py \
-            tests/test_playbook.py \
-            tests/test_public_contract.py \
-            tests/test_release_device.py
+          git add -- scripts/release-device.sh tests/test_release_device.py
           git diff --cached --check
-          git diff --cached --summary
-          git commit -m 'feat(release): add resumable physical-device wizard'
+          git commit -m 'fix(release): harden draft and baseline evidence'
           git push origin HEAD:agent/release-wizard-v1
