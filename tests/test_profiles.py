@@ -36,6 +36,7 @@ class ProfileTests(unittest.TestCase):
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         checks = (
             ("playintegrityfix", "autopif.sh", "pif-autopif-ea93222c.sh"),
+            ("playintegrityfix", "autopif.sh", "pif-autopif-8b4a00ce.sh"),
             ("playintegrityfix", "autopif_ota.sh", "pif-autopif-ota-ea93222c.sh"),
             ("playintegrityfix", "security_patch.sh", "pif-security-patch-ea93222c.sh"),
             ("ta-utl", "prop.sh", "ta-utl-prop-v4.4.sh"),
@@ -100,6 +101,45 @@ class ProfileTests(unittest.TestCase):
             self.assertIn("# otast managed", security_text)
             self.assertIn("exit 0", security_text.splitlines()[:5])
             self.assertIn("Tricky Store Security Patch Util", security_text)
+
+    def test_current_pif_autopif_transform_preserves_authority_contract(self) -> None:
+        pif_runtime = ROOT / "module/runtime/pif.sh"
+        fixture = FIXTURES / "pif-autopif-8b4a00ce.sh"
+        with tempfile.TemporaryDirectory(prefix="otast-pif-current-test-") as raw:
+            work = Path(raw)
+            output = work / "autopif.out"
+            command = f'''
+                . "{pif_runtime}" || exit 1
+                OTAST_FINGERPRINT='google/tegu/tegu:16/TEST/1:user/release-keys'
+                OTAST_MANUFACTURER='Google'
+                OTAST_MODEL='Pixel 9a'
+                OTAST_SYSTEM_PATCH='2026-03-05'
+                OTAST_DEVICE='tegu'
+                OTAST_PIF_SPOOF_BUILD='true'
+                OTAST_PIF_SPOOF_PROPS='true'
+                OTAST_PIF_SPOOF_PROVIDER='true'
+                OTAST_PIF_SPOOF_SIGNATURE='true'
+                OTAST_PIF_SPOOF_VENDING_BUILD='true'
+                OTAST_PIF_SPOOF_VENDING_SDK='true'
+                OTAST_PIF_DEBUG='false'
+                otast_transform_pif_autopif "{fixture}" "{output}" || exit 2
+            '''
+            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+            transformed = output.read_text(encoding="utf-8")
+            self.assertIn("sort -ru | head -n1", transformed)
+            self.assertNotIn("| grep 'qpr' |", transformed)
+            self.assertIn("# --- otast pif authority BEGIN ---", transformed)
+            self.assertIn("# --- otast pif final identity BEGIN ---", transformed)
+            self.assertIn("# --- otast pif output identity BEGIN ---", transformed)
+            self.assertIn("MODEL='Pixel 9a'", transformed)
+            self.assertIn("PRODUCT='tegu_beta'", transformed)
+            self.assertIn("DEVICE='tegu'", transformed)
+            self.assertIn(
+                "FINGERPRINT='google/tegu/tegu:16/TEST/1:user/release-keys'",
+                transformed,
+            )
+            self.assertIn("PRODUCT=$PRODUCT", transformed)
+            self.assertIn("DEVICE=$DEVICE", transformed)
 
     def test_ta_v44_transform_disables_only_vbmeta_block(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
