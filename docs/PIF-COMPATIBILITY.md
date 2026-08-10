@@ -15,12 +15,14 @@ Those changes established the following rules:
 
 ## Managed surface
 
-For the reviewed PIF Inject source at commit `ea93222c58f90108cef0c02a11e66bdfdf4b21b6`, OTAST manages only:
+For the reviewed PIF Inject source lineage at commits `ea93222c58f90108cef0c02a11e66bdfdf4b21b6` and `8b4a00cef9536dc9c8428d392725eacf364605a9`, OTAST manages only:
 
 - `autopif.sh` — deterministic Pixel 9a selection and generated identity fields;
 - `autopif_ota.sh` — upstream refresh plus read-only OTAST preflight;
 - module and global `pif.prop` — merge authority values without discarding unrelated configuration;
 - `security_patch.sh` — exact wrapper because OTAST owns the same TrickyStore and runtime security-patch outputs.
+
+The `8b4a00ce` review changes only AutoPIF Pixel download-page selection (reverse-sorted FI/OTA URLs). The OTAST transformation anchors and managed writer surfaces are unchanged; the exact new `autopif.sh` source hash is retained as a regression fixture and allowlisted alongside the earlier reviewed sources.
 
 The following are observed or preserved, not patched:
 
