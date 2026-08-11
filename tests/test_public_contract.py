@@ -147,8 +147,8 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertNotIn("gh release create", publish_job)
         self.assertIn("--draft=false --prerelease", publish_job)
         self.assertIn("--draft=false --latest", publish_job)
-        self.assertIn("!contains(steps.release.outputs.version, '-')", publish_job)
-        self.assertIn("contains(steps.release.outputs.version, '-')", publish_job)
+        self.assertIn("if: ${{ !contains(steps.release.outputs.version, '-') }}", publish_job)
+        self.assertIn("if: ${{ contains(steps.release.outputs.version, '-') }}", publish_job)
 
     def test_branch_build_is_a_separate_read_only_one_field_workflow(self) -> None:
         workflow = (ROOT / ".github/workflows/build-branch.yml").read_text(encoding="utf-8")
