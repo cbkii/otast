@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import stat
 import unittest
@@ -8,6 +7,7 @@ from pathlib import Path
 
 from tools.otastctl.build import ENTRYPOINTS, module_metadata
 from tools.otastctl.privacy import scan_repository
+from tools.otastctl.release import UPDATE_JSON_URL, load_update_metadata
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,14 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 class PublicRepositoryContractTests(unittest.TestCase):
     def test_identity_and_update_channel_are_coherent(self) -> None:
         metadata = module_metadata(ROOT / "module/module.prop")
-        update = json.loads((ROOT / "update.json").read_text(encoding="utf-8"))
+        update = load_update_metadata(ROOT / "update.json")
         self.assertEqual(metadata["id"], "otast")
-        self.assertEqual(update["version"], metadata["version"])
-        self.assertEqual(update["versionCode"], int(metadata["versionCode"]))
-        self.assertIn("cbkii/otast", metadata["updateJson"])
+        self.assertEqual(metadata["updateJson"], UPDATE_JSON_URL)
+        self.assertGreaterEqual(int(metadata["versionCode"]), int(update["versionCode"]))
         self.assertIn("cbkii/otast", update["zipUrl"])
         legacy_name = "ota" + "sst"
-        self.assertNotIn(legacy_name, "\n".join((metadata["updateJson"], update["zipUrl"])))
+        self.assertNotIn(legacy_name, "\n".join((metadata["updateJson"], str(update["zipUrl"]))))
 
     def test_no_local_source_dependency_or_legacy_release_identity(self) -> None:
         findings = scan_repository(ROOT)
@@ -97,18 +96,36 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("legacy ota-sot/otasst governor traces remain", capture)
         self.assertIn("/data/adb/post-fs-data.d/000-$legacy_otasst.sh", capture)
 
-    def test_release_workflow_uses_static_valid_permissions_and_exact_target(self) -> None:
+    def test_release_workflow_has_isolated_branch_build_and_proven_publish(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        self.assertNotIn("contents: ${{", workflow)
-        self.assertIn("contents: write", workflow)
-        self.assertIn('--target "$GITHUB_SHA"', workflow)
-        self.assertIn('[[ "$GITHUB_ACTOR" == "$GITHUB_REPOSITORY_OWNER" ]]', workflow)
-        self.assertIn("options: [validate, draft, publish]", workflow)
+        self.assertNotIn("permissions: write-all", workflow)
+        self.assertIn("- prepare-release", workflow)
+        self.assertIn("- publish-release", workflow)
+        self.assertIn("- build-branch", workflow)
+        self.assertIn("ref: main", workflow)
+        self.assertIn("build-release.sh", workflow)
+        self.assertIn("verify-release", workflow)
         self.assertIn("validate-device-release-proof.py", workflow)
-        self.assertIn('gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest', workflow)
-        publish = workflow.split("  publish:\n", 1)[1]
-        self.assertNotIn("build-release.sh", publish)
-        self.assertNotIn("gh release create", publish)
+        self.assertIn("generate-update-json", workflow)
+        self.assertIn("release-manifest.json", workflow)
+        self.assertIn("contents: write", workflow)
+        self.assertIn("inputs.operation == 'draft'", workflow)
+        self.assertIn("inputs.operation == 'publish'", workflow)
+
+        branch_job = workflow.split("  build-branch:\n", 1)[1].split("  prepare-release:\n", 1)[0]
+        self.assertIn("git ls-remote --exit-code --heads", branch_job)
+        self.assertIn("actions/upload-artifact@v4", branch_job)
+        self.assertIn("validate-zip", branch_job)
+        self.assertNotIn("gh release", branch_job)
+        self.assertNotIn("update.json", branch_job)
+        self.assertNotIn("device-proof", branch_job)
+
+        publish_job = workflow.split("  publish-release:\n", 1)[1]
+        self.assertNotIn("build-release.sh", publish_job)
+        self.assertNotIn("gh release create", publish_job)
+        self.assertIn("validate-device-release-proof.py", publish_job)
+        self.assertIn("draft=false --latest", publish_job)
+        self.assertIn("contents/update.json", publish_job)
 
     def test_source_tree_has_no_symlinks_or_unsafe_git_path(self) -> None:
         git_path = ROOT / ".git"
