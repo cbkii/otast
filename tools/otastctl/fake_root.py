@@ -187,6 +187,7 @@ def _run(
     env = os.environ.copy()
     env.update(
         {
+            "PATH": str(adb_root / "bin") + ":" + env.get("PATH", ""),
             "ADB_ROOT": str(adb_root),
             "OTAST_AUTHORITY": str(adb_root / "ota.prop"),
             "OTAST_LIVE_PROP_FILE": str(adb_root / "live.prop"),
@@ -215,6 +216,9 @@ def _new_root(parent: Path, module_zip: Path, *, staged_pif: bool = True) -> tup
     _write(adb_root / ".otast-fake-root", "1\n", 0o600)
     _write(adb_root / "ota.prop", _authority_text(), 0o600)
     _write(adb_root / "live.prop", _live_text(managed_vbmeta_current=False), 0o600)
+    bin_dir = adb_root / "bin"
+    bin_dir.mkdir(parents=True)
+    _write(bin_dir / "resetprop", "#!/system/bin/sh\nexit 0\n", 0o755)
     originals = _synthetic_target(adb_root, staged_pif=staged_pif)
     module = _extract_exact_zip(module_zip, adb_root / "modules/otast")
     return adb_root, module / "runtime/entry.sh", originals
@@ -426,6 +430,28 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         # A missing reviewed writer path must stop even in fake fixture mode.
         missing_root, missing_entry, _ = _new_root(base / "missing-required", module_zip, staged_pif=False)
         (missing_root / "modules/playintegrityfix/autopif.sh").unlink()
+
+
+
+
+
+
+
+
+
+
+        missing_cap_root, missing_cap_entry, _ = _new_root(base / "missing-cap-test", module_zip, staged_pif=False)
+        _write(missing_cap_root / "modules/vbmeta-fixer/module.prop", "id=vbmeta-fixer\nversion=1\nversionCode=1\n")
+        _write(missing_cap_root / "modules/vbmeta-fixer/service.sh", "#!/system/bin/sh\n")
+        (missing_cap_root / "modules/vbmeta-fixer/service.sh").chmod(0o755)
+        # Test requires a PATH that DOES NOT contain the fake bin/resetprop.
+        # It needs busybox to run _otast_preflight and such.
+        # But wait, earlier I figured out `otast_plan_vbmeta_fixer` works if we just create the file in `data/adb/modules`.
+        # Because we added `bin/resetprop` in `_new_root` earlier! Let's just unlink it!
+        (missing_cap_root / "bin/resetprop").unlink()
+        cap_fail = _run(missing_cap_entry, missing_cap_root, "preflight", expect=1)
+        logs.append("## missing capability rejection\n" + cap_fail.stdout)
+
         missing = _run(missing_entry, missing_root, "preflight", expect=1)
         if "required reviewed target path is missing" not in missing.stdout:
             raise OtastError("missing-required scenario failed for the wrong reason")
@@ -448,6 +474,19 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         if "automatic security-patch generation conflicts" not in auto.stdout:
             raise OtastError("PIF automatic generator scenario failed for the wrong reason")
         logs.append("## PIF automatic generator rejection\n" + auto.stdout)
+
+
+
+
+
+
+
+
+
+
+        auto_report = _run(auto_entry, auto_root, "report", expect=0)
+        if "KNOWN_COMPETING_WRITER_ACTIVE" not in auto_report.stdout:
+            raise OtastError("conflict report failed")
 
         # Tampered state may never redirect Restore outside ADB_ROOT.
         state_root, state_entry, _ = _new_root(base / "state-tamper", module_zip, staged_pif=False)
@@ -486,6 +525,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "identity_mismatch_rejected": True,
                 "symlink_escape_rejected": True,
                 "active_lock_rejected": True,
+                "missing_capability_rejected": True,
                 "missing_required_writer_rejected": True,
                 "legacy_governor_rejected": True,
                 "pif_auto_generator_rejected": True,

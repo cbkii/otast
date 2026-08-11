@@ -190,6 +190,7 @@ otast_plan_yurikey() {
 otast_plan_vbmeta_fixer() {
   local dir role
   for dir in $(otast_effective_module_dirs vbmeta-fixer); do
+    otast_require_capability "resetprop" "VBMeta Fixer runtime writer"
     role=$(_otast_role_for_dir "$dir") || return 1
     _otast_plan_exact_file vbmeta-service-$role vbmeta-fixer "$dir/service.sh" 0755 "$MODDIR/templates/vbmeta-fixer/service.sh" \
       '68877fdf5e64fabf3a59ac608097d9ffbf4d770119b7793cf3ddce8951563b42,dbf67cf9d728b8495f843f71c01b51db74845617a3c5e7cbe52591055decc23b' || return 1

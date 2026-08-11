@@ -75,7 +75,13 @@
           "ref": "source snapshot"
         }
       ],
-      "strategy": "configuration-preserving targeted transformation"
+      "strategy": "configuration-preserving targeted transformation",
+      "known_competing_writers": [
+        {
+          "path": "tricky_store/pif_auto_security_patch",
+          "state": "KNOWN_COMPETING_WRITER_DISABLED"
+        }
+      ]
     },
     "ta-utl": {
       "accepted_hashes": {
@@ -111,7 +117,13 @@
         "repository": "5ec1cff/TrickyStore"
       },
       "reviewed_ref": "1.4.1",
-      "strategy": "external contract"
+      "strategy": "external contract",
+      "known_competing_writers": [
+        {
+          "path": "tricky_store/target.txt",
+          "state": "UPSTREAM_PRESERVED"
+        }
+      ]
     },
     "vbmeta-fixer": {
       "managed_templates": {

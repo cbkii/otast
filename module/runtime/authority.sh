@@ -16,6 +16,14 @@ OTAST_VBMETA_DIGEST=''
 OTAST_VBMETA_SIZE=''
 OTAST_VBMETA_AVB_VERSION=''
 OTAST_BOOT_AVB_VERSION=''
+OTAST_EXT_BUILD_RELEASE=''
+OTAST_EXT_BUILD_INCREMENTAL=''
+OTAST_EXT_BUILD_TYPE=''
+OTAST_EXT_BUILD_TAGS=''
+OTAST_EXT_PRODUCT_NAME=''
+OTAST_EXT_PRODUCT_FIRST_API_LEVEL=''
+OTAST_EXT_SOC_MODEL=''
+OTAST_EXT_SOC_MANUFACTURER=''
 OTAST_PIF_SPOOF_BUILD='true'
 OTAST_PIF_SPOOF_PROPS='true'
 OTAST_PIF_SPOOF_PROVIDER='true'
@@ -117,6 +125,15 @@ otast_validate_authority_file() {
   OTAST_VBMETA_AVB_VERSION=$(otast_authority_value ro.boot.vbmeta.avb_version) || return 1
   OTAST_BOOT_AVB_VERSION=$(otast_authority_value ro.boot.avb_version) || return 1
 
+  OTAST_EXT_BUILD_RELEASE=$(otast_authority_optional ro.build.version.release "") || return 1
+  OTAST_EXT_BUILD_INCREMENTAL=$(otast_authority_optional ro.build.version.incremental "") || return 1
+  OTAST_EXT_BUILD_TYPE=$(otast_authority_optional ro.build.type "") || return 1
+  OTAST_EXT_BUILD_TAGS=$(otast_authority_optional ro.build.tags "") || return 1
+  OTAST_EXT_PRODUCT_NAME=$(otast_authority_optional ro.product.name "") || return 1
+  OTAST_EXT_PRODUCT_FIRST_API_LEVEL=$(otast_authority_optional ro.product.first_api_level "") || return 1
+  OTAST_EXT_SOC_MODEL=$(otast_authority_optional ro.soc.model "") || return 1
+  OTAST_EXT_SOC_MANUFACTURER=$(otast_authority_optional ro.soc.manufacturer "") || return 1
+
   [ "$OTAST_DEVICE" = tegu ] || { otast_stop "unsupported authority device: $OTAST_DEVICE"; return 1; }
   [ "$OTAST_SDK" = 36 ] || { otast_stop "unsupported authority SDK: $OTAST_SDK"; return 1; }
   otast_valid_date "$OTAST_SYSTEM_PATCH" || { otast_stop "invalid system patch date: $OTAST_SYSTEM_PATCH"; return 1; }
@@ -205,6 +222,49 @@ otast_compare_live_identity() {
     'ro.build.version.security_patch:OTAST_SYSTEM_PATCH' \
     'ro.vendor.build.security_patch:OTAST_VENDOR_PATCH' \
     'ro.build.fingerprint:OTAST_FINGERPRINT'
+}
+
+otast_compare_live_extended_identity() {
+  local mismatch=''
+  local pair key var expected live result
+
+  for pair in \
+    'ro.build.version.release:OTAST_EXT_BUILD_RELEASE' \
+    'ro.build.version.incremental:OTAST_EXT_BUILD_INCREMENTAL' \
+    'ro.build.type:OTAST_EXT_BUILD_TYPE' \
+    'ro.build.tags:OTAST_EXT_BUILD_TAGS' \
+    'ro.product.name:OTAST_EXT_PRODUCT_NAME' \
+    'ro.product.first_api_level:OTAST_EXT_PRODUCT_FIRST_API_LEVEL' \
+    'ro.soc.model:OTAST_EXT_SOC_MODEL' \
+    'ro.soc.manufacturer:OTAST_EXT_SOC_MANUFACTURER'; do
+
+    key=${pair%%:*}
+    var=${pair#*:}
+    eval "expected=\${$var}"
+
+    if [ -z "$expected" ]; then
+      printf 'extended_identity %s NOT_CONFIGURED\n' "$key"
+      continue
+    fi
+
+    live=$(otast_live_value "$key" 2>/dev/null) || live=''
+
+    if [ -z "$live" ]; then
+      printf 'extended_identity %s UNAVAILABLE expected=%s\n' "$key" "$expected"
+      mismatch="${mismatch}${key}:live=UNAVAILABLE,authority=$expected;"
+    elif [ "$live" != "$expected" ]; then
+      printf 'extended_identity %s MISMATCH live=%s expected=%s\n' "$key" "$live" "$expected"
+      mismatch="${mismatch}${key}:live=$live,authority=$expected;"
+    else
+      printf 'extended_identity %s MATCH\n' "$key"
+    fi
+  done
+
+  if [ -n "$mismatch" ]; then
+    otast_stop "live extended platform identity differs from configured authority: $mismatch"
+    return 1
+  fi
+  return 0
 }
 
 otast_compare_live_managed_vbmeta() {

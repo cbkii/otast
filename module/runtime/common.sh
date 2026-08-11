@@ -16,6 +16,60 @@ otast_stop() {
   return 1
 }
 
+OTAST_CAPABILITIES_REQUIRED=""
+OTAST_CAPABILITIES_OPTIONAL=""
+
+otast_require_capability() {
+  local cap="$1"
+  local reason="$2"
+  OTAST_CAPABILITIES_REQUIRED="${OTAST_CAPABILITIES_REQUIRED}${cap}:${reason}|"
+}
+
+otast_optional_capability() {
+  local cap="$1"
+  local reason="$2"
+  OTAST_CAPABILITIES_OPTIONAL="${OTAST_CAPABILITIES_OPTIONAL}${cap}:${reason}|"
+}
+
+otast_check_capabilities() {
+  local list item cap reason avail failed
+  failed=0
+
+  # Required capabilities
+  list="$OTAST_CAPABILITIES_REQUIRED"
+  while [ -n "$list" ]; do
+    item="${list%%|*}"
+    list="${list#*|}"
+    [ -z "$item" ] && continue
+    cap="${item%%:*}"
+    reason="${item#*:}"
+    if command -v "$cap" >/dev/null 2>&1; then
+      printf 'capability %s REQUIRED MATCH (%s)\n' "$cap" "$reason"
+    else
+      printf 'capability %s REQUIRED MISSING (%s)\n' "$cap" "$reason"
+      otast_stop "Missing required capability: $cap ($reason)"
+      failed=1
+    fi
+  done
+
+  # Optional capabilities
+  list="$OTAST_CAPABILITIES_OPTIONAL"
+  while [ -n "$list" ]; do
+    item="${list%%|*}"
+    list="${list#*|}"
+    [ -z "$item" ] && continue
+    cap="${item%%:*}"
+    reason="${item#*:}"
+    if command -v "$cap" >/dev/null 2>&1; then
+      printf 'capability %s OPTIONAL MATCH (%s)\n' "$cap" "$reason"
+    else
+      printf 'capability %s OPTIONAL MISSING (%s)\n' "$cap" "$reason"
+    fi
+  done
+
+  return "$failed"
+}
+
 otast_command_exists() {
   command -v "$1" >/dev/null 2>&1
 }

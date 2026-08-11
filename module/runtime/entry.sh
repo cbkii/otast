@@ -46,7 +46,9 @@ _otast_preflight() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
   otast_compare_live_identity || return 1
+  otast_compare_live_extended_identity || return 1
   otast_plan_all || return 1
+  otast_check_capabilities || return 1
   printf 'READY\toperations=%s\tauthority=%s\n' "$OTAST_PLAN_COUNT" "$OTAST_AUTHORITY_SHA256"
 }
 
