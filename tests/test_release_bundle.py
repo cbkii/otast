@@ -87,6 +87,27 @@ class ReleaseBundleTests(unittest.TestCase):
         with self.assertRaises(OtastError):
             verify_release_bundle(self.zip_path, self.checksum_path, self.manifest_path)
 
+    def test_boolean_version_codes_are_rejected(self) -> None:
+        for value in (True, False):
+            with self.subTest(value=value):
+                with self.assertRaises(OtastError):
+                    expected_update_metadata("v1.0.0", value)
+
+                path = self.temp / f"update-{str(value).lower()}.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "version": "v1.0.0",
+                            "versionCode": value,
+                            "zipUrl": f"https://github.com/{REPOSITORY}/releases/download/v1.0.0/otast-v1.0.0.zip",
+                            "changelog": CHANGELOG_URL,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(OtastError):
+                    load_update_metadata(path)
+
     def test_update_metadata_is_generated_from_release_manifest(self) -> None:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         expected = expected_update_metadata(manifest["version"], manifest["version_code"])
