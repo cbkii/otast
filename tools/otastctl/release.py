@@ -45,8 +45,8 @@ def expected_asset_name(version: str) -> str:
 
 def expected_update_metadata(version: str, version_code: int) -> dict[str, object]:
     asset = expected_asset_name(version)
-    if version_code <= 0:
-        raise OtastError("versionCode must be positive")
+    if type(version_code) is not int or version_code <= 0:
+        raise OtastError("versionCode must be a positive integer")
     return {
         "version": version,
         "versionCode": version_code,
@@ -91,7 +91,7 @@ def _manifest_identity(manifest: dict[str, object]) -> tuple[str, int, str]:
     source_commit = manifest.get("source_commit")
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise OtastError("release manifest version is invalid")
-    if not isinstance(version_code, int) or isinstance(version_code, bool) or version_code <= 0:
+    if type(version_code) is not int or version_code <= 0:
         raise OtastError("release manifest version_code is invalid")
     if not isinstance(source_commit, str) or not SOURCE_SHA_RE.fullmatch(source_commit):
         raise OtastError("release manifest source_commit is invalid")
@@ -204,7 +204,7 @@ def validate_update_metadata(data: object, *, expected: dict[str, object] | None
     version_code = data.get("versionCode")
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise OtastError("update metadata version is invalid")
-    if not isinstance(version_code, int) or isinstance(version_code, bool) or version_code <= 0:
+    if type(version_code) is not int or version_code <= 0:
         raise OtastError("update metadata versionCode is invalid")
     canonical = expected_update_metadata(version, version_code)
     if data != canonical:
