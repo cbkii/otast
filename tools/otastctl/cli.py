@@ -60,7 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
     stamp_release.add_argument("--version-code", required=True, type=int)
     stamp_release.add_argument("--notes-file", help="optional release notes to insert/replace in CHANGELOG.md")
 
-    select_release = sub.add_parser("select-proven-release", help="select exactly one physically proven draft from GitHub release JSON")
+    select_release = sub.add_parser(
+        "select-proven-release",
+        help="select one physically proven candidate; blank requires exactly one draft, explicit may resume publication",
+    )
     select_release.add_argument("--releases-json", required=True)
     select_release.add_argument("--requested", default="")
 
@@ -113,6 +116,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _select_release_input(releases: list[dict[str, object]], requested: str) -> list[dict[str, object]]:
+    if not requested:
+        return releases
+    normalized: list[dict[str, object]] = []
+    for release in releases:
+        if release.get("tag_name") == requested and release.get("draft") is False:
+            # Explicit publication retries may need to finish stable updater
+            # synchronization after GitHub already made the proven release public.
+            release = dict(release)
+            release["draft"] = True
+        normalized.append(release)
+    return normalized
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -137,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             print(stable_json(report), end="")
         elif args.command == "select-proven-release":
             releases = load_release_list(_root(args.releases_json))
+            releases = _select_release_input(releases, args.requested.strip())
             print(stable_json(select_proven_draft(releases, requested_version=args.requested)), end="")
         elif args.command == "generate-update-json":
             output = _root(args.output) if Path(args.output).is_absolute() else (repo / args.output).resolve()
