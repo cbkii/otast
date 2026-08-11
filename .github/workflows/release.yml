@@ -227,6 +227,20 @@ jobs:
               printf 'Draft %s already contains physical-device proof; proven assets are immutable.\n' "$VERSION" >&2
               exit 1
             fi
+
+            tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION") || exit 1
+            tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json") || exit 1
+            tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json") || exit 1
+            if [[ $tag_type != commit ]]; then
+              printf 'Draft tag %s is not a lightweight commit ref; refusing to rewrite it automatically.\n' "$VERSION" >&2
+              exit 1
+            fi
+            if [[ $tag_sha != "$SOURCE_SHA" ]]; then
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" \
+                -f sha="$SOURCE_SHA" \
+                -F force=true >/dev/null
+            fi
+
             gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" \
               --target "$SOURCE_SHA" \
               --title "OTAST $VERSION" \
@@ -276,9 +290,11 @@ jobs:
             printf 'Downloaded draft ZIP differs from the locally qualified ZIP.\n' >&2
             exit 1
           }
-          target=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish) || exit 1
-          [[ $target == "$SOURCE_SHA" ]] || {
-            printf 'Draft target %s differs from qualified source %s.\n' "$target" "$SOURCE_SHA" >&2
+          tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION") || exit 1
+          tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json") || exit 1
+          tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json") || exit 1
+          [[ $tag_type == commit && $tag_sha == "$SOURCE_SHA" ]] || {
+            printf 'Draft tag %s does not resolve directly to qualified source %s.\n' "$VERSION" "$SOURCE_SHA" >&2
             exit 1
           }
           {
