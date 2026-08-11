@@ -109,45 +109,38 @@ class ReleaseDeviceTests(unittest.TestCase):
             with self.assertRaises(module.ProofError):
                 module.validate_proof(proof, module_zip, version="v1.0.0")
 
-    def test_release_wizard_targets_latest_main_and_self_heals(self) -> None:
+    def test_release_wizard_uses_canonical_versioning_and_new_workflow_api(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        for token in (
-            "remote_main_sha",
-            "latest_main_version",
-            "refresh_local_main_best_effort",
-            "ensure_host_command",
-            "delete_draft_best_effort",
-            "dispatch_at=$(date -u",
-            "createdAt",
-            "SINCE=$since",
-            "BASELINE_RESULT=NEEDS_VERIFY",
-            "baseline-verify-after-activation.log",
-            "Draft assets are missing/corrupt before device proof",
-            "run_boot_recover_best_effort",
-            "Apply failed; recovering transaction state and retrying once",
-            "Restore failed; attempting boot-recover and one retry",
-            "requesting one additional settling reboot",
-            "SAFE UNWIND AFTER RELEASE FAILURE",
-            "persistent external writer conflict",
-            "NO_CHANGES_REQUIRED",
-            "REBOOT_REQUIRED",
-            "/proc/sys/kernel/random/boot_id",
-            "magisk --install-module",
-            "validate-device-release-proof.py",
-            "gh release upload",
-            "dispatch_release_workflow publish",
-        ):
-            self.assertIn(token, text)
-        self.assertNotIn("draft target is not an immutable full commit SHA", text)
-        self.assertNotIn("draft release target changed after device proof", text)
-        self.assertIn("exact ZIP SHA-256", text)
+        self.assertIn("resolve_release_identity", text)
+        self.assertIn("LEGACY_RELEASE_COMMIT=eebecde3a08721de7be1f2569e22fd04bad625b5", text)
+        self.assertIn("operation=draft", text)
+        self.assertIn("action=prepare-release", text)
+        self.assertIn("action=publish-release", text)
+        self.assertIn("full_validation=true", text)
+        self.assertIn('legacy_args+=(--version "$VERSION" --no-publish)', text)
+        self.assertIn("Physical proof remains preserved", text)
+        self.assertIn("mark_private_state_complete", text)
+        self.assertIn("stable update.json", text)
+        self.assertIn("versionCode remains automatic", text)
 
-    def test_release_wizard_preserves_only_unsafe_hard_stops(self) -> None:
+    def test_release_wizard_preserves_proven_lifecycle_without_reimplementing_it(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("refusing to auto-restore drifted state", text)
-        self.assertIn("physical release proof requires tegu / SDK 36", text)
-        self.assertIn("Magisk root/CLI did not become available", text)
-        self.assertIn("draft ZIP SHA changed during active proof", text)
+        self.assertIn('git -C "$REPO_ROOT" show "$LEGACY_RELEASE_COMMIT:scripts/release-device.sh"', text)
+        self.assertIn("qualified physical lifecycle byte-for-byte", text)
+        self.assertIn("baseline recovery, exact draft install, Preflight, Apply, Verify", text)
+        self.assertIn("idempotent second Apply, Restore and final Report", text)
+        self.assertIn("wrapper owns publication", text)
+        self.assertNotIn("magisk --install-module", text)
+        self.assertNotIn("runtime/entry.sh apply", text)
+
+    def test_release_wizard_retries_partial_publication_without_requalification(self) -> None:
+        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("A previous publish attempt may have made the exact proven release public", text)
+        self.assertIn("has_proof == yes && $is_draft == false", text)
+        self.assertIn("dispatch_publication", text)
+        first_public_check = text.index("has_proof == yes && $is_draft == false")
+        legacy_fetch = text.index("Preserve the qualified physical lifecycle byte-for-byte")
+        self.assertLess(first_public_check, legacy_fetch)
 
     def test_release_wizard_help_needs_no_device_or_network(self) -> None:
         result = subprocess.run(
@@ -160,9 +153,10 @@ class ReleaseDeviceTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("latest GitHub `main`", result.stdout)
-        self.assertIn("repairs ordinary failures automatically", result.stdout)
+        self.assertIn("automatic next", result.stdout)
+        self.assertIn("versionCode remains automatic", result.stdout)
         self.assertIn("otast release", result.stdout)
+        self.assertIn("--no-publish", result.stdout)
 
 
 if __name__ == "__main__":
