@@ -12,7 +12,16 @@ from .fake_root import clone_fixture_root, qualify_fake_root
 from .fixture import reset_fixture, sanitize_fixture
 from .monitor import monitor_targets
 from .privacy import require_public_safe, scan_repository
-from .release import build_release_bundle, load_update_metadata, verify_release_bundle, write_update_metadata
+from .release import (
+    build_release_bundle,
+    load_release_list,
+    load_update_metadata,
+    resolve_release_identity_from_repo,
+    select_proven_draft,
+    stamp_release_metadata,
+    verify_release_bundle,
+    write_update_metadata,
+)
 from .repository import build_source_zip, validate_source_zip
 from .util import OtastError, stable_json
 from .verify import verify_repository
@@ -43,7 +52,19 @@ def build_parser() -> argparse.ArgumentParser:
     verify_release.add_argument("--checksum", required=True)
     verify_release.add_argument("--manifest", required=True)
 
-    generate_update = sub.add_parser("generate-update-json", help="generate stable Magisk updater metadata from a release manifest")
+    resolve_release = sub.add_parser("resolve-release-version", help="resolve the next or explicitly requested release identity")
+    resolve_release.add_argument("--requested", default="", help="explicit vMAJOR.MINOR.PATCH[-prerelease], otherwise automatic")
+
+    stamp_release = sub.add_parser("stamp-release", help="stamp candidate version metadata without changing stable update.json")
+    stamp_release.add_argument("--version", required=True)
+    stamp_release.add_argument("--version-code", required=True, type=int)
+    stamp_release.add_argument("--notes-file", help="optional release notes to insert/replace in CHANGELOG.md")
+
+    select_release = sub.add_parser("select-proven-release", help="select exactly one physically proven draft from GitHub release JSON")
+    select_release.add_argument("--releases-json", required=True)
+    select_release.add_argument("--requested", default="")
+
+    generate_update = sub.add_parser("generate-update-json", help="generate stable Magisk updater metadata from a final release manifest")
     generate_update.add_argument("--manifest", required=True)
     generate_update.add_argument("--output", required=True)
 
@@ -108,6 +129,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "verify-release":
             report = verify_release_bundle(_root(args.zip), _root(args.checksum), _root(args.manifest))
             print(stable_json(report), end="")
+        elif args.command == "resolve-release-version":
+            print(stable_json(resolve_release_identity_from_repo(repo, requested_version=args.requested)), end="")
+        elif args.command == "stamp-release":
+            notes = _root(args.notes_file).read_text(encoding="utf-8") if args.notes_file else None
+            report = stamp_release_metadata(repo, version=args.version, version_code=args.version_code, notes=notes)
+            print(stable_json(report), end="")
+        elif args.command == "select-proven-release":
+            releases = load_release_list(_root(args.releases_json))
+            print(stable_json(select_proven_draft(releases, requested_version=args.requested)), end="")
         elif args.command == "generate-update-json":
             output = _root(args.output) if Path(args.output).is_absolute() else (repo / args.output).resolve()
             data = write_update_metadata(_root(args.manifest), output)
