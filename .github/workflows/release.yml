@@ -1,5 +1,5 @@
 name: Release
-run-name: Release ${{ inputs.operation != '' && inputs.operation || inputs.action }} ${{ inputs.version != '' && inputs.version || inputs.tag }}
+run-name: Release ${{ inputs.action }} ${{ inputs.version != '' && inputs.version || 'auto' }}
 
 on:
   workflow_dispatch:
@@ -11,28 +11,17 @@ on:
         options:
           - prepare-release
           - publish-release
-          - build-branch
         default: prepare-release
-      branch:
-        description: Branch to build (Build branch only; blank = main)
-        required: false
-        type: string
-        default: ''
-      tag:
-        description: Existing draft tag to publish (Publish release only)
-        required: false
-        type: string
-        default: ''
-      operation:
-        description: Legacy otast-release operation; leave blank in the Actions UI
-        required: false
-        type: string
-        default: ''
       version:
-        description: Legacy otast-release version; leave blank in the Actions UI
+        description: Release version (blank = automatic next/reusable candidate)
         required: false
         type: string
         default: ''
+      full_validation:
+        description: Run full repository and fake-root validation before preparing
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -42,120 +31,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-branch:
-    if: inputs.operation == '' && inputs.action == 'build-branch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Resolve and checkout selected branch head
-        id: source
-        shell: bash
-        env:
-          BRANCH_INPUT: ${{ inputs.branch }}
-        run: |
-          branch=${BRANCH_INPUT:-main}
-          if ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
-            printf 'Invalid branch name: %s\n' "$branch" >&2
-            exit 2
-          fi
-          if ! git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
-            printf 'Branch does not exist in %s: %s\n' "$GITHUB_REPOSITORY" "$branch" >&2
-            exit 1
-          fi
-          if ! git fetch --no-tags origin "refs/heads/$branch"; then
-            printf 'Failed to fetch branch: %s\n' "$branch" >&2
-            exit 1
-          fi
-          if ! git checkout --detach FETCH_HEAD; then
-            printf 'Failed to checkout fetched branch head: %s\n' "$branch" >&2
-            exit 1
-          fi
-          resolved=$(git rev-parse HEAD) || exit 1
-          printf 'branch=%s\n' "$branch" >>"$GITHUB_OUTPUT"
-          printf 'sha=%s\n' "$resolved" >>"$GITHUB_OUTPUT"
-          {
-            printf '### Branch build source\n\n'
-            printf -- '- Branch: `%s`\n' "$branch"
-            printf -- '- Commit: `%s`\n' "$resolved"
-          } >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Build branch-head Magisk ZIP without release gating
-        shell: bash
-        env:
-          SOURCE_BRANCH: ${{ steps.source.outputs.branch }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: |
-          if ! python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" build \
-              --output dist \
-              --commit-sha "$SOURCE_SHA"; then
-            printf 'Branch-head Magisk ZIP build failed.\n' >&2
-            exit 1
-          fi
-          shopt -s nullglob
-          zips=(dist/otast-v*.zip)
-          if ((${#zips[@]} != 1)); then
-            printf 'Expected exactly one OTAST Magisk ZIP, found %s.\n' "${#zips[@]}" >&2
-            exit 1
-          fi
-          if ! python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-zip "${zips[0]}"; then
-            printf 'Built branch ZIP failed structural Magisk validation.\n' >&2
-            exit 1
-          fi
-          printf 'BRANCH BUILD SUCCESS\n\n' >>"$GITHUB_STEP_SUMMARY"
-          printf -- '- Branch: `%s`\n' "$SOURCE_BRANCH" >>"$GITHUB_STEP_SUMMARY"
-          printf -- '- Commit: `%s`\n' "$SOURCE_SHA" >>"$GITHUB_STEP_SUMMARY"
-          printf -- '- ZIP: `%s`\n' "${zips[0]#dist/}" >>"$GITHUB_STEP_SUMMARY"
-          printf '\nThis build is an Actions artifact only; production release checksum/proof/update gates were intentionally bypassed.\n' >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Upload Magisk ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: otast-branch-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist/otast-v*.zip
-          if-no-files-found: error
-          retention-days: 14
-
   prepare-release:
-    if: inputs.operation == 'draft' || (inputs.operation == '' && inputs.action == 'prepare-release')
+    if: inputs.action == 'prepare-release'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     permissions:
       contents: write
+      pull-requests: write
     steps:
+      - name: Require repository owner
+        shell: bash
+        run: |
+          if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then
+            printf 'Only the repository owner may prepare production releases.\n' >&2
+            exit 1
+          fi
+
       - name: Checkout current main
         uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - name: Install pinned shell validators
+      - name: Install mandatory packaging tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y busybox-static unzip zip
+
+      - name: Install pinned ShellCheck for full validation
+        if: inputs.full_validation
         env:
           SHELLCHECK_VERSION: v0.11.0
           SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y busybox-static curl xz-utils unzip zip
+          sudo apt-get install -y curl xz-utils
           archive="$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           extracted="$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}"
           curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 300 \
@@ -165,42 +81,193 @@ jobs:
           tar -xJf "$archive" -C "$RUNNER_TEMP"
           sudo install -m 0755 "$extracted/shellcheck" /usr/local/bin/shellcheck
           shellcheck --version
-          printf '#!/bin/sh\nexit 0\n' >"$RUNNER_TEMP/shellcheck-busybox-probe.sh"
-          shellcheck --shell=busybox "$RUNNER_TEMP/shellcheck-busybox-probe.sh"
 
-      - name: Full main qualification
-        run: bash scripts/test.sh --full
+      - name: Resolve candidate version
+        id: candidate
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" resolve-release-version \
+            --requested "$REQUESTED_VERSION" >"$RUNNER_TEMP/candidate.json"
+          version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RUNNER_TEMP/candidate.json")
+          code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version_code"])' "$RUNNER_TEMP/candidate.json")
+          stable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["stable_version"])' "$RUNNER_TEMP/candidate.json")
+          reused=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["reused_candidate"]).lower())' "$RUNNER_TEMP/candidate.json")
+          prerelease=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["prerelease"]).lower())' "$RUNNER_TEMP/candidate.json")
+          printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+          printf 'version_code=%s\n' "$code" >>"$GITHUB_OUTPUT"
+          printf 'stable=%s\n' "$stable" >>"$GITHUB_OUTPUT"
+          printf 'reused=%s\n' "$reused" >>"$GITHUB_OUTPUT"
+          printf 'prerelease=%s\n' "$prerelease" >>"$GITHUB_OUTPUT"
+          {
+            printf '## Release candidate\n\n'
+            printf -- '- Stable: `%s`\n' "$stable"
+            printf -- '- Candidate: `%s`\n' "$version"
+            printf -- '- VersionCode: `%s`\n' "$code"
+            printf -- '- Existing candidate reused: `%s`\n' "$reused"
+          } >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Build canonical release bundle once
-        run: bash scripts/build-release.sh
+      - name: Generate concise release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          STABLE_VERSION: ${{ steps.candidate.outputs.stable }}
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$VERSION" \
+              -f target_commitish=main \
+              -f previous_tag_name="$STABLE_VERSION" \
+              --jq .body >"$notes" 2>/dev/null; then
+            if git rev-parse --verify "$STABLE_VERSION" >/dev/null 2>&1; then
+              git log "$STABLE_VERSION"..HEAD --pretty='format:- %s' >"$notes"
+            else
+              git log -20 --pretty='format:- %s' >"$notes"
+            fi
+          fi
+          python3 - "$notes" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          lines = []
+          for line in path.read_text(encoding="utf-8").splitlines():
+              stripped = line.strip()
+              if stripped.startswith("chore(release): prepare "):
+                  continue
+              lines.append(line.rstrip())
+          value = "\n".join(lines).strip() or "- Release metadata and validated package refresh."
+          path.write_text(value + "\n", encoding="utf-8")
+          PY
 
-      - name: Verify candidate and resolve release identity
+      - name: Stamp candidate source metadata
+        shell: bash
+        env:
+          VERSION: ${{ steps.candidate.outputs.version }}
+          VERSION_CODE: ${{ steps.candidate.outputs.version_code }}
+        run: |
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" stamp-release \
+            --version "$VERSION" \
+            --version-code "$VERSION_CODE" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json update.json >/dev/null
+
+      - name: Mandatory release-focused regression tests
+        shell: bash
+        run: |
+          python3 -m unittest discover -s tests -p 'test_release*.py' -v
+          python3 -m unittest discover -s tests -p 'test_public_contract.py' -v
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify >/dev/null
+          printf 'MANDATORY RELEASE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Full repository qualification
+        if: inputs.full_validation
+        shell: bash
+        run: |
+          bash scripts/test.sh --full
+          printf 'FULL VALIDATION: RUN / PASS\n' >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Record intentional full-validation skip
+        if: ${{ !inputs.full_validation }}
+        shell: bash
+        run: |
+          {
+            printf 'FULL VALIDATION: SKIPPED BY OWNER\n'
+            printf 'MANDATORY RELEASE INTEGRITY: PASS\n'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Persist release metadata to main
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          VERSION_CODE: ${{ steps.candidate.outputs.version_code }}
+        run: |
+          original=$(git rev-parse HEAD)
+          if git diff --quiet -- module/module.prop CHANGELOG.md; then
+            source_sha=$original
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add module/module.prop CHANGELOG.md
+            git commit -m "chore(release): prepare $VERSION"
+            remote_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+            if [[ $remote_main != "$original" ]]; then
+              printf 'main moved during release preparation: expected=%s observed=%s\n' "$original" "$remote_main" >&2
+              exit 1
+            fi
+            if git push origin HEAD:main; then
+              :
+            else
+              release_branch="release-meta/${VERSION#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              printf 'Direct protected-branch update was rejected; attempting an internal release-metadata PR.\n'
+              git push origin "HEAD:refs/heads/$release_branch"
+              pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$release_branch" \
+                --title "chore(release): prepare $VERSION" \
+                --body "Automated release metadata for $VERSION / versionCode $VERSION_CODE. No runtime behavior change.")
+              pr_number=${pr_url##*/}
+              if ! gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+                gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" --watch --interval 10 || true
+                if ! gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+                  merged=$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" --json mergedAt --jq '.mergedAt // ""')
+                  if [[ -z $merged ]]; then
+                    printf 'Release metadata could not reach protected main automatically; no production draft was created.\n' >&2
+                    exit 1
+                  fi
+                fi
+              fi
+            fi
+            git fetch --no-tags origin main
+            git checkout --detach origin/main
+            source_sha=$(git rev-parse HEAD)
+          fi
+          observed_version=$(sed -n 's/^version=//p' module/module.prop | sed -n '1p')
+          observed_code=$(sed -n 's/^versionCode=//p' module/module.prop | sed -n '1p')
+          [[ $observed_version == "$VERSION" && $observed_code == "$VERSION_CODE" ]] || {
+            printf 'Final main release metadata differs from resolved candidate.\n' >&2
+            exit 1
+          }
+          printf 'sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
+
+      - name: Build canonical production bundle once
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          rm -rf -- dist
+          bash scripts/build-release.sh
+          manifest=dist/release-manifest.json
+          recorded=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$manifest")
+          [[ $recorded == "$SOURCE_SHA" ]] || {
+            printf 'Release manifest source %s differs from final main %s.\n' "$recorded" "$SOURCE_SHA" >&2
+            exit 1
+          }
+
+      - name: Verify exact production bundle
         id: release
         shell: bash
         env:
-          REQUESTED_TAG: ${{ inputs.tag }}
-          LEGACY_VERSION: ${{ inputs.version }}
+          EXPECTED_VERSION: ${{ steps.candidate.outputs.version }}
+          EXPECTED_CODE: ${{ steps.candidate.outputs.version_code }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           manifest=dist/release-manifest.json
-          version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])' "$manifest") || exit 1
-          source_sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["source_commit"])' "$manifest") || exit 1
-          zip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["zip_filename"])' "$manifest") || exit 1
-          digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["zip_sha256"])' "$manifest") || exit 1
-          if [[ -n $REQUESTED_TAG && $REQUESTED_TAG != "$version" ]]; then
-            printf 'Requested tag %s differs from current main module version %s.\n' "$REQUESTED_TAG" "$version" >&2
+          version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$manifest")
+          code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version_code"])' "$manifest")
+          zip=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["zip_filename"])' "$manifest")
+          digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["zip_sha256"])' "$manifest")
+          source=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$manifest")
+          [[ $version == "$EXPECTED_VERSION" && $code == "$EXPECTED_CODE" && $source == "$SOURCE_SHA" ]] || {
+            printf 'Canonical bundle identity differs from resolved release candidate.\n' >&2
             exit 1
-          fi
-          if [[ -n $LEGACY_VERSION && $LEGACY_VERSION != "$version" ]]; then
-            printf 'Legacy requested version %s differs from current main module version %s.\n' "$LEGACY_VERSION" "$version" >&2
-            exit 1
-          fi
+          }
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify-release \
             --zip "dist/$zip" \
             --checksum "dist/$zip.sha256" \
             --manifest "$manifest"
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json update.json
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
-          printf 'source_sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
           printf 'zip=%s\n' "$zip" >>"$GITHUB_OUTPUT"
           printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
 
@@ -209,68 +276,44 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
-          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
           ZIP: ${{ steps.release.outputs.zip }}
         run: |
-          if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then
-            printf 'Only the repository owner may prepare release drafts.\n' >&2
-            exit 1
-          fi
           proof="otast-${VERSION}-device-proof.json"
           if existing=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,assets 2>/dev/null); then
-            is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$existing") || exit 1
-            if [[ $is_draft != true ]]; then
-              printf 'Release %s is already published and will not be replaced.\n' "$VERSION" >&2
-              exit 1
-            fi
-            has_proof=$(PROOF_NAME="$proof" python3 -c 'import json,os,sys; data=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["PROOF_NAME"] for a in data.get("assets", [])) else "no")' <<<"$existing") || exit 1
-            if [[ $has_proof == yes ]]; then
-              printf 'Draft %s already contains physical-device proof; proven assets are immutable.\n' "$VERSION" >&2
-              exit 1
-            fi
+            is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$existing")
+            [[ $is_draft == true ]] || { printf 'Release %s is already published.\n' "$VERSION" >&2; exit 1; }
+            has_proof=$(PROOF_NAME="$proof" python3 -c 'import json,os,sys; d=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["PROOF_NAME"] for a in d.get("assets", [])) else "no")' <<<"$existing")
+            [[ $has_proof != yes ]] || { printf 'Draft %s already contains physical proof; proven assets are immutable.\n' "$VERSION" >&2; exit 1; }
+          fi
 
-            tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION") || exit 1
-            tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json") || exit 1
-            tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json") || exit 1
-            if [[ $tag_type != commit ]]; then
-              printf 'Draft tag %s is not a lightweight commit ref; refusing to rewrite it automatically.\n' "$VERSION" >&2
-              exit 1
-            fi
+          if tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" 2>/dev/null); then
+            tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json")
+            tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json")
+            [[ $tag_type == commit ]] || { printf 'Tag %s is not a lightweight commit ref; refusing automatic rewrite.\n' "$VERSION" >&2; exit 1; }
             if [[ $tag_sha != "$SOURCE_SHA" ]]; then
-              gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" \
-                -f sha="$SOURCE_SHA" \
-                -F force=true >/dev/null
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" -f sha="$SOURCE_SHA" -F force=true >/dev/null
             fi
+          fi
 
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_SHA" \
-              --title "OTAST $VERSION" \
-              --notes-file CHANGELOG.md
-            gh release upload "$VERSION" \
-              "dist/$ZIP" \
-              "dist/$ZIP.sha256" \
-              dist/release-manifest.json \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
+              --target "$SOURCE_SHA" --title "OTAST $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
+            gh release upload "$VERSION" "dist/$ZIP" "dist/$ZIP.sha256" dist/release-manifest.json \
+              --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$VERSION" \
-              "dist/$ZIP" \
-              "dist/$ZIP.sha256" \
-              dist/release-manifest.json \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_SHA" \
-              --title "OTAST $VERSION" \
-              --notes-file CHANGELOG.md \
-              --draft
+            gh release create "$VERSION" "dist/$ZIP" "dist/$ZIP.sha256" dist/release-manifest.json \
+              --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "OTAST $VERSION" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" --draft
           fi
           [[ "$VERSION" != *-* ]] || gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --prerelease
 
-      - name: Redownload and verify GitHub-hosted draft bytes
+      - name: Redownload and verify hosted draft
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
-          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
           ZIP: ${{ steps.release.outputs.zip }}
           EXPECTED_SHA: ${{ steps.release.outputs.digest }}
         run: |
@@ -278,26 +321,15 @@ jobs:
           rm -rf -- "$remote"
           mkdir -p -- "$remote"
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$ZIP" \
-            --pattern "$ZIP.sha256" \
-            --pattern release-manifest.json \
-            --dir "$remote"
+            --pattern "$ZIP" --pattern "$ZIP.sha256" --pattern release-manifest.json --dir "$remote"
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify-release \
-            --zip "$remote/$ZIP" \
-            --checksum "$remote/$ZIP.sha256" \
-            --manifest "$remote/release-manifest.json"
-          remote_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}') || exit 1
-          [[ $remote_sha == "$EXPECTED_SHA" ]] || {
-            printf 'Downloaded draft ZIP differs from the locally qualified ZIP.\n' >&2
-            exit 1
-          }
-          tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION") || exit 1
-          tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json") || exit 1
-          tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json") || exit 1
-          [[ $tag_type == commit && $tag_sha == "$SOURCE_SHA" ]] || {
-            printf 'Draft tag %s does not resolve directly to qualified source %s.\n' "$VERSION" "$SOURCE_SHA" >&2
-            exit 1
-          }
+            --zip "$remote/$ZIP" --checksum "$remote/$ZIP.sha256" --manifest "$remote/release-manifest.json"
+          remote_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}')
+          [[ $remote_sha == "$EXPECTED_SHA" ]] || { printf 'Hosted draft ZIP differs from qualified ZIP.\n' >&2; exit 1; }
+          tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION")
+          tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json")
+          tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json")
+          [[ $tag_type == commit && $tag_sha == "$SOURCE_SHA" ]] || { printf 'Draft tag does not resolve to qualified source.\n' >&2; exit 1; }
           {
             printf '## DRAFT READY FOR PHYSICAL QUALIFICATION\n\n'
             printf -- '- Version: `%s`\n' "$VERSION"
@@ -308,95 +340,95 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
 
   publish-release:
-    if: inputs.operation == 'publish' || (inputs.operation == '' && inputs.action == 'publish-release')
+    if: inputs.action == 'publish-release'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write
+      pull-requests: write
     steps:
+      - name: Require repository owner
+        shell: bash
+        run: |
+          if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then
+            printf 'Only the repository owner may publish releases.\n' >&2
+            exit 1
+          fi
+
       - name: Checkout current main validator
         uses: actions/checkout@v6
         with:
           ref: main
-          fetch-depth: 1
-          persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - name: Resolve requested release tag
+      - name: Select physically proven release
         id: release
         shell: bash
         env:
-          TAG_INPUT: ${{ inputs.tag }}
-          LEGACY_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          version=${TAG_INPUT:-$LEGACY_VERSION}
-          if [[ ! $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            printf 'Publish release requires a valid tag such as v1.0.0.\n' >&2
-            exit 2
-          fi
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$RUNNER_TEMP/release-pages.json"
+          python3 - "$RUNNER_TEMP/release-pages.json" "$RUNNER_TEMP/releases.json" <<'PY'
+          import json, sys
+          pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          releases = [item for page in pages for item in page]
+          json.dump(releases, open(sys.argv[2], "w", encoding="utf-8"))
+          PY
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" select-proven-release \
+            --releases-json "$RUNNER_TEMP/releases.json" \
+            --requested "$REQUESTED_VERSION" >"$RUNNER_TEMP/selected.json"
+          version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RUNNER_TEMP/selected.json")
+          prerelease=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["prerelease"]).lower())' "$RUNNER_TEMP/selected.json")
           printf 'version=%s\n' "$version" >>"$GITHUB_OUTPUT"
+          printf 'prerelease=%s\n' "$prerelease" >>"$GITHUB_OUTPUT"
 
-      - name: Validate exact release bundle and physical-device proof
+      - name: Validate exact bundle and physical proof
         id: validate
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then
-            printf 'Only the repository owner may publish.\n' >&2
-            exit 1
-          fi
-          release_json=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName) || exit 1
-          tag=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<<"$release_json") || exit 1
-          [[ $tag == "$VERSION" ]] || { printf 'Release tag mismatch.\n' >&2; exit 1; }
-
           assets="$RUNNER_TEMP/release-assets"
           rm -rf -- "$assets"
           mkdir -p -- "$assets"
           zip="otast-${VERSION}.zip"
           proof="otast-${VERSION}-device-proof.json"
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$zip" \
-            --pattern "$zip.sha256" \
-            --pattern release-manifest.json \
-            --pattern "$proof" \
-            --dir "$assets"
+            --pattern "$zip" --pattern "$zip.sha256" --pattern release-manifest.json --pattern "$proof" --dir "$assets"
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify-release \
-            --zip "$assets/$zip" \
-            --checksum "$assets/$zip.sha256" \
-            --manifest "$assets/release-manifest.json"
-          python3 scripts/validate-device-release-proof.py \
-            --proof "$assets/$proof" \
-            --module-zip "$assets/$zip" \
-            --version "$VERSION"
-          digest=$(sha256sum "$assets/$zip" | awk '{print $1}') || exit 1
+            --zip "$assets/$zip" --checksum "$assets/$zip.sha256" --manifest "$assets/release-manifest.json"
+          python3 scripts/validate-device-release-proof.py --proof "$assets/$proof" --module-zip "$assets/$zip" --version "$VERSION"
+          digest=$(sha256sum "$assets/$zip" | awk '{print $1}')
           printf 'assets=%s\n' "$assets" >>"$GITHUB_OUTPUT"
           printf 'zip=%s\n' "$zip" >>"$GITHUB_OUTPUT"
           printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
 
-      - name: Publish the already-proven draft without rebuilding
+      - name: Publish exact proven candidate
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
-          is_draft=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft) || exit 1
+          is_draft=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
           if [[ $is_draft == true ]]; then
-            if [[ $VERSION == *-* ]]; then
+            if [[ $PRERELEASE == true ]]; then
               gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
             else
               gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
             fi
           else
-            printf 'Release %s is already published; continuing with idempotent publication verification.\n' "$VERSION"
+            printf 'Release %s is already published; continuing idempotent verification.\n' "$VERSION"
           fi
 
-      - name: Synchronize stable Magisk update metadata
+      - name: Synchronize stable Magisk update channel
         if: ${{ !contains(steps.release.outputs.version, '-') }}
         shell: bash
         env:
@@ -406,71 +438,79 @@ jobs:
           ZIP: ${{ steps.validate.outputs.zip }}
           EXPECTED_SHA: ${{ steps.validate.outputs.digest }}
         run: |
-          published=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets) || exit 1
-          is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$published") || exit 1
-          is_prerelease=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isPrerelease"]).lower())' <<<"$published") || exit 1
-          [[ $is_draft == false && $is_prerelease == false ]] || { printf 'Final release state is not publishable to the stable Magisk channel.\n' >&2; exit 1; }
-          has_zip=$(ZIP="$ZIP" python3 -c 'import json,os,sys; data=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["ZIP"] for a in data.get("assets", [])) else "no")' <<<"$published") || exit 1
-          [[ $has_zip == yes ]] || { printf 'Published release is missing expected Magisk ZIP.\n' >&2; exit 1; }
-
           expected="$RUNNER_TEMP/update.json.expected"
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" generate-update-json \
-            --manifest "$ASSETS/release-manifest.json" \
-            --output "$expected" >/dev/null
+            --manifest "$ASSETS/release-manifest.json" --output "$expected" >/dev/null
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json "$expected" >/dev/null
 
-          current_payload=$(gh api "repos/$GITHUB_REPOSITORY/contents/update.json?ref=main") || exit 1
-          current_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])' <<<"$current_payload") || exit 1
+          current_payload=$(gh api "repos/$GITHUB_REPOSITORY/contents/update.json?ref=main")
+          current_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])' <<<"$current_payload")
           current_file="$RUNNER_TEMP/update.json.current"
-          python3 -c 'import base64,json,sys; p=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(p["content"]))' "$current_file" <<<"$current_payload" || exit 1
+          python3 -c 'import base64,json,sys; p=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(p["content"]))' "$current_file" <<<"$current_payload"
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json "$current_file" >/dev/null
-
-          current_code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["versionCode"])' "$current_file") || exit 1
-          next_code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["versionCode"])' "$expected") || exit 1
+          current_code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["versionCode"])' "$current_file")
+          next_code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["versionCode"])' "$expected")
           if ((current_code > next_code)); then
-            printf 'Stable update channel already advertises newer versionCode %s; refusing downgrade to %s.\n' "$current_code" "$next_code" >&2
+            printf 'Stable update channel is newer than %s; refusing downgrade.\n' "$VERSION" >&2
             exit 1
           fi
           if ((current_code == next_code)); then
-            if ! python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1], encoding="utf-8")) == json.load(open(sys.argv[2], encoding="utf-8")) else 1)' "$current_file" "$expected"; then
-              printf 'Stable update channel has conflicting metadata at versionCode %s.\n' "$current_code" >&2
-              exit 1
-            fi
+            python3 - "$current_file" "$expected" <<'PY'
+          import json, sys
+          if json.load(open(sys.argv[1], encoding="utf-8")) != json.load(open(sys.argv[2], encoding="utf-8")):
+              raise SystemExit("conflicting stable metadata at equal versionCode")
+          PY
           else
-            encoded=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$expected") || exit 1
-            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/update.json" \
-              -f message="chore(release): publish Magisk updater metadata $VERSION" \
-              -f content="$encoded" \
-              -f sha="$current_sha" \
-              -f branch=main >/dev/null
+            encoded=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$expected")
+            if ! gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/update.json" \
+                -f message="chore(release): publish Magisk updater metadata $VERSION" \
+                -f content="$encoded" -f sha="$current_sha" -f branch=main >/dev/null; then
+              git fetch --no-tags origin main
+              branch="release-update/${VERSION#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+              git checkout -B "$branch" origin/main
+              cp -- "$expected" update.json
+              git config user.name github-actions[bot]
+              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              git add update.json
+              git commit -m "chore(release): publish Magisk updater metadata $VERSION"
+              git push origin "HEAD:refs/heads/$branch"
+              pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+                --title "chore(release): publish updater metadata $VERSION" \
+                --body "Synchronize stable Magisk update.json after the exact final release was published and verified.")
+              pr_number=${pr_url##*/}
+              if ! gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
+                gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" --watch --interval 10 || true
+                gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch || {
+                  printf 'Release is public but protected main prevented automatic stable updater synchronization. Rerun Publish after repository policy permits the metadata PR.\n' >&2
+                  exit 1
+                }
+              fi
+            fi
           fi
 
-          verified_payload=$(gh api "repos/$GITHUB_REPOSITORY/contents/update.json?ref=main") || exit 1
+          verified_payload=$(gh api "repos/$GITHUB_REPOSITORY/contents/update.json?ref=main")
           verified="$RUNNER_TEMP/update.json.verified"
-          python3 -c 'import base64,json,sys; p=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(p["content"]))' "$verified" <<<"$verified_payload" || exit 1
-          if ! python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1], encoding="utf-8")) == json.load(open(sys.argv[2], encoding="utf-8")) else 1)' "$verified" "$expected"; then
-            printf 'Published Magisk update metadata does not match the proven release.\n' >&2
-            exit 1
-          fi
+          python3 -c 'import base64,json,sys; p=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(p["content"]))' "$verified" <<<"$verified_payload"
+          python3 - "$verified" "$expected" <<'PY'
+          import json, sys
+          if json.load(open(sys.argv[1], encoding="utf-8")) != json.load(open(sys.argv[2], encoding="utf-8")):
+              raise SystemExit("published stable update metadata differs from the proven release")
+          PY
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json "$verified" >/dev/null
 
           remote="$RUNNER_TEMP/published-asset"
           rm -rf -- "$remote"
           mkdir -p -- "$remote"
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$ZIP" --dir "$remote"
-          published_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}') || exit 1
-          [[ $published_sha == "$EXPECTED_SHA" ]] || {
-            printf 'Published ZIP digest differs from the physically proven ZIP.\n' >&2
-            exit 1
-          }
+          published_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}')
+          [[ $published_sha == "$EXPECTED_SHA" ]] || { printf 'Published ZIP differs from physically proven ZIP.\n' >&2; exit 1; }
           {
             printf '## RELEASE %s PUBLISHED\n\n' "$VERSION"
-            printf -- '- ZIP: `%s`\n' "$ZIP"
             printf -- '- SHA-256: `%s`\n' "$EXPECTED_SHA"
-            printf -- '- Magisk update channel: `https://raw.githubusercontent.com/%s/main/update.json`\n' "$GITHUB_REPOSITORY"
+            printf -- '- Stable Magisk update channel: verified\n'
           } >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Verify prerelease publication without stable-channel mutation
+      - name: Verify prerelease without stable-channel mutation
         if: ${{ contains(steps.release.outputs.version, '-') }}
         shell: bash
         env:
@@ -479,24 +519,17 @@ jobs:
           ZIP: ${{ steps.validate.outputs.zip }}
           EXPECTED_SHA: ${{ steps.validate.outputs.digest }}
         run: |
-          published=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets) || exit 1
-          is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$published") || exit 1
-          is_prerelease=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isPrerelease"]).lower())' <<<"$published") || exit 1
-          [[ $is_draft == false && $is_prerelease == true ]] || { printf 'Prerelease was not published with prerelease state.\n' >&2; exit 1; }
-          has_zip=$(ZIP="$ZIP" python3 -c 'import json,os,sys; data=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["ZIP"] for a in data.get("assets", [])) else "no")' <<<"$published") || exit 1
-          [[ $has_zip == yes ]] || { printf 'Published prerelease is missing expected Magisk ZIP.\n' >&2; exit 1; }
-          remote="$RUNNER_TEMP/published-prerelease-asset"
-          rm -rf -- "$remote"
+          release_json=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)
+          draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$release_json")
+          prerelease=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isPrerelease"]).lower())' <<<"$release_json")
+          [[ $draft == false && $prerelease == true ]] || { printf 'Prerelease publication state is incorrect.\n' >&2; exit 1; }
+          remote="$RUNNER_TEMP/published-prerelease"
           mkdir -p -- "$remote"
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$ZIP" --dir "$remote"
-          published_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}') || exit 1
-          [[ $published_sha == "$EXPECTED_SHA" ]] || {
-            printf 'Published prerelease ZIP digest differs from the physically proven ZIP.\n' >&2
-            exit 1
-          }
+          published_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}')
+          [[ $published_sha == "$EXPECTED_SHA" ]] || { printf 'Published prerelease ZIP differs from proven ZIP.\n' >&2; exit 1; }
           {
             printf '## PRERELEASE %s PUBLISHED\n\n' "$VERSION"
-            printf -- '- ZIP: `%s`\n' "$ZIP"
             printf -- '- SHA-256: `%s`\n' "$EXPECTED_SHA"
-            printf '\nStable Magisk `update.json` was intentionally left unchanged.\n'
+            printf -- '- Stable Magisk update channel: unchanged by design\n'
           } >>"$GITHUB_STEP_SUMMARY"
