@@ -149,14 +149,15 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertNotIn("magisk --install-module", wrapper)
         self.assertNotIn("runtime/entry.sh apply", wrapper)
 
-    def test_release_wizard_retries_partial_publication_without_requalification(self) -> None:
+    def test_release_wizard_skips_requalification_for_any_proven_candidate(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("A previous publish attempt may have made the exact proven release public", text)
-        self.assertIn("has_proof == yes && $is_draft == false", text)
+        self.assertIn("If GitHub already has physical proof for this exact candidate", text)
+        self.assertIn("if [[ $has_proof == yes ]]; then", text)
         self.assertIn("dispatch_publication", text)
-        first_public_check = text.index("has_proof == yes && $is_draft == false")
+        self.assertIn("already has physical proof (draft=%s)", text)
+        first_proof_check = text.index("if [[ $has_proof == yes ]]; then")
         lifecycle_run = text.index('bash "$LIFECYCLE_SCRIPT"')
-        self.assertLess(first_public_check, lifecycle_run)
+        self.assertLess(first_proof_check, lifecycle_run)
 
     def test_release_wizard_help_needs_no_device_or_network(self) -> None:
         result = subprocess.run(
