@@ -2,6 +2,23 @@
 
 All notable user-visible changes are recorded here.
 
+## v1.0.1
+
+- Simplify release UX and automate version preparation (#7)
+- Overhaul Magisk release workflow and branch builds (#6)
+- Optimize host hashing and clean-room validation safely (#2)
+- feat(ci): add manual release readiness report
+- fix(release): follow latest main and self-heal common failures
+- feat(release): add resumable physical-device release wizard
+- fix(maintenance): refresh reviewed upstream targets
+- guard anakysis and testbook
+- fix(release): finalise exact proof and v1.0.0
+- fix(tooling): preserve executable Python entrypoints
+- fix(ci): pin ShellCheck with BusyBox support
+- TAutil target hash
+- feat: add reliable Termux maintenance and target monitoring
+- Initial public release candidate
+
 ## v1.0.0 — initial stable release
 
 - Promote the fully qualified v1.0.0 release candidate to the first stable release without expanding the managed runtime surface.
