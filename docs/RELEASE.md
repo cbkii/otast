@@ -15,7 +15,7 @@ Every production OTAST ZIP contains `module.prop` with:
 updateJson=https://raw.githubusercontent.com/cbkii/otast/main/update.json
 ```
 
-The stable `update.json` advertises the latest successfully published release using the Magisk update metadata contract:
+The stable `update.json` advertises the latest successfully published **final** release using the Magisk update metadata contract:
 
 ```json
 {
@@ -26,7 +26,9 @@ The stable `update.json` advertises the latest successfully published release us
 }
 ```
 
-`module/module.prop` is allowed to move ahead during development. `update.json` represents the latest published/updateable release and is synchronized only after the corresponding GitHub Release is public and its exact ZIP has been verified.
+`module/module.prop` is allowed to move ahead during development. `update.json` represents the latest published/updateable final release and is synchronized only after the corresponding GitHub Release is public and its exact ZIP has been verified.
+
+Versions containing a prerelease suffix, for example `v1.2.0-rc1`, may be prepared, physically proven and published as GitHub prereleases. They are **not** marked as the GitHub latest release and do **not** update stable `update.json`. This prevents normal Magisk update checks from moving stable installations onto a prerelease.
 
 ## Canonical release bundle
 
@@ -57,6 +59,7 @@ Select:
 What do you want to do?  prepare-release
 Branch to build:          [blank]
 Existing draft tag:       [blank]
+Legacy operation:         [blank]
 Legacy version:           [blank]
 ```
 
@@ -69,8 +72,9 @@ The job:
 3. builds the canonical release bundle exactly once;
 4. verifies the ZIP/checksum/manifest and Magisk updater schema;
 5. creates or refreshes an **unproven draft**;
-6. refuses to alter a draft that already contains physical-device proof;
-7. redownloads the draft assets into a clean directory and verifies the hosted bytes against the locally qualified SHA.
+6. when refreshing an unproven draft, pins its lightweight tag directly to the newly qualified `main` SHA;
+7. refuses to alter a draft that already contains physical-device proof;
+8. redownloads the draft assets into a clean directory and verifies the hosted bytes and tag against the locally qualified candidate.
 
 The successful summary ends with `DRAFT READY FOR PHYSICAL QUALIFICATION`.
 
@@ -90,9 +94,9 @@ Run the same command after every requested reboot. Its private state is resumabl
 
 The wizard installs the exact draft ZIP, crosses the required reboot boundaries, performs the OTAST Report/Preflight/Apply/Verify/idempotence/Restore lifecycle, and uploads a sanitized proof bound to that ZIP SHA-256.
 
-Once physical proof exists, the draft candidate is immutable. A later `main` commit cannot replace its ZIP, checksum or release manifest.
+Once physical proof exists, the draft candidate is immutable. A later `main` commit cannot replace its ZIP, checksum, release manifest or tag target.
 
-The workflow still accepts the legacy `draft`/`publish` dispatch values and `version` input used by the current `otast release` wizard, while the Actions UI exposes the clearer production operation names.
+The workflow retains the legacy `operation=draft|publish` and `version=...` dispatch interface used by the current `otast release` wizard. The Actions UI exposes the clearer `action` choices instead; leave both legacy fields blank for manual UI runs.
 
 ## Publish release
 
@@ -102,6 +106,7 @@ After physical proof is attached to the draft, use:
 What do you want to do?  publish-release
 Branch to build:          [blank]
 Existing draft tag:       vX.Y.Z
+Legacy operation:         [blank]
 Legacy version:           [blank]
 ```
 
@@ -114,15 +119,15 @@ The job:
 3. validates the proof against that exact ZIP;
 4. publishes the already-proven draft, or resumes safely if it was already published by a previous partial run;
 5. verifies the public release still contains the proven ZIP;
-6. deterministically generates the stable Magisk `update.json` metadata from the release manifest;
-7. refuses to downgrade or overwrite conflicting metadata at the same versionCode;
-8. updates `main/update.json` only when advancing the stable update channel;
-9. reads the resulting `update.json` back from GitHub and verifies it byte-for-byte;
+6. for a final release, deterministically generates and synchronizes stable Magisk `update.json` from the release manifest;
+7. for a prerelease, verifies GitHub prerelease state and the public ZIP but intentionally leaves stable `update.json` unchanged;
+8. refuses to downgrade or overwrite conflicting stable metadata at the same versionCode;
+9. for a final release, reads `update.json` back from GitHub and verifies it semantically against the expected metadata;
 10. redownloads the public ZIP and confirms its digest still equals the physically proven digest.
 
-Only then does the job report the release as published and Magisk-updateable.
+A final release is reported fully successful only after both its GitHub Release and stable Magisk update metadata are verified. A prerelease is reported successful after its prerelease state and exact public ZIP are verified, with the stable channel explicitly unchanged.
 
-If repository branch protection prevents the GitHub token from updating `main/update.json`, the release remains public but the workflow fails explicitly at updater synchronization rather than claiming full success. Resolve the repository write policy and rerun `publish-release`; publication is idempotent and the job will continue to updater verification without rebuilding.
+If repository branch protection prevents the GitHub token from updating `main/update.json`, a final release remains public but the workflow fails explicitly at updater synchronization rather than claiming full success. Resolve the repository write policy and rerun `publish-release`; publication is idempotent and the job will continue to updater verification without rebuilding.
 
 ## Build branch
 
@@ -132,6 +137,7 @@ For a quick development/test ZIP, select:
 What do you want to do?  build-branch
 Branch to build:          agent/example
 Existing draft tag:       [blank]
+Legacy operation:         [blank]
 Legacy version:           [blank]
 ```
 
@@ -142,10 +148,12 @@ The workflow validates that the requested value is an actual repository branch, 
 This mode deliberately does **not**:
 
 - create or alter a GitHub Release or tag;
-- require a production checksum/proof gate;
+- require the production release checksum/proof/manifest gate;
 - change `update.json`;
 - publish anything;
 - substitute its branch into `prepare-release` or `publish-release`.
+
+The lower-level deterministic module builder may create a local checksum sidecar as part of normal packaging, but branch mode neither treats that sidecar as a production qualification gate nor uploads it. The user-facing artifact is the Magisk-installable ZIP.
 
 It is an explicit branch-head build escape hatch, not a release qualification path.
 
@@ -157,7 +165,7 @@ It still stops rather than manufacturing success when continuing would be unsafe
 
 ## Inspection and recovery
 
-Show physical release state without changing it:
+Show physical release state without changing anything:
 
 ```bash
 otast release --status
