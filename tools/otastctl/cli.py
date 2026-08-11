@@ -12,6 +12,7 @@ from .fake_root import clone_fixture_root, qualify_fake_root
 from .fixture import reset_fixture, sanitize_fixture
 from .monitor import monitor_targets
 from .privacy import require_public_safe, scan_repository
+from .release import build_release_bundle, load_update_metadata, verify_release_bundle, write_update_metadata
 from .repository import build_source_zip, validate_source_zip
 from .util import OtastError, stable_json
 from .verify import verify_repository
@@ -32,6 +33,22 @@ def build_parser() -> argparse.ArgumentParser:
     build = sub.add_parser("build", help="build and validate the deterministic Magisk module ZIP")
     build.add_argument("--output", default="dist")
     build.add_argument("--commit-sha", default="unknown")
+
+    build_release = sub.add_parser("build-release", help="build and verify the canonical OTAST release bundle")
+    build_release.add_argument("--output", default="dist")
+    build_release.add_argument("--commit-sha", default="unknown")
+
+    verify_release = sub.add_parser("verify-release", help="verify a canonical OTAST release bundle")
+    verify_release.add_argument("--zip", required=True)
+    verify_release.add_argument("--checksum", required=True)
+    verify_release.add_argument("--manifest", required=True)
+
+    generate_update = sub.add_parser("generate-update-json", help="generate stable Magisk updater metadata from a release manifest")
+    generate_update.add_argument("--manifest", required=True)
+    generate_update.add_argument("--output", required=True)
+
+    validate_update = sub.add_parser("validate-update-json", help="validate stable Magisk updater metadata")
+    validate_update.add_argument("path")
 
     validate_zip = sub.add_parser("validate-zip", help="validate an existing module ZIP")
     validate_zip.add_argument("zip")
@@ -85,6 +102,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "build":
             output = _root(args.output) if Path(args.output).is_absolute() else (repo / args.output).resolve()
             print(build_module(repo, output, commit_sha=args.commit_sha))
+        elif args.command == "build-release":
+            output = _root(args.output) if Path(args.output).is_absolute() else (repo / args.output).resolve()
+            print(stable_json(build_release_bundle(repo, output, commit_sha=args.commit_sha)), end="")
+        elif args.command == "verify-release":
+            report = verify_release_bundle(_root(args.zip), _root(args.checksum), _root(args.manifest))
+            print(stable_json(report), end="")
+        elif args.command == "generate-update-json":
+            output = _root(args.output) if Path(args.output).is_absolute() else (repo / args.output).resolve()
+            data = write_update_metadata(_root(args.manifest), output)
+            print(stable_json({"output": str(output), "metadata": data}), end="")
+        elif args.command == "validate-update-json":
+            print(stable_json(load_update_metadata(_root(args.path))), end="")
         elif args.command == "validate-zip":
             validate_module_zip(_root(args.zip))
             print("module ZIP validation passed")
