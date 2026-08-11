@@ -1,155 +1,172 @@
 # Releasing OTAST
 
-The supported owner-facing release interface is one resumable command:
+OTAST has two intentionally different build paths:
+
+- a production release path that locks and physically proves one exact ZIP before publication;
+- a simple branch-head build path for development/testing that produces a Magisk-installable Actions artifact without touching release state.
+
+The production invariant is the module ZIP SHA-256. A source commit is useful provenance, but a proof for one ZIP never authorizes another ZIP.
+
+## Magisk update channel
+
+Every production OTAST ZIP contains `module.prop` with:
+
+```text
+updateJson=https://raw.githubusercontent.com/cbkii/otast/main/update.json
+```
+
+The stable `update.json` advertises the latest successfully published release using the Magisk update metadata contract:
+
+```json
+{
+  "version": "vX.Y.Z",
+  "versionCode": 123,
+  "zipUrl": "https://github.com/cbkii/otast/releases/download/vX.Y.Z/otast-vX.Y.Z.zip",
+  "changelog": "https://raw.githubusercontent.com/cbkii/otast/main/CHANGELOG.md"
+}
+```
+
+`module/module.prop` is allowed to move ahead during development. `update.json` represents the latest published/updateable release and is synchronized only after the corresponding GitHub Release is public and its exact ZIP has been verified.
+
+## Canonical release bundle
+
+Production packaging is implemented by OTAST host tooling rather than by GitHub Actions YAML.
+
+`scripts/build-release.sh` produces and verifies:
+
+```text
+dist/
+├── otast-vX.Y.Z.zip
+├── otast-vX.Y.Z.zip.sha256
+└── release-manifest.json
+```
+
+The checksum sidecar contains only the ZIP basename so the ZIP and sidecar remain relocatable. `otastctl verify-release` resolves the supplied paths explicitly and therefore does not depend on the caller's current working directory.
+
+The manifest records the release version, versionCode, source commit, asset names and exact ZIP SHA-256. The ZIP itself contains `module.prop` and `release.properties`; verification cross-checks all of these identities and confirms that the embedded `updateJson` points to the stable OTAST update channel.
+
+## GitHub Actions manual workflow
+
+Open **Actions → Release → Run workflow**.
+
+### Prepare release
+
+Select:
+
+```text
+What do you want to do?  prepare-release
+Branch to build:          [blank]
+Existing draft tag:       [blank]
+Legacy version:           [blank]
+```
+
+Preparation always uses current GitHub `main`; the branch field cannot override production release source.
+
+The job:
+
+1. checks out `main` and records its exact SHA;
+2. runs `bash scripts/test.sh --full`;
+3. builds the canonical release bundle exactly once;
+4. verifies the ZIP/checksum/manifest and Magisk updater schema;
+5. creates or refreshes an **unproven draft**;
+6. refuses to alter a draft that already contains physical-device proof;
+7. redownloads the draft assets into a clean directory and verifies the hosted bytes against the locally qualified SHA.
+
+The successful summary ends with `DRAFT READY FOR PHYSICAL QUALIFICATION`.
+
+## Physical qualification
+
+The supported owner-facing physical-device command remains:
 
 ```bash
 otast release
 ```
 
-Run the **same command again after every requested reboot**. The script stores its
-private phase state and resumes automatically; there is no manual
-Report/Preflight/Apply/Verify/Restore sequence to memorise.
-
-## Release source: latest `main`
-
-A new release attempt uses the latest GitHub `main` when it prepares the draft.
-The operator does not select, pin or type a commit SHA.
-
-The source commit may still be recorded as diagnostic metadata inside the build,
-but it is not a physical-proof or publication gate. The release invariant is the
-asset itself: the module ZIP published must have the same SHA-256 as the ZIP that
-was installed and proven on the Pixel.
-
-Once physical testing starts, that exact ZIP is locked for the attempt. If `main`
-moves while the phone is rebooting, OTAST continues the already-tested asset
-rather than silently swapping a different build into the middle of the lifecycle.
-
-### Legacy proof migration
-
-New physical-device proofs use schema 2. The validator also accepts an existing
-schema-1 proof only as a migration/recovery aid for a release attempt that began
-before the latest-main release flow was installed. A legacy proof does **not** gain
-trust from its recorded commit SHA: commit metadata is ignored for publication.
-It must still match the current draft byte-for-byte through `module_sha256`, match
-the release version/device, and satisfy the same required lifecycle evidence.
-Therefore compatibility can resume an interrupted proven release, but cannot make
-a proof for one ZIP authorize a different ZIP.
-
-## What `otast release` does
-
-The wizard automatically:
-
-1. best-effort fast-forwards a clean local `main`; a dirty or non-main checkout is
-   left untouched because GitHub Actions still builds remote `main`;
-2. reads the current release version from GitHub `main` when possible;
-3. installs missing ordinary Termux dependencies through `pkg` when safe;
-4. creates or refreshes a GitHub draft from current `main`;
-5. downloads the ZIP and SHA-256 sidecar and locks the exact asset hash;
-6. installs that ZIP through Magisk and crosses the required real reboot boundary;
-7. performs Report -> Preflight -> Apply;
-8. if Apply changes files, reboots and verifies them; if Apply is already a no-op,
-   accepts the system as already current instead of manufacturing a failure;
-9. requires the later Apply to settle at `NO_CHANGES_REQUIRED`;
-10. Restores the managed files, reboots, confirms managed state is gone and runs
-    the final Report;
-11. writes and uploads a sanitized physical-device proof bound to the ZIP SHA-256;
-12. publishes that same draft without rebuilding it.
-
-## Automatic repair/recovery policy
-
-The script treats predictable operational failures as recoverable instead of
-immediately halting:
-
-- network, GitHub API, Actions lookup and asset-download failures use bounded retries;
-- a missing Termux package is installed with `pkg` when available;
-- a clean local `main` is fast-forwarded and the script re-executes itself once;
-- an old draft with no device proof is replaced automatically from latest `main`;
-- a missing/corrupt draft asset before physical testing causes one automatic draft rebuild;
-- interrupted runtime transactions use `boot-recover` before Apply/Verify/Restore retry;
-- a staged-but-not-active OTAST module gets an additional activation reboot, then
-  its pre-existing managed state must Verify `CURRENT` before automatic Restore;
-- a late writer that makes the second Apply change files gets bounded settling reboots;
-- lingering records after Restore get one additional boot-recover/Restore/reboot cycle;
-- if an unrecoverable failure occurs after OTAST has modified managed state, the
-  wizard attempts a safe Restore/unwind and reboot before leaving the release unpublished;
-- an already-uploaded valid proof can be recovered from the draft if local resume
-  state was lost.
-
-Retries are bounded. The script does not loop indefinitely and does not turn a
-persistent conflict into a false PASS.
-
-## Conditions that still STOP
-
-A hard stop remains appropriate only when continuing automatically could be
-unsafe or misleading, for example:
-
-- the device is not Pixel 9a `tegu` / SDK 36;
-- Magisk root or the Magisk CLI never becomes usable after bounded waiting;
-- pre-existing managed OTAST state cannot be verified after transaction recovery;
-- a different ZIP appears after the physical proof has already locked the asset;
-- another writer keeps changing managed files after bounded settling reboots;
-- Restore cannot return the device to a known state after bounded recovery.
-
-When a mid-lifecycle condition is recoverable by Restore, the wizard attempts that
-unwind itself before reporting the release failure.
-
-## Reboot boundaries
-
-OTAST records `/proc/sys/kernel/random/boot_id` before a required reboot. After
-Android is fully booted, run:
-
-```bash
-otast release
-```
-
-again. If a reboot has not happened yet, the same command simply requests it
-again; completed mutations are not repeated blindly.
-
-By default reboot and final publication remain interactive. To approve them
-automatically:
-
-```bash
-otast release --yes
-```
-
-To leave the proven release as a draft:
-
-```bash
-otast release --no-publish
-```
-
-## Inspection and recovery
-
-Show current private state without changing anything:
-
-```bash
-otast release --status
-```
-
-Private state and logs live under:
+Run the same command after every requested reboot. Its private state is resumable under:
 
 ```text
 ~/.local/state/otast-release/<version>/
 ```
 
-To deliberately discard only the wizard's private resume metadata:
+The wizard installs the exact draft ZIP, crosses the required reboot boundaries, performs the OTAST Report/Preflight/Apply/Verify/idempotence/Restore lifecycle, and uploads a sanitized proof bound to that ZIP SHA-256.
+
+Once physical proof exists, the draft candidate is immutable. A later `main` commit cannot replace its ZIP, checksum or release manifest.
+
+The workflow still accepts the legacy `draft`/`publish` dispatch values and `version` input used by the current `otast release` wizard, while the Actions UI exposes the clearer production operation names.
+
+## Publish release
+
+After physical proof is attached to the draft, use:
+
+```text
+What do you want to do?  publish-release
+Branch to build:          [blank]
+Existing draft tag:       vX.Y.Z
+Legacy version:           [blank]
+```
+
+Publication **never builds**.
+
+The job:
+
+1. downloads ZIP, checksum, release manifest and physical proof from the existing release;
+2. runs the canonical bundle verifier;
+3. validates the proof against that exact ZIP;
+4. publishes the already-proven draft, or resumes safely if it was already published by a previous partial run;
+5. verifies the public release still contains the proven ZIP;
+6. deterministically generates the stable Magisk `update.json` metadata from the release manifest;
+7. refuses to downgrade or overwrite conflicting metadata at the same versionCode;
+8. updates `main/update.json` only when advancing the stable update channel;
+9. reads the resulting `update.json` back from GitHub and verifies it byte-for-byte;
+10. redownloads the public ZIP and confirms its digest still equals the physically proven digest.
+
+Only then does the job report the release as published and Magisk-updateable.
+
+If repository branch protection prevents the GitHub token from updating `main/update.json`, the release remains public but the workflow fails explicitly at updater synchronization rather than claiming full success. Resolve the repository write policy and rerun `publish-release`; publication is idempotent and the job will continue to updater verification without rebuilding.
+
+## Build branch
+
+For a quick development/test ZIP, select:
+
+```text
+What do you want to do?  build-branch
+Branch to build:          agent/example
+Existing draft tag:       [blank]
+Legacy version:           [blank]
+```
+
+Blank branch means `main`.
+
+The workflow validates that the requested value is an actual repository branch, fetches its current HEAD, records the exact commit, builds the branch's Magisk ZIP, validates its ZIP structure and uploads the ZIP as a GitHub Actions artifact.
+
+This mode deliberately does **not**:
+
+- create or alter a GitHub Release or tag;
+- require a production checksum/proof gate;
+- change `update.json`;
+- publish anything;
+- substitute its branch into `prepare-release` or `publish-release`.
+
+It is an explicit branch-head build escape hatch, not a release qualification path.
+
+## Automatic recovery and hard stops
+
+The physical `otast release` wizard retains its existing bounded recovery policy for network/API failures, clean-main refresh, draft recovery before proof, interrupted OTAST transactions, staged module activation, late-writer settling and Restore recovery.
+
+It still stops rather than manufacturing success when continuing would be unsafe or misleading, including wrong device/SDK, unavailable Magisk root, unverifiable pre-existing managed state, proven-asset substitution, persistent competing writes or unrecoverable Restore failure.
+
+## Inspection and recovery
+
+Show physical release state without changing it:
+
+```bash
+otast release --status
+```
+
+Discard only the wizard's private resume metadata when safe:
 
 ```bash
 otast release --reset
 ```
 
-`--reset` does not Restore live managed files. If live managed state exists and
-resume metadata is corrupt, the wizard refuses to throw that lifecycle position
-away automatically.
-
-## GitHub Release workflow
-
-The workflow exposes `validate`, `draft`, and `publish` operations.
-
-- `validate` tests/builds current `main` only;
-- `draft` tests/builds current `main` and creates or refreshes an unproven draft;
-- `publish` does not rebuild: it downloads the existing draft ZIP, checksum and
-  physical proof, verifies the ZIP hash/proof/version, then publishes that draft.
-
-The normal path remains `otast release`; the workflow form is only a lower-level
-operator/debugging surface.
+`--reset` does not restore live managed files and is refused when throwing away state would lose an active lifecycle position.
