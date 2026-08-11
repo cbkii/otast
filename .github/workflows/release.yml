@@ -1,10 +1,10 @@
 name: Release
-run-name: Release · ${{ inputs.operation }}
+run-name: Release ${{ inputs.operation != '' && inputs.operation || inputs.action }} ${{ inputs.version != '' && inputs.version || inputs.tag }}
 
 on:
   workflow_dispatch:
     inputs:
-      operation:
+      action:
         description: What do you want to do?
         required: true
         type: choice
@@ -23,8 +23,13 @@ on:
         required: false
         type: string
         default: ''
+      operation:
+        description: Legacy otast-release operation; leave blank in the Actions UI
+        required: false
+        type: string
+        default: ''
       version:
-        description: Legacy otast-release compatibility only; leave blank in the Actions UI
+        description: Legacy otast-release version; leave blank in the Actions UI
         required: false
         type: string
         default: ''
@@ -33,12 +38,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.repository }}-${{ inputs.operation }}
+  group: release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
   build-branch:
-    if: inputs.operation == 'build-branch'
+    if: inputs.operation == '' && inputs.action == 'build-branch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -88,10 +93,14 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build branch-head Magisk ZIP
+      - name: Build branch-head Magisk ZIP without release gating
         shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
-          if ! bash scripts/build-release.sh; then
+          if ! python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" build \
+              --output dist \
+              --commit-sha "$SOURCE_SHA"; then
             printf 'Branch-head Magisk ZIP build failed.\n' >&2
             exit 1
           fi
@@ -107,8 +116,9 @@ jobs:
           fi
           printf 'BRANCH BUILD SUCCESS\n\n' >>"$GITHUB_STEP_SUMMARY"
           printf -- '- Branch: `%s`\n' "${{ steps.source.outputs.branch }}" >>"$GITHUB_STEP_SUMMARY"
-          printf -- '- Commit: `%s`\n' "${{ steps.source.outputs.sha }}" >>"$GITHUB_STEP_SUMMARY"
+          printf -- '- Commit: `%s`\n' "$SOURCE_SHA" >>"$GITHUB_STEP_SUMMARY"
           printf -- '- ZIP: `%s`\n' "${zips[0]#dist/}" >>"$GITHUB_STEP_SUMMARY"
+          printf '\nThis build is an Actions artifact only; production release checksum/proof/update gates were intentionally bypassed.\n' >>"$GITHUB_STEP_SUMMARY"
 
       - name: Upload Magisk ZIP
         uses: actions/upload-artifact@v4
@@ -119,7 +129,7 @@ jobs:
           retention-days: 14
 
   prepare-release:
-    if: inputs.operation == 'prepare-release' || inputs.operation == 'draft'
+    if: inputs.operation == 'draft' || (inputs.operation == '' && inputs.action == 'prepare-release')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -281,7 +291,7 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
 
   publish-release:
-    if: inputs.operation == 'publish-release' || inputs.operation == 'publish'
+    if: inputs.operation == 'publish' || (inputs.operation == '' && inputs.action == 'publish-release')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -399,7 +409,7 @@ jobs:
             exit 1
           fi
           if ((current_code == next_code)); then
-            if ! cmp -s -- "$current_file" "$expected"; then
+            if ! python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1], encoding="utf-8")) == json.load(open(sys.argv[2], encoding="utf-8")) else 1)' "$current_file" "$expected"; then
               printf 'Stable update channel has conflicting metadata at versionCode %s.\n' "$current_code" >&2
               exit 1
             fi
@@ -415,10 +425,10 @@ jobs:
           verified_payload=$(gh api "repos/$GITHUB_REPOSITORY/contents/update.json?ref=main") || exit 1
           verified="$RUNNER_TEMP/update.json.verified"
           python3 -c 'import base64,json,sys; p=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(p["content"]))' "$verified" <<<"$verified_payload" || exit 1
-          cmp -s -- "$verified" "$expected" || {
+          if ! python3 -c 'import json,sys; raise SystemExit(0 if json.load(open(sys.argv[1], encoding="utf-8")) == json.load(open(sys.argv[2], encoding="utf-8")) else 1)' "$verified" "$expected"; then
             printf 'Published Magisk update metadata does not match the proven release.\n' >&2
             exit 1
-          }
+          fi
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json "$verified" >/dev/null
 
           remote="$RUNNER_TEMP/published-asset"
