@@ -43,13 +43,13 @@ bash scripts/bootstrap-termux.sh
 bash scripts/test.sh --full
 ```
 
-Build the deterministic Magisk ZIP:
+Build the deterministic Magisk release bundle:
 
 ```bash
 bash scripts/build-release.sh
 ```
 
-The output is written to `dist/` with a SHA-256 sidecar and canonical release manifest.
+`dist/` receives the Magisk ZIP, its portable `.sha256` sidecar, and `release-manifest.json`. The ZIP also contains `release.properties`, which binds its embedded release identity and source commit.
 
 ## Fake Magisk root
 
