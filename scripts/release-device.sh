@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Compatibility front-end for the proven physical-device lifecycle.
-# The large reboot/apply/verify/restore state machine is intentionally retained
-# from the last qualified implementation while this wrapper supplies the new
-# canonical version resolver and simplified GitHub Release workflow interface.
+# Release UX/front-end for the qualified physical-device lifecycle.
+# The reboot/apply/verify/restore state machine is retained separately in-tree;
+# this wrapper supplies canonical versioning and the simplified GitHub workflow API.
 
 set -u
 
@@ -13,7 +12,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P) || exit 1
 REPO_SLUG=${OTAST_GITHUB_REPO:-cbkii/otast}
 WORKFLOW=release.yml
-LEGACY_RELEASE_COMMIT=eebecde3a08721de7be1f2569e22fd04bad625b5
+LIFECYCLE_SCRIPT="$SCRIPT_DIR/release-device-lifecycle.sh"
 
 REQUESTED_VERSION=
 USER_NO_PUBLISH=0
@@ -66,6 +65,11 @@ EOF_HELP
     exit 0
 fi
 
+[[ -f $LIFECYCLE_SCRIPT && ! -L $LIFECYCLE_SCRIPT ]] || {
+    printf 'STOP: qualified physical release lifecycle is missing or unsafe: %s\n' "$LIFECYCLE_SCRIPT" >&2
+    exit 1
+}
+
 ensure_command() {
     local command=$1 package=$2
     command -v "$command" >/dev/null 2>&1 && return 0
@@ -92,11 +96,9 @@ REAL_GH=$(command -v gh)
 TMP_BASE=${TMPDIR:-${HOME:?}/.cache/otast/tmp}
 mkdir -p -- "$TMP_BASE" || exit 1
 WORK=$(mktemp -d "$TMP_BASE/release-wrapper.XXXXXX") || exit 1
-LEGACY_SCRIPT="$SCRIPT_DIR/.release-device-legacy.$$.sh"
 SHIM_DIR=$WORK/shim
 mkdir -p -- "$SHIM_DIR" || exit 1
 cleanup() {
-    rm -f -- "$LEGACY_SCRIPT"
     rm -rf -- "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -242,18 +244,6 @@ if [[ -n $existing ]]; then
     fi
 fi
 
-# Preserve the qualified physical lifecycle byte-for-byte from the release
-# workflow overhaul commit. Prefer local Git history; fall back to authenticated
-# GitHub retrieval for source-package checkouts without history.
-if ! git -C "$REPO_ROOT" show "$LEGACY_RELEASE_COMMIT:scripts/release-device.sh" >"$LEGACY_SCRIPT" 2>/dev/null; then
-    encoded=$("$REAL_GH" api "repos/$REPO_SLUG/contents/scripts/release-device.sh?ref=$LEGACY_RELEASE_COMMIT" --jq .content 2>/dev/null) || {
-        printf 'STOP: cannot retrieve the qualified physical release lifecycle.\n' >&2
-        exit 1
-    }
-    printf '%s' "$encoded" | tr -d '\n' | base64 -d >"$LEGACY_SCRIPT"
-fi
-chmod 0700 -- "$LEGACY_SCRIPT" || exit 1
-
 cat >"$SHIM_DIR/gh" <<'SHIM'
 #!/usr/bin/env bash
 set -u
@@ -322,7 +312,7 @@ done
 legacy_args+=(--version "$VERSION" --no-publish)
 
 PATH="$SHIM_DIR:$PATH" OTAST_REAL_GH="$REAL_GH" OTAST_RELEASE_WRAPPER_AUTOPUBLISH="$AUTO_PUBLISH" \
-    bash "$LEGACY_SCRIPT" "${legacy_args[@]}"
+    bash "$LIFECYCLE_SCRIPT" "${legacy_args[@]}"
 rc=$?
 if ((rc != 0)); then
     exit "$rc"
