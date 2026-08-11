@@ -227,19 +227,19 @@ print(items[0]["databaseId"] if items else "")
     return 0
 }
 
-# A previous publish attempt may have made the exact proven release public before
-# stable updater synchronization failed. In that state do not re-enter physical
-# qualification: retry the idempotent publish workflow against the same version.
+# If GitHub already has physical proof for this exact candidate, do not re-enter
+# qualification. This covers both a proven draft awaiting publication and a
+# partially published release whose updater synchronization must be retried.
 existing=$(release_state) || existing=
 if [[ -n $existing ]]; then
     has_proof=$(release_has_proof "$existing") || has_proof=no
     is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$existing")
-    if [[ $has_proof == yes && $is_draft == false ]]; then
+    if [[ $has_proof == yes ]]; then
         if [[ $AUTO_PUBLISH == 1 ]]; then
             dispatch_publication
             exit $?
         fi
-        printf 'Release %s is already public and has physical proof.\n' "$VERSION"
+        printf 'Release %s already has physical proof (draft=%s); publication not requested.\n' "$VERSION" "$is_draft"
         exit 0
     fi
 fi
