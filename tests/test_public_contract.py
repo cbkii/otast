@@ -127,6 +127,14 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertNotIn("update.json", branch_job)
         self.assertNotIn("device-proof", branch_job)
 
+        prepare_job = workflow.split("  prepare-release:\n", 1)[1].split("  publish-release:\n", 1)[0]
+        self.assertIn("git/ref/tags/$VERSION", prepare_job)
+        self.assertIn("git/refs/tags/$VERSION", prepare_job)
+        self.assertIn("-F force=true", prepare_job)
+        self.assertIn("tag_type != commit", prepare_job)
+        self.assertIn('tag_sha == "$SOURCE_SHA"', prepare_job)
+        self.assertIn("proven assets are immutable", prepare_job)
+
         publish_job = workflow.split("  publish-release:\n", 1)[1]
         self.assertNotIn("build-release.sh", publish_job)
         self.assertNotIn("gh release create", publish_job)
