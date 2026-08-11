@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts/validate-device-release-proof.py"
 RELEASE_SCRIPT = ROOT / "scripts/release-device.sh"
+LIFECYCLE_SCRIPT = ROOT / "scripts/release-device-lifecycle.sh"
 
 
 def load_validator():
@@ -112,7 +113,7 @@ class ReleaseDeviceTests(unittest.TestCase):
     def test_release_wizard_uses_canonical_versioning_and_new_workflow_api(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("resolve_release_identity", text)
-        self.assertIn("LEGACY_RELEASE_COMMIT=eebecde3a08721de7be1f2569e22fd04bad625b5", text)
+        self.assertIn('LIFECYCLE_SCRIPT="$SCRIPT_DIR/release-device-lifecycle.sh"', text)
         self.assertIn("operation=draft", text)
         self.assertIn("action=prepare-release", text)
         self.assertIn("action=publish-release", text)
@@ -122,16 +123,31 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("mark_private_state_complete", text)
         self.assertIn("stable update.json", text)
         self.assertIn("versionCode remains automatic", text)
+        self.assertNotIn("LEGACY_RELEASE_COMMIT", text)
+        self.assertNotIn("contents/scripts/release-device.sh?ref=", text)
 
-    def test_release_wizard_preserves_proven_lifecycle_without_reimplementing_it(self) -> None:
-        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn('git -C "$REPO_ROOT" show "$LEGACY_RELEASE_COMMIT:scripts/release-device.sh"', text)
-        self.assertIn("qualified physical lifecycle byte-for-byte", text)
-        self.assertIn("baseline recovery, exact draft install, Preflight, Apply, Verify", text)
-        self.assertIn("idempotent second Apply, Restore and final Report", text)
-        self.assertIn("This wrapper alone may", text)
-        self.assertNotIn("magisk --install-module", text)
-        self.assertNotIn("runtime/entry.sh apply", text)
+    def test_release_wizard_preserves_proven_lifecycle_in_current_source(self) -> None:
+        wrapper = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        lifecycle = LIFECYCLE_SCRIPT.read_text(encoding="utf-8")
+        self.assertTrue(LIFECYCLE_SCRIPT.is_file())
+        self.assertFalse(LIFECYCLE_SCRIPT.is_symlink())
+        self.assertIn('bash "$LIFECYCLE_SCRIPT"', wrapper)
+        for token in (
+            "physical release proof requires tegu / SDK 36",
+            "magisk --install-module",
+            "run_boot_recover_best_effort",
+            "Apply failed; recovering transaction state and retrying once",
+            "Restore failed; attempting boot-recover and one retry",
+            "persistent external writer conflict",
+            "NO_CHANGES_REQUIRED",
+            "REBOOT_REQUIRED",
+            "/proc/sys/kernel/random/boot_id",
+            "validate-device-release-proof.py",
+            "gh release upload",
+        ):
+            self.assertIn(token, lifecycle)
+        self.assertNotIn("magisk --install-module", wrapper)
+        self.assertNotIn("runtime/entry.sh apply", wrapper)
 
     def test_release_wizard_retries_partial_publication_without_requalification(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
@@ -139,8 +155,8 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("has_proof == yes && $is_draft == false", text)
         self.assertIn("dispatch_publication", text)
         first_public_check = text.index("has_proof == yes && $is_draft == false")
-        legacy_fetch = text.index("Preserve the qualified physical lifecycle byte-for-byte")
-        self.assertLess(first_public_check, legacy_fetch)
+        lifecycle_run = text.index('bash "$LIFECYCLE_SCRIPT"')
+        self.assertLess(first_public_check, lifecycle_run)
 
     def test_release_wizard_help_needs_no_device_or_network(self) -> None:
         result = subprocess.run(
