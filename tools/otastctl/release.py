@@ -252,7 +252,7 @@ def select_proven_draft(releases: object, *, requested_version: str = "") -> dic
         chosen = eligible[0]
 
     version = str(chosen["tag_name"])
-    return {"version": version, "prerelease": bool(chosen.get("prerelease", False))}
+    return {"version": version, "prerelease": is_prerelease(version)}
 
 
 def load_release_list(path: Path) -> list[dict[str, object]]:
