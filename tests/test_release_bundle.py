@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
+from tools.otastctl.build import module_metadata
 from tools.otastctl.release import (
     CHANGELOG_URL,
     REPOSITORY,
@@ -13,6 +15,9 @@ from tools.otastctl.release import (
     build_release_bundle,
     expected_update_metadata,
     load_update_metadata,
+    resolve_release_identity,
+    select_proven_draft,
+    stamp_release_metadata,
     verify_release_bundle,
     write_update_metadata,
 )
@@ -20,6 +25,35 @@ from tools.otastctl.util import OtastError
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_COMMIT = "1" * 40
+
+
+def stable(version: str = "v1.0.0", code: int = 100004) -> dict[str, object]:
+    return expected_update_metadata(version, code)
+
+
+def current(version: str = "v1.0.0", code: int = 100004) -> dict[str, str]:
+    return {
+        "id": "otast",
+        "name": "OTAST",
+        "version": version,
+        "versionCode": str(code),
+        "author": "cbkii",
+        "description": "test",
+        "updateJson": UPDATE_JSON_URL,
+    }
+
+
+def release_record(version: str, *, proven: bool = True, draft: bool = True) -> dict[str, object]:
+    zip_name = f"otast-{version}.zip"
+    assets = [zip_name, f"{zip_name}.sha256", "release-manifest.json"]
+    if proven:
+        assets.append(f"otast-{version}-device-proof.json")
+    return {
+        "draft": draft,
+        "prerelease": "-" in version,
+        "tag_name": version,
+        "assets": [{"name": name} for name in assets],
+    }
 
 
 class ReleaseBundleTests(unittest.TestCase):
@@ -108,6 +142,80 @@ class ReleaseBundleTests(unittest.TestCase):
                 with self.assertRaises(OtastError):
                     load_update_metadata(path)
 
+    def test_auto_version_bumps_stable_patch_and_version_code(self) -> None:
+        resolved = resolve_release_identity(stable(), current())
+        self.assertEqual(resolved["version"], "v1.0.1")
+        self.assertEqual(resolved["version_code"], 100005)
+        self.assertFalse(resolved["reused_candidate"])
+
+    def test_explicit_version_uses_automatic_monotonic_code(self) -> None:
+        resolved = resolve_release_identity(stable(), current(), requested_version="v1.1.0")
+        self.assertEqual(resolved["version"], "v1.1.0")
+        self.assertEqual(resolved["version_code"], 100005)
+
+    def test_existing_unpublished_candidate_is_reused(self) -> None:
+        resolved = resolve_release_identity(stable(), current("v1.0.1", 100005))
+        self.assertEqual(resolved["version"], "v1.0.1")
+        self.assertEqual(resolved["version_code"], 100005)
+        self.assertTrue(resolved["reused_candidate"])
+
+    def test_explicit_existing_candidate_reuses_code(self) -> None:
+        resolved = resolve_release_identity(
+            stable(), current("v1.1.0-rc1", 100005), requested_version="v1.1.0-rc1"
+        )
+        self.assertEqual(resolved["version_code"], 100005)
+        self.assertTrue(resolved["prerelease"])
+
+    def test_invalid_or_non_advancing_version_is_rejected(self) -> None:
+        for value in ("1.0.1", "v1", "v1.0.0", "v0.9.9"):
+            with self.subTest(value=value), self.assertRaises(OtastError):
+                resolve_release_identity(stable(), current(), requested_version=value)
+
+    def test_stamp_updates_candidate_but_not_stable_update_json(self) -> None:
+        repo = self.temp / "repo"
+        shutil.copytree(ROOT / "module", repo / "module")
+        shutil.copy2(ROOT / "update.json", repo / "update.json")
+        shutil.copy2(ROOT / "CHANGELOG.md", repo / "CHANGELOG.md")
+        before_update = (repo / "update.json").read_bytes()
+        stamp_release_metadata(repo, version="v1.0.1", version_code=100005, notes="- Simplified release UX.")
+        metadata = module_metadata(repo / "module/module.prop")
+        self.assertEqual(metadata["version"], "v1.0.1")
+        self.assertEqual(metadata["versionCode"], "100005")
+        self.assertEqual(metadata["updateJson"], UPDATE_JSON_URL)
+        self.assertEqual((repo / "update.json").read_bytes(), before_update)
+        changelog = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertEqual(changelog.count("## v1.0.1"), 1)
+
+    def test_stamp_is_idempotent_for_changelog_section(self) -> None:
+        repo = self.temp / "repo-idempotent"
+        shutil.copytree(ROOT / "module", repo / "module")
+        shutil.copy2(ROOT / "update.json", repo / "update.json")
+        shutil.copy2(ROOT / "CHANGELOG.md", repo / "CHANGELOG.md")
+        for notes in ("- First notes.", "- Updated notes."):
+            stamp_release_metadata(repo, version="v1.0.1", version_code=100005, notes=notes)
+        changelog = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.assertEqual(changelog.count("## v1.0.1"), 1)
+        self.assertIn("- Updated notes.", changelog)
+        self.assertNotIn("- First notes.", changelog)
+
+    def test_select_single_proven_draft(self) -> None:
+        selected = select_proven_draft([release_record("v1.0.1")])
+        self.assertEqual(selected["version"], "v1.0.1")
+
+    def test_select_proven_draft_rejects_zero_or_multiple(self) -> None:
+        with self.assertRaises(OtastError):
+            select_proven_draft([release_record("v1.0.1", proven=False)])
+        with self.assertRaises(OtastError):
+            select_proven_draft([release_record("v1.0.1"), release_record("v1.1.0")])
+
+    def test_select_explicit_proven_draft(self) -> None:
+        selected = select_proven_draft(
+            [release_record("v1.0.1"), release_record("v1.1.0")], requested_version="v1.1.0"
+        )
+        self.assertEqual(selected["version"], "v1.1.0")
+        with self.assertRaises(OtastError):
+            select_proven_draft([release_record("v1.1.0", proven=False)], requested_version="v1.1.0")
+
     def test_update_metadata_is_generated_from_release_manifest(self) -> None:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         expected = expected_update_metadata(manifest["version"], manifest["version_code"])
@@ -118,9 +226,9 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertEqual(expected["changelog"], CHANGELOG_URL)
 
     def test_stable_repository_update_metadata_is_valid(self) -> None:
-        current = load_update_metadata(ROOT / "update.json")
-        self.assertEqual(current["changelog"], CHANGELOG_URL)
-        self.assertTrue(str(current["zipUrl"]).startswith(f"https://github.com/{REPOSITORY}/releases/download/"))
+        current_update = load_update_metadata(ROOT / "update.json")
+        self.assertEqual(current_update["changelog"], CHANGELOG_URL)
+        self.assertTrue(str(current_update["zipUrl"]).startswith(f"https://github.com/{REPOSITORY}/releases/download/"))
         module_prop = (ROOT / "module/module.prop").read_text(encoding="utf-8")
         self.assertIn(f"updateJson={UPDATE_JSON_URL}", module_prop)
 
