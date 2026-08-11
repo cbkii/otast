@@ -4,7 +4,7 @@ OTAST is a transactional Magisk module for a **Pixel 9a (`tegu`) running Android
 
 This repository is the complete public source tree. It includes the Magisk module, deterministic release tooling, a fake-Magisk-root lifecycle harness, private device-fixture tooling, CI, target monitoring, and public-repository initialization checks.
 
-> **Release status:** `v1.0.0-rc.3` is a release candidate. Apply and Restore are explicit operations. OTAST does not continuously rewrite target files.
+> **Release status:** use the repository's GitHub Releases page and stable Magisk `update.json` channel for the current published version. Release candidates and development source may intentionally be ahead of that stable channel.
 
 ## Managed contracts
 
@@ -43,13 +43,13 @@ bash scripts/bootstrap-termux.sh
 bash scripts/test.sh --full
 ```
 
-Build the deterministic Magisk ZIP:
+Build the deterministic Magisk release bundle:
 
 ```bash
 bash scripts/build-release.sh
 ```
 
-The output is written to `dist/` with a SHA-256 sidecar.
+`dist/` receives the Magisk ZIP, its portable `.sha256` sidecar, and `release-manifest.json`. The ZIP also contains `release.properties`, which binds its embedded release identity and source commit.
 
 ## Fake Magisk root
 
@@ -110,7 +110,7 @@ This initializes `main`, runs the complete gate, and stages the source without c
 - [Device fixtures](docs/DEVICE-FIXTURES.md)
 - [Restore and recovery](docs/RESTORE-AND-RECOVERY.md)
 - [Development](docs/DEVELOPMENT.md)
-- [Releases](docs/RELEASES.md)
+- [Release workflow](docs/RELEASE.md)
 - [Security](SECURITY.md)
 
 ## License

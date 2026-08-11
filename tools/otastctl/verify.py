@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -8,6 +7,7 @@ from pathlib import Path
 
 from .build import ENTRYPOINTS, build_module, module_metadata
 from .privacy import require_public_safe
+from .release import UPDATE_JSON_URL, load_update_metadata, version_core
 from .util import OtastError, sha256_file
 
 
@@ -22,13 +22,19 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
     if root.is_symlink() or not root.is_dir():
         raise OtastError(f"repository root is missing or unsafe: {root}")
     metadata = module_metadata(root / "module/module.prop")
-    update = json.loads((root / "update.json").read_text(encoding="utf-8"))
-    if update.get("version") != metadata["version"]:
-        raise OtastError("update.json version differs from module.prop")
-    if int(update.get("versionCode", -1)) != int(metadata["versionCode"]):
-        raise OtastError("update.json versionCode differs from module.prop")
-    if f"/releases/download/{metadata['version']}/otast-{metadata['version']}.zip" not in update.get("zipUrl", ""):
-        raise OtastError("update.json ZIP URL is not canonical")
+    update = load_update_metadata(root / "update.json")
+    current_version = metadata["version"]
+    current_code = int(metadata["versionCode"])
+    stable_version = str(update["version"])
+    stable_code = int(update["versionCode"])
+    if metadata["updateJson"] != UPDATE_JSON_URL:
+        raise OtastError("module.prop updateJson is not the stable OTAST update channel")
+    if current_code < stable_code:
+        raise OtastError("module.prop versionCode is behind stable update.json")
+    if current_code == stable_code and current_version != stable_version:
+        raise OtastError("module.prop version differs from stable update.json at the same versionCode")
+    if current_code > stable_code and version_core(current_version) <= version_core(stable_version):
+        raise OtastError("unpublished module.prop version must be newer than stable update.json")
     for rel in ENTRYPOINTS:
         path = root / "module" / rel
         if path.is_symlink() or not path.is_file():
@@ -53,8 +59,10 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
     if first_hash != sha256_file(second):
         raise OtastError("module build is not deterministic")
     result: dict[str, object] = {
-        "version": metadata["version"],
-        "version_code": int(metadata["versionCode"]),
+        "version": current_version,
+        "version_code": current_code,
+        "stable_version": stable_version,
+        "stable_version_code": stable_code,
         "module_sha256": first_hash,
         "privacy": "PASS",
         "deterministic": True,

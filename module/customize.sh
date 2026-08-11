@@ -2,7 +2,8 @@
 
 # Sourced by the Magisk installer. Do not call exit from this file.
 
-ui_print '- OTAST v1.0.0-rc.3'
+_otast_version=$(sed -n 's/^version=//p' "$MODPATH/module.prop" 2>/dev/null | sed -n '1p')
+ui_print "- OTAST ${_otast_version:-unknown}"
 ui_print '- Validating Pixel 9a Android 16 authority and runtime package'
 
 _otast_install_failed=0

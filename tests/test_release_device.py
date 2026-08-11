@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts/validate-device-release-proof.py"
 RELEASE_SCRIPT = ROOT / "scripts/release-device.sh"
+LIFECYCLE_SCRIPT = ROOT / "scripts/release-device-lifecycle.sh"
 
 
 def load_validator():
@@ -109,45 +110,54 @@ class ReleaseDeviceTests(unittest.TestCase):
             with self.assertRaises(module.ProofError):
                 module.validate_proof(proof, module_zip, version="v1.0.0")
 
-    def test_release_wizard_targets_latest_main_and_self_heals(self) -> None:
+    def test_release_wizard_uses_canonical_versioning_and_new_workflow_api(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("resolve_release_identity", text)
+        self.assertIn('LIFECYCLE_SCRIPT="$SCRIPT_DIR/release-device-lifecycle.sh"', text)
+        self.assertIn("operation=draft", text)
+        self.assertIn("action=prepare-release", text)
+        self.assertIn("action=publish-release", text)
+        self.assertIn("full_validation=true", text)
+        self.assertIn('legacy_args+=(--version "$VERSION" --no-publish)', text)
+        self.assertIn("Physical proof remains preserved", text)
+        self.assertIn("mark_private_state_complete", text)
+        self.assertIn("stable update.json", text)
+        self.assertIn("versionCode remains automatic", text)
+        self.assertNotIn("LEGACY_RELEASE_COMMIT", text)
+        self.assertNotIn("contents/scripts/release-device.sh?ref=", text)
+
+    def test_release_wizard_preserves_proven_lifecycle_in_current_source(self) -> None:
+        wrapper = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        lifecycle = LIFECYCLE_SCRIPT.read_text(encoding="utf-8")
+        self.assertTrue(LIFECYCLE_SCRIPT.is_file())
+        self.assertFalse(LIFECYCLE_SCRIPT.is_symlink())
+        self.assertIn('bash "$LIFECYCLE_SCRIPT"', wrapper)
         for token in (
-            "remote_main_sha",
-            "latest_main_version",
-            "refresh_local_main_best_effort",
-            "ensure_host_command",
-            "delete_draft_best_effort",
-            "dispatch_at=$(date -u",
-            "createdAt",
-            "SINCE=$since",
-            "BASELINE_RESULT=NEEDS_VERIFY",
-            "baseline-verify-after-activation.log",
-            "Draft assets are missing/corrupt before device proof",
+            "physical release proof requires tegu / SDK 36",
+            "magisk --install-module",
             "run_boot_recover_best_effort",
             "Apply failed; recovering transaction state and retrying once",
             "Restore failed; attempting boot-recover and one retry",
-            "requesting one additional settling reboot",
-            "SAFE UNWIND AFTER RELEASE FAILURE",
             "persistent external writer conflict",
             "NO_CHANGES_REQUIRED",
             "REBOOT_REQUIRED",
             "/proc/sys/kernel/random/boot_id",
-            "magisk --install-module",
             "validate-device-release-proof.py",
             "gh release upload",
-            "dispatch_release_workflow publish",
         ):
-            self.assertIn(token, text)
-        self.assertNotIn("draft target is not an immutable full commit SHA", text)
-        self.assertNotIn("draft release target changed after device proof", text)
-        self.assertIn("exact ZIP SHA-256", text)
+            self.assertIn(token, lifecycle)
+        self.assertNotIn("magisk --install-module", wrapper)
+        self.assertNotIn("runtime/entry.sh apply", wrapper)
 
-    def test_release_wizard_preserves_only_unsafe_hard_stops(self) -> None:
+    def test_release_wizard_skips_requalification_for_any_proven_candidate(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("refusing to auto-restore drifted state", text)
-        self.assertIn("physical release proof requires tegu / SDK 36", text)
-        self.assertIn("Magisk root/CLI did not become available", text)
-        self.assertIn("draft ZIP SHA changed during active proof", text)
+        self.assertIn("If GitHub already has physical proof for this exact candidate", text)
+        self.assertIn("if [[ $has_proof == yes ]]; then", text)
+        self.assertIn("dispatch_publication", text)
+        self.assertIn("already has physical proof (draft=%s)", text)
+        first_proof_check = text.index("if [[ $has_proof == yes ]]; then")
+        lifecycle_run = text.index('bash "$LIFECYCLE_SCRIPT"')
+        self.assertLess(first_proof_check, lifecycle_run)
 
     def test_release_wizard_help_needs_no_device_or_network(self) -> None:
         result = subprocess.run(
@@ -160,9 +170,10 @@ class ReleaseDeviceTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("latest GitHub `main`", result.stdout)
-        self.assertIn("repairs ordinary failures automatically", result.stdout)
+        self.assertIn("automatic next", result.stdout)
+        self.assertIn("versionCode remains automatic", result.stdout)
         self.assertIn("otast release", result.stdout)
+        self.assertIn("--no-publish", result.stdout)
 
 
 if __name__ == "__main__":

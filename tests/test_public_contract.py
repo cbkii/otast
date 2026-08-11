@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import stat
 import unittest
 from pathlib import Path
 
@@ -96,69 +95,87 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("legacy ota-sot/otasst governor traces remain", capture)
         self.assertIn("/data/adb/post-fs-data.d/000-$legacy_otasst.sh", capture)
 
-    def test_release_workflow_has_isolated_branch_build_and_proven_publish(self) -> None:
+    def test_production_release_workflow_has_only_three_user_inputs(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertNotIn("permissions: write-all", workflow)
-        self.assertIn("action:\n        description: What do you want to do?", workflow)
-        self.assertIn("- prepare-release", workflow)
-        self.assertIn("- publish-release", workflow)
-        self.assertIn("- build-branch", workflow)
-        self.assertIn("Legacy otast-release operation", workflow)
-        self.assertIn("Legacy otast-release version", workflow)
-        self.assertIn("Release ${{ inputs.operation != '' && inputs.operation || inputs.action }}", workflow)
-        self.assertIn("ref: main", workflow)
+        input_block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertRegex(input_block, r"(?m)^      action:$")
+        self.assertRegex(input_block, r"(?m)^      version:$")
+        self.assertRegex(input_block, r"(?m)^      full_validation:$")
+        self.assertEqual(len(re.findall(r"(?m)^      [A-Za-z_][A-Za-z0-9_]*:$", input_block)), 3)
+        for removed in ("branch:", "tag:", "operation:", "versionCode:", "legacy"):
+            self.assertNotIn(removed, input_block.lower())
+        self.assertIn("- prepare-release", input_block)
+        self.assertIn("- publish-release", input_block)
+        self.assertNotIn("build-branch", input_block)
+        self.assertIn("type: boolean", input_block)
+        self.assertIn("default: true", input_block)
+
+    def test_production_release_workflow_preserves_release_safety_contract(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn("group: release-${{ github.repository }}", workflow)
+        self.assertEqual(workflow.count('if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then'), 2)
+        self.assertIn("resolve-release-version", workflow)
+        self.assertIn("stamp-release", workflow)
+        self.assertIn("scripts/test.sh --full", workflow)
+        self.assertIn("FULL VALIDATION: SKIPPED BY OWNER", workflow)
+        self.assertIn("MANDATORY RELEASE INTEGRITY: PASS", workflow)
+        self.assertIn("test_release*.py", workflow)
+        self.assertIn("test_public_contract.py", workflow)
         self.assertIn("build-release.sh", workflow)
         self.assertIn("verify-release", workflow)
-        self.assertIn("validate-device-release-proof.py", workflow)
-        self.assertIn("generate-update-json", workflow)
         self.assertIn("release-manifest.json", workflow)
+        self.assertIn("validate-device-release-proof.py", workflow)
+        self.assertIn("select-proven-release", workflow)
+        self.assertIn("generate-update-json", workflow)
+        self.assertIn("proven assets are immutable", workflow)
+        self.assertIn("main moved during release preparation", workflow)
+        self.assertIn("release-meta/", workflow)
+        self.assertIn("release-update/", workflow)
         self.assertIn("contents: write", workflow)
-        self.assertIn("inputs.operation == 'draft'", workflow)
-        self.assertIn("inputs.operation == 'publish'", workflow)
-        self.assertIn("group: release-${{ github.repository }}", workflow)
-        self.assertNotIn("group: release-${{ github.repository }}-${{", workflow)
-        self.assertEqual(workflow.count('if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then'), 2)
+        self.assertIn("pull-requests: write", workflow)
 
-        branch_marker = "  build-branch:\n"
         prepare_marker = "  prepare-release:\n"
         publish_marker = "  publish-release:\n"
-        for marker in (branch_marker, prepare_marker, publish_marker):
-            self.assertIn(marker, workflow)
-
-        branch_job = workflow.split(branch_marker, 1)[1].split(prepare_marker, 1)[0]
-        self.assertIn("git ls-remote --exit-code --heads", branch_job)
-        self.assertIn("actions/upload-artifact@v4", branch_job)
-        self.assertIn("validate-zip", branch_job)
-        self.assertIn("tools.otastctl --repo-root \"$GITHUB_WORKSPACE\" build", branch_job)
-        self.assertIn("SOURCE_BRANCH: ${{ steps.source.outputs.branch }}", branch_job)
-        self.assertNotIn('"${{ steps.source.outputs.branch }}"', branch_job)
-        self.assertNotIn("build-release", branch_job)
-        self.assertNotIn("verify-release", branch_job)
-        self.assertNotIn("gh release", branch_job)
-        self.assertNotIn("update.json", branch_job)
-        self.assertNotIn("device-proof", branch_job)
-
+        self.assertIn(prepare_marker, workflow)
+        self.assertIn(publish_marker, workflow)
         prepare_job = workflow.split(prepare_marker, 1)[1].split(publish_marker, 1)[0]
-        self.assertIn("git/ref/tags/$VERSION", prepare_job)
-        self.assertIn("git/refs/tags/$VERSION", prepare_job)
-        self.assertIn("-F force=true", prepare_job)
-        self.assertIn("tag_type != commit", prepare_job)
-        self.assertIn('tag_sha == "$SOURCE_SHA"', prepare_job)
-        self.assertIn("proven assets are immutable", prepare_job)
-
         publish_job = workflow.split(publish_marker, 1)[1]
+        self.assertIn("build-release.sh", prepare_job)
+        self.assertIn("Create or refresh unproven draft", prepare_job)
         self.assertNotIn("build-release.sh", publish_job)
         self.assertNotIn("gh release create", publish_job)
-        self.assertIn("validate-device-release-proof.py", publish_job)
-        self.assertIn('if [[ $VERSION == *-* ]]; then', publish_job)
         self.assertIn("--draft=false --prerelease", publish_job)
         self.assertIn("--draft=false --latest", publish_job)
-        self.assertIn("!contains(steps.release.outputs.version, '-')", publish_job)
-        self.assertIn("contains(steps.release.outputs.version, '-')", publish_job)
-        self.assertIn("contents/update.json", publish_job)
-        prerelease_step = publish_job.split("Verify prerelease publication without stable-channel mutation", 1)[1]
-        self.assertNotIn("contents/update.json", prerelease_step)
-        self.assertNotIn("generate-update-json", prerelease_step)
+        self.assertIn("if: ${{ !contains(steps.release.outputs.version, '-') }}", publish_job)
+        self.assertIn("if: ${{ contains(steps.release.outputs.version, '-') }}", publish_job)
+
+    def test_branch_build_is_a_separate_read_only_one_field_workflow(self) -> None:
+        workflow = (ROOT / ".github/workflows/build-branch.yml").read_text(encoding="utf-8")
+        input_block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertRegex(input_block, r"(?m)^      branch:$")
+        self.assertEqual(len(re.findall(r"(?m)^      [A-Za-z_][A-Za-z0-9_]*:$", input_block)), 1)
+        self.assertIn("contents: read", workflow)
+        self.assertNotIn("contents: write", workflow)
+        self.assertIn("git ls-remote --exit-code --heads", workflow)
+        self.assertIn("tools.otastctl --repo-root \"$GITHUB_WORKSPACE\" build", workflow)
+        self.assertIn("validate-zip", workflow)
+        self.assertIn("actions/upload-artifact@v4", workflow)
+        self.assertIn("name: otast-branch-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
+        for forbidden in ("gh release", "update.json", "device-proof", "build-release", "verify-release"):
+            self.assertNotIn(forbidden, workflow)
+
+    def test_release_metadata_has_no_stale_display_version_duplication(self) -> None:
+        customize = (ROOT / "module/customize.sh").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        release_docs = (ROOT / "docs/RELEASES.md").read_text(encoding="utf-8")
+        self.assertIn('s/^version=//p', customize)
+        self.assertIn('"$MODPATH/module.prop"', customize)
+        self.assertNotIn("v1.0.0-rc.3", customize)
+        self.assertNotIn("v1.0.0-rc.3", readme)
+        self.assertIn("GitHub Releases", readme)
+        self.assertIn("RELEASE.md", release_docs)
+        self.assertNotIn("defaults to validation only", release_docs)
 
     def test_source_tree_has_no_symlinks_or_unsafe_git_path(self) -> None:
         git_path = ROOT / ".git"
