@@ -12,8 +12,17 @@ REPOSITORY = "cbkii/otast"
 UPDATE_JSON_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/main/update.json"
 CHANGELOG_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/main/CHANGELOG.md"
 VERSION_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SOURCE_SHA_RE = re.compile(r"^(?:unknown|[0-9a-f]{40}|[0-9a-f]{64})$")
+MANIFEST_KEYS = {
+    "schema_version",
+    "version",
+    "version_code",
+    "source_commit",
+    "zip_filename",
+    "zip_sha256",
+    "checksum_filename",
+    "release_tag",
+}
 
 
 def _parse_properties(text: str, *, label: str) -> dict[str, str]:
@@ -49,7 +58,7 @@ def expected_update_metadata(version: str, version_code: int) -> dict[str, objec
 def _read_checksum(checksum_path: Path, expected_basename: str) -> str:
     try:
         lines = checksum_path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise OtastError(f"cannot read checksum sidecar: {checksum_path}") from exc
     if len(lines) != 1:
         raise OtastError("checksum sidecar must contain exactly one line")
@@ -60,6 +69,35 @@ def _read_checksum(checksum_path: Path, expected_basename: str) -> str:
     if basename != expected_basename:
         raise OtastError(f"checksum sidecar names {basename}, expected {expected_basename}")
     return digest
+
+
+def _load_manifest(manifest_path: Path) -> dict[str, object]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OtastError(f"invalid release manifest: {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise OtastError("release manifest must be a JSON object")
+    if set(manifest) != MANIFEST_KEYS:
+        raise OtastError("release manifest fields do not match schema 1")
+    if manifest.get("schema_version") != 1:
+        raise OtastError("release manifest schema_version must be 1")
+    return manifest
+
+
+def _manifest_identity(manifest: dict[str, object]) -> tuple[str, int, str]:
+    version = manifest.get("version")
+    version_code = manifest.get("version_code")
+    source_commit = manifest.get("source_commit")
+    if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
+        raise OtastError("release manifest version is invalid")
+    if not isinstance(version_code, int) or isinstance(version_code, bool) or version_code <= 0:
+        raise OtastError("release manifest version_code is invalid")
+    if not isinstance(source_commit, str) or not SOURCE_SHA_RE.fullmatch(source_commit):
+        raise OtastError("release manifest source_commit is invalid")
+    if manifest.get("release_tag") != version:
+        raise OtastError("release manifest tag/version mismatch")
+    return version, version_code, source_commit
 
 
 def build_release_bundle(repo_root: Path, output_dir: Path, *, commit_sha: str = "unknown") -> dict[str, object]:
@@ -100,43 +138,32 @@ def build_release_bundle(repo_root: Path, output_dir: Path, *, commit_sha: str =
 
 def verify_release_bundle(zip_path: Path, checksum_path: Path, manifest_path: Path) -> dict[str, object]:
     validate_module_zip(zip_path)
-    recorded_digest = _read_checksum(checksum_path, zip_path.name)
     actual_digest = sha256_file(zip_path)
-    if recorded_digest != actual_digest:
-        raise OtastError("release ZIP SHA-256 does not match checksum sidecar")
-
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise OtastError(f"invalid release manifest: {manifest_path}") from exc
-    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
-        raise OtastError("release manifest schema_version must be 1")
-
-    version = manifest.get("version")
-    version_code = manifest.get("version_code")
-    source_commit = manifest.get("source_commit")
-    if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
-        raise OtastError("release manifest version is invalid")
-    if not isinstance(version_code, int) or version_code <= 0:
-        raise OtastError("release manifest version_code is invalid")
-    if not isinstance(source_commit, str) or not SOURCE_SHA_RE.fullmatch(source_commit):
-        raise OtastError("release manifest source_commit is invalid")
+    manifest = _load_manifest(manifest_path)
+    version, version_code, source_commit = _manifest_identity(manifest)
 
     expected_zip = expected_asset_name(version)
-    if manifest.get("release_tag") != version:
-        raise OtastError("release manifest tag/version mismatch")
-    if manifest.get("zip_filename") != expected_zip or zip_path.name != expected_zip:
+    expected_checksum = f"{expected_zip}.sha256"
+    if zip_path.name != expected_zip or manifest.get("zip_filename") != expected_zip:
         raise OtastError("release manifest ZIP filename mismatch")
-    if manifest.get("checksum_filename") != checksum_path.name:
-        raise OtastError("release manifest checksum filename mismatch")
+    if checksum_path.name != expected_checksum or manifest.get("checksum_filename") != expected_checksum:
+        raise OtastError("release checksum filename mismatch")
+
+    recorded_digest = _read_checksum(checksum_path, expected_zip)
+    if recorded_digest != actual_digest:
+        raise OtastError("release ZIP SHA-256 does not match checksum sidecar")
     if manifest.get("zip_sha256") != actual_digest:
         raise OtastError("release manifest ZIP SHA-256 mismatch")
 
-    with zipfile.ZipFile(zip_path) as archive:
-        embedded_metadata = _parse_properties(archive.read("module.prop").decode("utf-8"), label="embedded module.prop")
-        release_properties = _parse_properties(
-            archive.read("release.properties").decode("utf-8"), label="embedded release.properties"
-        )
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            embedded_text = archive.read("module.prop").decode("utf-8")
+            release_text = archive.read("release.properties").decode("utf-8")
+    except (KeyError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+        raise OtastError("release ZIP embedded metadata is missing, corrupt or not UTF-8") from exc
+
+    embedded_metadata = _parse_properties(embedded_text, label="embedded module.prop")
+    release_properties = _parse_properties(release_text, label="embedded release.properties")
 
     if embedded_metadata.get("id") != "otast":
         raise OtastError("embedded module ID mismatch")
@@ -146,6 +173,8 @@ def verify_release_bundle(zip_path: Path, checksum_path: Path, manifest_path: Pa
         raise OtastError("embedded module versionCode does not match release manifest")
     if embedded_metadata.get("updateJson") != UPDATE_JSON_URL:
         raise OtastError("embedded module updateJson is not the stable OTAST update channel")
+    if release_properties.get("schema_version") != "1":
+        raise OtastError("release.properties schema_version mismatch")
     if release_properties.get("version") != version:
         raise OtastError("release.properties version mismatch")
     if release_properties.get("version_code") != str(version_code):
@@ -175,7 +204,7 @@ def validate_update_metadata(data: object, *, expected: dict[str, object] | None
     version_code = data.get("versionCode")
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise OtastError("update metadata version is invalid")
-    if not isinstance(version_code, int) or version_code <= 0:
+    if not isinstance(version_code, int) or isinstance(version_code, bool) or version_code <= 0:
         raise OtastError("update metadata versionCode is invalid")
     canonical = expected_update_metadata(version, version_code)
     if data != canonical:
@@ -188,20 +217,19 @@ def validate_update_metadata(data: object, *, expected: dict[str, object] | None
 def load_update_metadata(path: Path, *, expected: dict[str, object] | None = None) -> dict[str, object]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OtastError(f"invalid update metadata: {path}") from exc
     return validate_update_metadata(data, expected=expected)
 
 
 def update_metadata_from_manifest(manifest_path: Path) -> dict[str, object]:
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise OtastError(f"invalid release manifest: {manifest_path}") from exc
-    version = manifest.get("version") if isinstance(manifest, dict) else None
-    version_code = manifest.get("version_code") if isinstance(manifest, dict) else None
-    if not isinstance(version, str) or not isinstance(version_code, int):
-        raise OtastError("release manifest cannot generate update metadata")
+    manifest = _load_manifest(manifest_path)
+    version, version_code, _ = _manifest_identity(manifest)
+    expected_zip = expected_asset_name(version)
+    if manifest.get("zip_filename") != expected_zip:
+        raise OtastError("release manifest ZIP filename mismatch")
+    if manifest.get("checksum_filename") != f"{expected_zip}.sha256":
+        raise OtastError("release manifest checksum filename mismatch")
     return expected_update_metadata(version, version_code)
 
 
