@@ -115,8 +115,17 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("contents: write", workflow)
         self.assertIn("inputs.operation == 'draft'", workflow)
         self.assertIn("inputs.operation == 'publish'", workflow)
+        self.assertIn("group: release-${{ github.repository }}", workflow)
+        self.assertNotIn("group: release-${{ github.repository }}-${{", workflow)
+        self.assertEqual(workflow.count('if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then'), 2)
 
-        branch_job = workflow.split("  build-branch:\n", 1)[1].split("  prepare-release:\n", 1)[0]
+        branch_marker = "  build-branch:\n"
+        prepare_marker = "  prepare-release:\n"
+        publish_marker = "  publish-release:\n"
+        for marker in (branch_marker, prepare_marker, publish_marker):
+            self.assertIn(marker, workflow)
+
+        branch_job = workflow.split(branch_marker, 1)[1].split(prepare_marker, 1)[0]
         self.assertIn("git ls-remote --exit-code --heads", branch_job)
         self.assertIn("actions/upload-artifact@v4", branch_job)
         self.assertIn("validate-zip", branch_job)
@@ -129,7 +138,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertNotIn("update.json", branch_job)
         self.assertNotIn("device-proof", branch_job)
 
-        prepare_job = workflow.split("  prepare-release:\n", 1)[1].split("  publish-release:\n", 1)[0]
+        prepare_job = workflow.split(prepare_marker, 1)[1].split(publish_marker, 1)[0]
         self.assertIn("git/ref/tags/$VERSION", prepare_job)
         self.assertIn("git/refs/tags/$VERSION", prepare_job)
         self.assertIn("-F force=true", prepare_job)
@@ -137,7 +146,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn('tag_sha == "$SOURCE_SHA"', prepare_job)
         self.assertIn("proven assets are immutable", prepare_job)
 
-        publish_job = workflow.split("  publish-release:\n", 1)[1]
+        publish_job = workflow.split(publish_marker, 1)[1]
         self.assertNotIn("build-release.sh", publish_job)
         self.assertNotIn("gh release create", publish_job)
         self.assertIn("validate-device-release-proof.py", publish_job)
