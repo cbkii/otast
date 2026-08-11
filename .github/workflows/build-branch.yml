@@ -1,0 +1,90 @@
+name: Build Branch
+run-name: Build branch ${{ inputs.branch != '' && inputs.branch || 'main' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to build (blank = main)
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-branch-${{ github.repository }}-${{ inputs.branch != '' && inputs.branch || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository metadata
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve selected branch head
+        id: source
+        shell: bash
+        env:
+          BRANCH_INPUT: ${{ inputs.branch }}
+        run: |
+          branch=${BRANCH_INPUT:-main}
+          if ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+            printf 'Invalid branch name: %s\n' "$branch" >&2
+            exit 2
+          fi
+          if ! git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            printf 'Branch does not exist in %s: %s\n' "$GITHUB_REPOSITORY" "$branch" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/heads/$branch"
+          git checkout --detach FETCH_HEAD
+          resolved=$(git rev-parse HEAD)
+          printf 'branch=%s\n' "$branch" >>"$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$resolved" >>"$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build and structurally validate Magisk ZIP
+        shell: bash
+        env:
+          SOURCE_BRANCH: ${{ steps.source.outputs.branch }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" build \
+            --output dist \
+            --commit-sha "$SOURCE_SHA"
+          shopt -s nullglob
+          zips=(dist/otast-v*.zip)
+          if ((${#zips[@]} != 1)); then
+            printf 'Expected exactly one OTAST Magisk ZIP, found %s.\n' "${#zips[@]}" >&2
+            exit 1
+          fi
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-zip "${zips[0]}"
+          {
+            printf '## BRANCH BUILD SUCCESS\n\n'
+            printf -- '- Branch: `%s`\n' "$SOURCE_BRANCH"
+            printf -- '- Commit: `%s`\n' "$SOURCE_SHA"
+            printf -- '- ZIP: `%s`\n' "${zips[0]#dist/}"
+            printf '\nThis is an Actions artifact only. It does not create or modify releases, tags, physical proof, or stable update metadata.\n'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Magisk ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: otast-${{ steps.source.outputs.branch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/otast-v*.zip
+          if-no-files-found: error
+          retention-days: 14
