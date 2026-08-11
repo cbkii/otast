@@ -96,6 +96,7 @@ jobs:
       - name: Build branch-head Magisk ZIP without release gating
         shell: bash
         env:
+          SOURCE_BRANCH: ${{ steps.source.outputs.branch }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           if ! python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" build \
@@ -115,7 +116,7 @@ jobs:
             exit 1
           fi
           printf 'BRANCH BUILD SUCCESS\n\n' >>"$GITHUB_STEP_SUMMARY"
-          printf -- '- Branch: `%s`\n' "${{ steps.source.outputs.branch }}" >>"$GITHUB_STEP_SUMMARY"
+          printf -- '- Branch: `%s`\n' "$SOURCE_BRANCH" >>"$GITHUB_STEP_SUMMARY"
           printf -- '- Commit: `%s`\n' "$SOURCE_SHA" >>"$GITHUB_STEP_SUMMARY"
           printf -- '- ZIP: `%s`\n' "${zips[0]#dist/}" >>"$GITHUB_STEP_SUMMARY"
           printf '\nThis build is an Actions artifact only; production release checksum/proof/update gates were intentionally bypassed.\n' >>"$GITHUB_STEP_SUMMARY"
@@ -386,12 +387,17 @@ jobs:
         run: |
           is_draft=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft) || exit 1
           if [[ $is_draft == true ]]; then
-            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+            if [[ $VERSION == *-* ]]; then
+              gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+            else
+              gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+            fi
           else
-            printf 'Release %s is already published; continuing with idempotent updater-channel verification.\n' "$VERSION"
+            printf 'Release %s is already published; continuing with idempotent publication verification.\n' "$VERSION"
           fi
 
       - name: Synchronize stable Magisk update metadata
+        if: ${{ !contains(steps.release.outputs.version, '-') }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -400,9 +406,10 @@ jobs:
           ZIP: ${{ steps.validate.outputs.zip }}
           EXPECTED_SHA: ${{ steps.validate.outputs.digest }}
         run: |
-          published=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,assets) || exit 1
+          published=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets) || exit 1
           is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$published") || exit 1
-          [[ $is_draft == false ]] || { printf 'Release is still a draft after publication step.\n' >&2; exit 1; }
+          is_prerelease=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isPrerelease"]).lower())' <<<"$published") || exit 1
+          [[ $is_draft == false && $is_prerelease == false ]] || { printf 'Final release state is not publishable to the stable Magisk channel.\n' >&2; exit 1; }
           has_zip=$(ZIP="$ZIP" python3 -c 'import json,os,sys; data=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["ZIP"] for a in data.get("assets", [])) else "no")' <<<"$published") || exit 1
           [[ $has_zip == yes ]] || { printf 'Published release is missing expected Magisk ZIP.\n' >&2; exit 1; }
 
@@ -461,4 +468,35 @@ jobs:
             printf -- '- ZIP: `%s`\n' "$ZIP"
             printf -- '- SHA-256: `%s`\n' "$EXPECTED_SHA"
             printf -- '- Magisk update channel: `https://raw.githubusercontent.com/%s/main/update.json`\n' "$GITHUB_REPOSITORY"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Verify prerelease publication without stable-channel mutation
+        if: ${{ contains(steps.release.outputs.version, '-') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          ZIP: ${{ steps.validate.outputs.zip }}
+          EXPECTED_SHA: ${{ steps.validate.outputs.digest }}
+        run: |
+          published=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets) || exit 1
+          is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$published") || exit 1
+          is_prerelease=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isPrerelease"]).lower())' <<<"$published") || exit 1
+          [[ $is_draft == false && $is_prerelease == true ]] || { printf 'Prerelease was not published with prerelease state.\n' >&2; exit 1; }
+          has_zip=$(ZIP="$ZIP" python3 -c 'import json,os,sys; data=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["ZIP"] for a in data.get("assets", [])) else "no")' <<<"$published") || exit 1
+          [[ $has_zip == yes ]] || { printf 'Published prerelease is missing expected Magisk ZIP.\n' >&2; exit 1; }
+          remote="$RUNNER_TEMP/published-prerelease-asset"
+          rm -rf -- "$remote"
+          mkdir -p -- "$remote"
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$ZIP" --dir "$remote"
+          published_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}') || exit 1
+          [[ $published_sha == "$EXPECTED_SHA" ]] || {
+            printf 'Published prerelease ZIP digest differs from the physically proven ZIP.\n' >&2
+            exit 1
+          }
+          {
+            printf '## PRERELEASE %s PUBLISHED\n\n' "$VERSION"
+            printf -- '- ZIP: `%s`\n' "$ZIP"
+            printf -- '- SHA-256: `%s`\n' "$EXPECTED_SHA"
+            printf '\nStable Magisk `update.json` was intentionally left unchanged.\n'
           } >>"$GITHUB_STEP_SUMMARY"
