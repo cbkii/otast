@@ -95,21 +95,23 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("legacy ota-sot/otasst governor traces remain", capture)
         self.assertIn("/data/adb/post-fs-data.d/000-$legacy_otasst.sh", capture)
 
-    def test_production_release_workflow_has_only_three_user_inputs(self) -> None:
+    def test_production_release_workflow_has_four_user_inputs(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertNotIn("permissions: write-all", workflow)
+        self.assertIn("\npermissions:\n", workflow)
         input_block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
-        self.assertRegex(input_block, r"(?m)^      action:$")
-        self.assertRegex(input_block, r"(?m)^      version:$")
-        self.assertRegex(input_block, r"(?m)^      full_validation:$")
-        self.assertEqual(len(re.findall(r"(?m)^      [A-Za-z_][A-Za-z0-9_]*:$", input_block)), 3)
+        for key in ("action", "version", "full_validation", "physical_proof"):
+            self.assertRegex(input_block, rf"(?m)^      {key}:$")
+        self.assertEqual(len(re.findall(r"(?m)^      [A-Za-z_][A-Za-z0-9_]*:$", input_block)), 4)
         for removed in ("branch:", "tag:", "operation:", "versionCode:", "legacy"):
             self.assertNotIn(removed, input_block.lower())
         self.assertIn("- prepare-release", input_block)
         self.assertIn("- publish-release", input_block)
         self.assertNotIn("build-branch", input_block)
-        self.assertIn("type: boolean", input_block)
-        self.assertIn("default: true", input_block)
+        proof_block = input_block.split("      physical_proof:\n", 1)[1]
+        self.assertIn("type: boolean", proof_block)
+        self.assertIn("default: true", proof_block)
+        self.assertIn("Require Pixel physical-device proof before publishing", proof_block)
 
     def test_production_release_workflow_preserves_release_safety_contract(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -126,7 +128,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("verify-release", workflow)
         self.assertIn("release-manifest.json", workflow)
         self.assertIn("validate-device-release-proof.py", workflow)
-        self.assertIn("select-proven-release", workflow)
+        self.assertIn("select-release-candidate.py", workflow)
         self.assertIn("generate-update-json", workflow)
         self.assertIn("proven assets are immutable", workflow)
         self.assertIn("main moved during release preparation", workflow)
@@ -134,6 +136,11 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("release-update/", workflow)
         self.assertIn("contents: write", workflow)
         self.assertIn("pull-requests: write", workflow)
+        self.assertIn("OWNER BYPASS", workflow)
+        self.assertIn("Require Pixel physical-device proof before publishing", workflow)
+        self.assertIn("Draft has no Git tag yet; this is normal", workflow)
+        self.assertIn("target_commitish", workflow)
+        self.assertIn("Verify published tag and release identity", workflow)
 
         prepare_marker = "  prepare-release:\n"
         publish_marker = "  publish-release:\n"
@@ -149,6 +156,17 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("--draft=false --latest", publish_job)
         self.assertIn("if: ${{ !contains(steps.release.outputs.version, '-') }}", publish_job)
         self.assertIn("if: ${{ contains(steps.release.outputs.version, '-') }}", publish_job)
+
+    def test_manual_publish_proof_is_optional_but_bundle_integrity_is_not(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        publish = workflow.split("  publish-release:\n", 1)[1]
+        self.assertIn("REQUIRE_PHYSICAL_PROOF: ${{ inputs.physical_proof }}", publish)
+        self.assertIn("[[ $REQUIRE_PHYSICAL_PROOF == true ]] && args+=(--require-proof)", publish)
+        self.assertIn("elif [[ $REQUIRE_PHYSICAL_PROOF == true ]]", publish)
+        self.assertIn("proof_state='NOT PROVIDED (OWNER BYPASS)'", publish)
+        self.assertIn("verify-release", publish)
+        self.assertIn("--checksum", publish)
+        self.assertIn("--manifest", publish)
 
     def test_branch_build_is_a_separate_read_only_one_field_workflow(self) -> None:
         workflow = (ROOT / ".github/workflows/build-branch.yml").read_text(encoding="utf-8")
