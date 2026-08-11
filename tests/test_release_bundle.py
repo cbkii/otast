@@ -59,6 +59,15 @@ class ReleaseBundleTests(unittest.TestCase):
         with self.assertRaises(OtastError):
             verify_release_bundle(self.zip_path, self.checksum_path, self.manifest_path)
 
+    def test_renamed_checksum_sidecar_is_rejected(self) -> None:
+        renamed = self.checksum_path.with_name("renamed.sha256")
+        self.checksum_path.replace(renamed)
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["checksum_filename"] = renamed.name
+        self.manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with self.assertRaises(OtastError):
+            verify_release_bundle(self.zip_path, renamed, self.manifest_path)
+
     def test_wrong_checksum_digest_is_rejected(self) -> None:
         self.checksum_path.write_text(f"{'0' * 64}  {self.zip_path.name}\n", encoding="utf-8")
         with self.assertRaises(OtastError):
@@ -67,6 +76,13 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_manifest_mismatch_is_rejected(self) -> None:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         manifest["version_code"] += 1
+        self.manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with self.assertRaises(OtastError):
+            verify_release_bundle(self.zip_path, self.checksum_path, self.manifest_path)
+
+    def test_manifest_extra_field_is_rejected(self) -> None:
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["unexpected"] = "value"
         self.manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         with self.assertRaises(OtastError):
             verify_release_bundle(self.zip_path, self.checksum_path, self.manifest_path)
