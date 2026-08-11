@@ -87,6 +87,7 @@ gh auth status --hostname github.com >/dev/null 2>&1 || {
     printf 'STOP: GitHub CLI is not authenticated. Run: gh auth login --hostname github.com\n' >&2
     exit 1
 }
+REAL_GH=$(command -v gh)
 
 TMP_BASE=${TMPDIR:-${HOME:?}/.cache/otast/tmp}
 mkdir -p -- "$TMP_BASE" || exit 1
@@ -101,14 +102,14 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 fetch_remote_file() {
-    local path=$1 output=$2
+    local path=$1 output=$2 encoded
     if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         git -C "$REPO_ROOT" fetch --quiet origin main >/dev/null 2>&1 || true
         if git -C "$REPO_ROOT" show "origin/main:$path" >"$output" 2>/dev/null; then
             return 0
         fi
     fi
-    encoded=$(gh api "repos/$REPO_SLUG/contents/$path?ref=main" --jq .content 2>/dev/null) || return 1
+    encoded=$("$REAL_GH" api "repos/$REPO_SLUG/contents/$path?ref=main" --jq .content 2>/dev/null) || return 1
     printf '%s' "$encoded" | tr -d '\n' | base64 -d >"$output"
 }
 
@@ -122,7 +123,6 @@ fetch_remote_file module/module.prop "$WORK/module.prop" || {
 }
 
 resolved=$(PYTHONPATH="$REPO_ROOT" python3 - "$WORK/update.json" "$WORK/module.prop" "$REQUESTED_VERSION" <<'PY'
-import json
 import sys
 from pathlib import Path
 from tools.otastctl.build import module_metadata
@@ -141,11 +141,112 @@ VERSION_CODE=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["version_
 STABLE_VERSION=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["stable_version"])' <<<"$resolved") || exit 1
 printf '[INFO] Release identity: stable=%s candidate=%s versionCode=%s\n' "$STABLE_VERSION" "$VERSION" "$VERSION_CODE"
 
+AUTO_PUBLISH=${OTAST_RELEASE_WRAPPER_AUTOPUBLISH:-}
+if [[ -z $AUTO_PUBLISH ]]; then
+    if ((USER_NO_PUBLISH)); then AUTO_PUBLISH=0; else AUTO_PUBLISH=1; fi
+fi
+
+proof_name="otast-${VERSION}-device-proof.json"
+release_state() {
+    "$REAL_GH" release view "$VERSION" -R "$REPO_SLUG" --json isDraft,assets 2>/dev/null
+}
+
+release_has_proof() {
+    local value=$1
+    PROOF_NAME="$proof_name" python3 -c '
+import json,os,sys
+value=json.load(sys.stdin)
+print("yes" if any(a.get("name")==os.environ["PROOF_NAME"] for a in value.get("assets", [])) else "no")
+' <<<"$value"
+}
+
+mark_private_state_complete() {
+    local state=${HOME:?}/.local/state/otast-release/$VERSION/state.env tmp
+    [[ -f $state && ! -L $state ]] || return 0
+    tmp=$state.wrapper.$$
+    awk 'BEGIN{done=0} /^PHASE=/{print "PHASE=COMPLETE"; done=1; next} {print} END{if(!done) print "PHASE=COMPLETE"}' "$state" >"$tmp" || return 1
+    chmod 0600 -- "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$state"
+}
+
+publication_prompt() {
+    local answer
+    if ((YES)); then
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        printf 'PASS physical proof is present. Re-run with --yes to publish %s.\n' "$VERSION"
+        return 1
+    fi
+    printf 'Publish the physically proven %s release now? [y/N] ' "$VERSION"
+    if ! IFS= read -r -t 30 answer; then
+        printf '\nPublication not requested.\n'
+        return 1
+    fi
+    case $answer in y|Y|yes|YES) return 0 ;; *) printf 'Publication not requested.\n'; return 1 ;; esac
+}
+
+dispatch_publication() {
+    local dispatch_at run_id runs attempt
+    publication_prompt || return 0
+    printf '[INFO] Dispatching publication for physically proven %s\n' "$VERSION"
+    dispatch_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1
+    "$REAL_GH" workflow run "$WORKFLOW" -R "$REPO_SLUG" --ref main \
+        -f action=publish-release -f "version=$VERSION" -f full_validation=true || {
+        printf 'STOP: cannot dispatch publication workflow. Physical proof remains preserved.\n' >&2
+        return 1
+    }
+
+    run_id=
+    for ((attempt=1; attempt<=30; attempt+=1)); do
+        runs=$("$REAL_GH" run list -R "$REPO_SLUG" --workflow "$WORKFLOW" --branch main \
+            --event workflow_dispatch --limit 30 --json databaseId,displayTitle,createdAt 2>/dev/null) || runs='[]'
+        run_id=$(EXPECTED="Release publish-release $VERSION" SINCE="$dispatch_at" python3 -c '
+import json,os,sys
+items=[r for r in json.load(sys.stdin) if r.get("displayTitle")==os.environ["EXPECTED"] and (r.get("createdAt") or "") >= os.environ["SINCE"]]
+items.sort(key=lambda r:r.get("createdAt", ""), reverse=True)
+print(items[0]["databaseId"] if items else "")
+' <<<"$runs")
+        [[ -n $run_id ]] && break
+        sleep 4
+    done
+    [[ -n $run_id ]] || {
+        printf 'STOP: publication workflow was dispatched but its run could not be identified. Physical proof remains preserved.\n' >&2
+        return 1
+    }
+
+    if ! "$REAL_GH" run watch "$run_id" -R "$REPO_SLUG" --exit-status; then
+        "$REAL_GH" run view "$run_id" -R "$REPO_SLUG" --log-failed 2>/dev/null || true
+        printf 'STOP: publication workflow failed. Physical proof remains preserved; rerun otast release to retry the same candidate.\n' >&2
+        return 1
+    fi
+    mark_private_state_complete || true
+    printf '\nRELEASE COMPLETE: %s\n' "$VERSION"
+    return 0
+}
+
+# A previous publish attempt may have made the exact proven release public before
+# stable updater synchronization failed. In that state do not re-enter physical
+# qualification: retry the idempotent publish workflow against the same version.
+existing=$(release_state) || existing=
+if [[ -n $existing ]]; then
+    has_proof=$(release_has_proof "$existing") || has_proof=no
+    is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$existing")
+    if [[ $has_proof == yes && $is_draft == false ]]; then
+        if [[ $AUTO_PUBLISH == 1 ]]; then
+            dispatch_publication
+            exit $?
+        fi
+        printf 'Release %s is already public and has physical proof.\n' "$VERSION"
+        exit 0
+    fi
+fi
+
 # Preserve the qualified physical lifecycle byte-for-byte from the release
 # workflow overhaul commit. Prefer local Git history; fall back to authenticated
 # GitHub retrieval for source-package checkouts without history.
 if ! git -C "$REPO_ROOT" show "$LEGACY_RELEASE_COMMIT:scripts/release-device.sh" >"$LEGACY_SCRIPT" 2>/dev/null; then
-    encoded=$(gh api "repos/$REPO_SLUG/contents/scripts/release-device.sh?ref=$LEGACY_RELEASE_COMMIT" --jq .content 2>/dev/null) || {
+    encoded=$("$REAL_GH" api "repos/$REPO_SLUG/contents/scripts/release-device.sh?ref=$LEGACY_RELEASE_COMMIT" --jq .content 2>/dev/null) || {
         printf 'STOP: cannot retrieve the qualified physical release lifecycle.\n' >&2
         exit 1
     }
@@ -153,7 +254,6 @@ if ! git -C "$REPO_ROOT" show "$LEGACY_RELEASE_COMMIT:scripts/release-device.sh"
 fi
 chmod 0700 -- "$LEGACY_SCRIPT" || exit 1
 
-REAL_GH=$(command -v gh)
 cat >"$SHIM_DIR/gh" <<'SHIM'
 #!/usr/bin/env bash
 set -u
@@ -205,14 +305,6 @@ fi
 SHIM
 chmod 0700 -- "$SHIM_DIR/gh" || exit 1
 
-# Always make the retained lifecycle stop after uploading physical proof. This
-# wrapper owns publication so a workflow failure can never be mistaken for a
-# completed release merely because GitHub briefly/publicly changed draft state.
-AUTO_PUBLISH=${OTAST_RELEASE_WRAPPER_AUTOPUBLISH:-}
-if [[ -z $AUTO_PUBLISH ]]; then
-    if ((USER_NO_PUBLISH)); then AUTO_PUBLISH=0; else AUTO_PUBLISH=1; fi
-fi
-
 legacy_args=()
 skip_next=0
 for ((i=0; i<${#ORIGINAL_ARGS[@]}; i+=1)); do
@@ -224,6 +316,9 @@ for ((i=0; i<${#ORIGINAL_ARGS[@]}; i+=1)); do
         *) legacy_args+=("${ORIGINAL_ARGS[i]}") ;;
     esac
 done
+# The retained lifecycle always stops after proof upload. This wrapper alone may
+# request publication, preventing partial GitHub publication from being mistaken
+# for a completed release when updater synchronization still failed.
 legacy_args+=(--version "$VERSION" --no-publish)
 
 PATH="$SHIM_DIR:$PATH" OTAST_REAL_GH="$REAL_GH" OTAST_RELEASE_WRAPPER_AUTOPUBLISH="$AUTO_PUBLISH" \
@@ -236,57 +331,9 @@ if [[ $AUTO_PUBLISH != 1 ]]; then
     exit 0
 fi
 
-proof="otast-${VERSION}-device-proof.json"
-release_json=$("$REAL_GH" release view "$VERSION" -R "$REPO_SLUG" --json isDraft,assets 2>/dev/null) || exit 0
-has_proof=$(PROOF_NAME="$proof" python3 -c '
-import json,os,sys
-value=json.load(sys.stdin)
-print("yes" if any(a.get("name")==os.environ["PROOF_NAME"] for a in value.get("assets", [])) else "no")
-' <<<"$release_json")
+existing=$(release_state) || exit 0
+has_proof=$(release_has_proof "$existing") || has_proof=no
 [[ $has_proof == yes ]] || exit 0
 
-if ((YES == 0)); then
-    if [[ ! -t 0 ]]; then
-        printf 'PASS physical proof uploaded. Re-run with --yes to publish %s.\n' "$VERSION"
-        exit 0
-    fi
-    printf 'Publish the physically proven %s release now? [y/N] ' "$VERSION"
-    if ! IFS= read -r -t 30 answer; then
-        printf '\nPublication not requested.\n'
-        exit 0
-    fi
-    case $answer in y|Y|yes|YES) ;; *) printf 'Publication not requested.\n'; exit 0 ;; esac
-fi
-
-printf '[INFO] Dispatching publication for physically proven %s\n' "$VERSION"
-dispatch_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || exit 1
-"$REAL_GH" workflow run "$WORKFLOW" -R "$REPO_SLUG" --ref main \
-    -f action=publish-release -f "version=$VERSION" -f full_validation=true || {
-    printf 'STOP: cannot dispatch publication workflow. Physical proof remains preserved.\n' >&2
-    exit 1
-}
-
-run_id=
-for ((attempt=1; attempt<=30; attempt+=1)); do
-    runs=$("$REAL_GH" run list -R "$REPO_SLUG" --workflow "$WORKFLOW" --branch main \
-        --event workflow_dispatch --limit 30 --json databaseId,displayTitle,createdAt 2>/dev/null) || runs='[]'
-    run_id=$(EXPECTED="Release publish-release $VERSION" SINCE="$dispatch_at" python3 -c '
-import json,os,sys
-items=[r for r in json.load(sys.stdin) if r.get("displayTitle")==os.environ["EXPECTED"] and (r.get("createdAt") or "") >= os.environ["SINCE"]]
-items.sort(key=lambda r:r.get("createdAt", ""), reverse=True)
-print(items[0]["databaseId"] if items else "")
-' <<<"$runs")
-    [[ -n $run_id ]] && break
-    sleep 4
-done
-[[ -n $run_id ]] || {
-    printf 'STOP: publication workflow was dispatched but its run could not be identified. Physical proof remains preserved.\n' >&2
-    exit 1
-}
-
-if ! "$REAL_GH" run watch "$run_id" -R "$REPO_SLUG" --exit-status; then
-    "$REAL_GH" run view "$run_id" -R "$REPO_SLUG" --log-failed 2>/dev/null || true
-    printf 'STOP: publication workflow failed. Physical proof remains preserved; rerun otast release to retry the same candidate.\n' >&2
-    exit 1
-fi
-printf '\nRELEASE COMPLETE: %s\n' "$VERSION"
+dispatch_publication
+exit $?
