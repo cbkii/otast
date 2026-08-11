@@ -129,7 +129,7 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("qualified physical lifecycle byte-for-byte", text)
         self.assertIn("baseline recovery, exact draft install, Preflight, Apply, Verify", text)
         self.assertIn("idempotent second Apply, Restore and final Report", text)
-        self.assertIn("wrapper owns publication", text)
+        self.assertIn("This wrapper alone may", text)
         self.assertNotIn("magisk --install-module", text)
         self.assertNotIn("runtime/entry.sh apply", text)
 
