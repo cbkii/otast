@@ -84,7 +84,7 @@ jobs:
       - name: Upload Magisk ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: otast-${{ steps.source.outputs.branch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: otast-branch-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/otast-v*.zip
           if-no-files-found: error
           retention-days: 14
