@@ -208,6 +208,13 @@ class ReleaseBundleTests(unittest.TestCase):
         with self.assertRaises(OtastError):
             select_proven_draft([release_record("v1.0.1"), release_record("v1.1.0")])
 
+    def test_select_proven_draft_rejects_published_records(self) -> None:
+        published = release_record("v1.0.1", draft=False)
+        with self.assertRaises(OtastError):
+            select_proven_draft([published])
+        with self.assertRaises(OtastError):
+            select_proven_draft([published], requested_version="v1.0.1")
+
     def test_select_explicit_proven_draft(self) -> None:
         selected = select_proven_draft(
             [release_record("v1.0.1"), release_record("v1.1.0")], requested_version="v1.1.0"
@@ -215,6 +222,17 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertEqual(selected["version"], "v1.1.0")
         with self.assertRaises(OtastError):
             select_proven_draft([release_record("v1.1.0", proven=False)], requested_version="v1.1.0")
+
+    def test_selector_derives_prerelease_from_tag_not_remote_flag(self) -> None:
+        prerelease = release_record("v1.1.0-rc1")
+        prerelease["prerelease"] = False
+        selected = select_proven_draft([prerelease])
+        self.assertTrue(selected["prerelease"])
+
+        final = release_record("v1.1.0")
+        final["prerelease"] = True
+        selected = select_proven_draft([final])
+        self.assertFalse(selected["prerelease"])
 
     def test_update_metadata_is_generated_from_release_manifest(self) -> None:
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
