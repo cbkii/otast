@@ -121,6 +121,8 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v4", branch_job)
         self.assertIn("validate-zip", branch_job)
         self.assertIn("tools.otastctl --repo-root \"$GITHUB_WORKSPACE\" build", branch_job)
+        self.assertIn("SOURCE_BRANCH: ${{ steps.source.outputs.branch }}", branch_job)
+        self.assertNotIn('"${{ steps.source.outputs.branch }}"', branch_job)
         self.assertNotIn("build-release", branch_job)
         self.assertNotIn("verify-release", branch_job)
         self.assertNotIn("gh release", branch_job)
@@ -139,8 +141,15 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertNotIn("build-release.sh", publish_job)
         self.assertNotIn("gh release create", publish_job)
         self.assertIn("validate-device-release-proof.py", publish_job)
-        self.assertIn("draft=false --latest", publish_job)
+        self.assertIn('if [[ $VERSION == *-* ]]; then', publish_job)
+        self.assertIn("--draft=false --prerelease", publish_job)
+        self.assertIn("--draft=false --latest", publish_job)
+        self.assertIn("!contains(steps.release.outputs.version, '-')", publish_job)
+        self.assertIn("contains(steps.release.outputs.version, '-')", publish_job)
         self.assertIn("contents/update.json", publish_job)
+        prerelease_step = publish_job.split("Verify prerelease publication without stable-channel mutation", 1)[1]
+        self.assertNotIn("contents/update.json", prerelease_step)
+        self.assertNotIn("generate-update-json", prerelease_step)
 
     def test_source_tree_has_no_symlinks_or_unsafe_git_path(self) -> None:
         git_path = ROOT / ".git"
