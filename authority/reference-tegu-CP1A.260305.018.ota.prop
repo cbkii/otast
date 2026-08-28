@@ -1,6 +1,12 @@
+# Generated from the official CP1A.260305.018 Pixel 9a OTA/factory artifacts.
+# ro.boot.vbmeta.size=20480 is retained as artifact-derived provenance from the
+# current extractor. OTAST does not treat it as the runtime libavb size and does
+# not resetprop it; the bootloader currently reports androidboot.vbmeta.size=21888.
 boot.img.sha256=757ada5e6c5cd1dcd974d1d2793655c6ce8587a0ab7bff07c45f955a4fcc1f39
 ro.boot.vbmeta.digest=eaee3a963e2e51006ef3a8755279d42f10e2bae483d61cd6f5d858ea8b686eb1
 ro.boot.vbmeta.size=20480
+ro.boot.vbmeta.avb_version=1.3
+ro.boot.avb_version=1.3
 ro.build.fingerprint=google/tegu/tegu:16/CP1A.260305.018/14887507:user/release-keys
 ro.build.id=CP1A.260305.018
 ro.build.version.sdk=36
@@ -9,10 +15,12 @@ ro.vendor.build.security_patch=2026-03-05
 ro.product.device=tegu
 ro.product.manufacturer=Google
 ro.product.model=Pixel 9a
-otast.pif.spoofBuild=true
-otast.pif.spoofProps=true
-otast.pif.spoofProvider=true
-otast.pif.spoofSignature=true
-otast.pif.spoofVendingBuild=true
-otast.pif.spoofVendingSdk=true
-otast.pif.DEBUG=false
+otast.pif.identity=preserve
+otast.pif.spoofBuild=preserve
+otast.pif.spoofProps=preserve
+otast.pif.spoofProvider=preserve
+otast.pif.spoofSignature=preserve
+otast.pif.spoofVendingBuild=preserve
+otast.pif.spoofVendingSdk=preserve
+otast.pif.DEBUG=preserve
+otast.trickystore.securityPatch=preserve
