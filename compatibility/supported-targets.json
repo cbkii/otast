@@ -9,9 +9,17 @@
       "ro.boot.vbmeta.avb_version",
       "ro.boot.avb_version"
     ],
+    "runtime_vbmeta_keys": [
+      "ro.boot.vbmeta.digest",
+      "ro.boot.vbmeta.avb_version",
+      "ro.boot.avb_version"
+    ],
+    "provenance_only_vbmeta_keys": [
+      "ro.boot.vbmeta.size"
+    ],
     "sdk": 36
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "strict_exclusions": [
     "AshLooper",
     "AshReXcue",
@@ -80,7 +88,7 @@
           "ref": "inject_s AutoPIF crawler refresh reviewed 2026-08-10"
         }
       ],
-      "strategy": "configuration-preserving targeted transformation"
+      "strategy": "preserve current PIF identity/options by default; OTA identity takeover is explicit opt-in; competing security-patch writer remains neutralized"
     },
     "ta-utl": {
       "accepted_hashes": {
@@ -102,7 +110,7 @@
       },
       "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file",
       "reviewed_ref": "v4.4 installed writer contract",
-      "strategy": "exact v4.4 prop.sh transformation; VBMeta block only"
+      "strategy": "exact v4.4 prop.sh transformation; competing VBMeta block only"
     },
     "trickystore": {
       "asset_sha256": "2f5e73fcba0e4e43b6e96b38f333cbe394873e3a81cf8fe1b831c2fbd6c46ea9",
@@ -116,11 +124,11 @@
         "repository": "5ec1cff/TrickyStore"
       },
       "reviewed_ref": "1.4.1",
-      "strategy": "external contract"
+      "strategy": "preserve current security_patch.txt by default; OTA-derived rewrite is explicit opt-in"
     },
     "vbmeta-fixer": {
       "managed_templates": {
-        "service.sh": "134fbfc6263bb19f3612643ccbf078bb0a265dbdc59b102531fa85b8ff674ded"
+        "service.sh": "4a0313507955de8893bc149630b2abb6746b9b6d1c9ca3beb5f3d159730e9365"
       },
       "module_ids": [
         "vbmeta-fixer"
@@ -131,13 +139,15 @@
         "repository": "Zenlua/Android-VBMeta-Fixer"
       },
       "reviewed_commit": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
-      "strategy": "exact service replacement; sole managed runtime VBMeta owner"
+      "strategy": "neutralize upstream runtime writer; preserve bootloader/libavb runtime VBMeta values"
     },
     "yurikey": {
       "managed_templates": {
+        "action.sh": "c4914d13f27802c5df06cb1547d80110cc4747218367f4f55a91476eae4ba0fd",
         "apply.sh": "ce4d6ce0e30af2c606846975d5778a87bbe27615358d49d97d39cab536a97a1d",
         "clear-all.sh": "cd0af4eb16c7c422cdd9210afb5939fcdd638aac5acd3af4387860e91e1f0181",
-        "service.sh": "c5590491b50fb457ac836db1b887059db2f4a1a15e40aff919bcea16f36f4498"
+        "service.sh": "c5590491b50fb457ac836db1b887059db2f4a1a15e40aff919bcea16f36f4498",
+        "target_txt.sh": "5717af2b823f0da631cce93707400a9f11f746d06f951c2e8e668fac15157e61"
       },
       "module_ids": [
         "Yurikey"
@@ -155,9 +165,13 @@
         {
           "commit": "49d8e04cd256a8ac1df637dd816b112de6de2b36",
           "ref": "3.0.6"
+        },
+        {
+          "commit": "5330b77c0b797e580c582d43e91ceae5b450dce6",
+          "ref": "current upstream reviewed 2026-08-29"
         }
       ],
-      "strategy": "exact writer replacement"
+      "strategy": "replace authority/property writers, zero-digest fallback, root Action and all-packages target regeneration with fail-closed/read-only OTAST-owned entrypoints"
     }
   }
 }
