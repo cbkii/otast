@@ -1,6 +1,6 @@
 # OTAST — OTA Source of Truth
 
-OTAST is a transactional Magisk module for a **Pixel 9a (`tegu`) running Android 16**. It treats `/data/adb/ota.prop` as the sole authority for the device's OTA identity and keeps a reviewed set of interacting modules consistent with that authority.
+OTAST is a transactional Magisk module for a **Pixel 9a (`tegu`) running Android 16**. It treats `/data/adb/ota.prop` as the authority for OTA-derived platform identity and coordinates a reviewed set of interacting integrity modules without silently replacing user-selected runtime spoof configuration.
 
 This repository is the complete public source tree. It includes the Magisk module, deterministic release tooling, a fake-Magisk-root lifecycle harness, private device-fixture tooling, CI, target monitoring, and public-repository initialization checks.
 
@@ -10,26 +10,35 @@ This repository is the complete public source tree. It includes the Magisk modul
 
 OTAST currently supports reviewed profiles for:
 
-- PIF Inject (`playintegrityfix`): configuration-preserving transforms for `autopif.sh`, `autopif_ota.sh` and `pif.prop`, plus a narrow wrapper around the competing `security_patch.sh`; upstream Action, post-fs-data, service, WebUI and updater machinery stay intact.
-- TrickyStore (`tricky_store`): `/data/adb/tricky_store/security_patch.txt`.
-- Yurikey (`Yurikey`): exact replacement of reviewed authority-writing entrypoints only.
-- Tricky Addon Update Target List (`TA_utl` or `.TA_utl`): exact v4.4 `prop.sh` transformation that removes only the overlapping VBMeta block while retaining every other behavior.
-- Android VBMeta Fixer (`vbmeta-fixer`): the sole managed runtime writer for authoritative VBMeta digest, size and AVB versions, while preserving TrickyStore target registration.
+- PIF Inject (`playintegrityfix`): preserves the current PIF identity and spoof booleans by default. OTA identity takeover is explicit opt-in. The competing automatic security-patch writer remains neutralized; upstream Action, post-fs-data, service, WebUI and updater machinery otherwise stay upstream-owned.
+- TrickyStore (`tricky_store`): preserves the current `security_patch.txt` by default. OTA-derived patch alignment is explicit opt-in.
+- Yurikey (`Yurikey`): replaces reviewed authority/property writers, the empty-digest-to-zero fallback, the root Action and automatic all-packages TrickyStore target regeneration. Yurikey's Magisk Action becomes read-only Report by default.
+- Tricky Addon Update Target List (`TA_utl` or `.TA_utl`): exact reviewed `prop.sh` transformation that removes the overlapping VBMeta writer while retaining unrelated behavior.
+- Android VBMeta Fixer (`vbmeta-fixer`): if enabled and recognised, its upstream runtime property writer is neutralized. OTAST preserves the bootloader/libavb runtime VBMeta values rather than deriving replacements from block-device geometry.
 
-Unknown target hashes, unsafe links, authority/live-identity mismatch, active legacy `ota-sot`/`otasst` traces, competing PIF automatic patch generation, managed drift, malformed state, and incomplete transaction recovery all fail closed.
+Unknown target hashes, unsafe links, authority/source mismatch, active legacy `ota-sot`/`otasst` traces, competing PIF automatic patch generation, managed drift, malformed state, and incomplete transaction recovery all fail closed.
+
+## VBMeta evidence model
+
+`ota.prop` may contain `ro.boot.vbmeta.size` derived from the official OTA/factory artifacts. That value is retained as **artifact provenance**. It is not assumed to be identical to the runtime `androidboot.vbmeta.size` emitted by bootloader/libavb, and OTAST never `resetprop`s runtime VBMeta size.
+
+For runtime/source validation OTAST compares the OTA-derived VBMeta digest and AVB version with `/proc/bootconfig` when bootconfig is available. A mismatch in digest or AVB version blocks Preflight/Apply/Verify. The artifact/runtime size pair is reported side-by-side for diagnosis but is informational.
 
 ## Safety boundary
 
 OTAST:
 
 - reads authority from `/data/adb/ota.prop`;
+- separates official source identity from user-selected PIF/TrickyStore runtime policy;
+- defaults PIF identity/options and TrickyStore patch policy to `preserve`;
 - records original bytes before the first mutation;
 - writes through a journaled transaction;
 - verifies every managed hash and mode;
 - blocks Apply and Restore when target drift is detected;
 - recovers an interrupted transaction during `post-fs-data`;
 - does not run a polling service;
-- never scans unrelated module trees.
+- never scans unrelated module trees;
+- never uses Yurikey Action as an implicit multi-subsystem mutation trigger.
 
 The strict exclusions listed in `compatibility/supported-targets.json` are represented only as policy and test sentinels. Runtime discovery never names or traverses them.
 
@@ -79,17 +88,17 @@ Raw and sanitized device fixtures stay outside Git.
 
 See [Installation](docs/INSTALLATION.md) and [Configuration](docs/CONFIGURATION.md).
 
-After installation and reboot, use the Magisk module action or run the runtime entrypoint as root:
+After installation and reboot, use the Magisk module Action or run the runtime entrypoint as root:
 
 ```sh
 sh /data/adb/modules/otast/runtime/entry.sh report
 sh /data/adb/modules/otast/runtime/entry.sh preflight
-sh /data/adb/modules/otast/runtime/entry.sh apply
 sh /data/adb/modules/otast/runtime/entry.sh verify
+sh /data/adb/modules/otast/runtime/entry.sh apply
 sh /data/adb/modules/otast/runtime/entry.sh restore
 ```
 
-Run `preflight` before the first Apply and after any target-module update.
+`Report`, `Preflight` and `Verify` are read-only. The Action menu defaults to `Report` on timeout/no selection. Run `preflight` before the first Apply and after any target-module update.
 
 ## Public GitHub initialization
 
