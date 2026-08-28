@@ -42,10 +42,15 @@ _otast_load() {
   otast_validate_authority_file || return 1
 }
 
+_otast_validate_source() {
+  otast_compare_live_identity || return 1
+  otast_compare_bootloader_vbmeta || return 1
+}
+
 _otast_preflight() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
-  otast_compare_live_identity || return 1
+  _otast_validate_source || return 1
   otast_plan_all || return 1
   printf 'READY\toperations=%s\tauthority=%s\n' "$OTAST_PLAN_COUNT" "$OTAST_AUTHORITY_SHA256"
 }
@@ -54,7 +59,7 @@ _otast_apply() {
   local result plan_count
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
-  otast_compare_live_identity || return 1
+  _otast_validate_source || return 1
   otast_acquire_lock || return 1
   result=0
   otast_recover_transactions || result=1
@@ -65,16 +70,16 @@ _otast_apply() {
   [ "$result" -eq 0 ] || return 1
   otast_verify_managed || return 1
   if [ "$plan_count" -gt 0 ]; then
-    printf 'REBOOT_REQUIRED\tmanaged files changed; reboot before Verify applies the runtime VBMeta contract\n'
+    printf 'REBOOT_REQUIRED\tmanaged files changed; reboot before Verify\n'
   else
-    printf 'NO_CHANGES_REQUIRED\tmanaged files and runtime contract are already current\n'
+    printf 'NO_CHANGES_REQUIRED\tmanaged files are already current\n'
   fi
 }
 
 _otast_verify() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
-  otast_compare_live_identity || return 1
+  _otast_validate_source || return 1
   otast_compare_live_managed_vbmeta || return 1
   otast_verify_managed
 }
