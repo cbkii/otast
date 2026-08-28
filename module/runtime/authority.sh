@@ -25,8 +25,9 @@ OTAST_PIF_SPOOF_SIGNATURE='preserve'
 OTAST_PIF_SPOOF_VENDING_BUILD='preserve'
 OTAST_PIF_SPOOF_VENDING_SDK='preserve'
 OTAST_PIF_DEBUG='preserve'
+OTAST_PIF_IDENTITY_POLICY='preserve'
+OTAST_TRICKY_PATCH_POLICY='preserve'
 
-# Exact KEY=VALUE lookup without awk. Authority keys are validated before use.
 otast_kv_value() {
   local path key line
   path=$1
@@ -96,14 +97,12 @@ otast_validate_authority_file() {
     otast_stop "authority file missing or unsafe: $OTAST_AUTHORITY"
     return 1
   }
-
   size=$(wc -c <"$OTAST_AUTHORITY" 2>/dev/null) || return 1
   case "$size" in ''|*[!0-9]*) return 1 ;; esac
   [ "$size" -gt 0 ] && [ "$size" -le 524288 ] || {
     otast_stop 'authority file size is outside the supported range'
     return 1
   }
-
   if LC_ALL=C grep -q "$(printf '\r')" "$OTAST_AUTHORITY" 2>/dev/null; then
     otast_stop 'authority file contains CR characters'
     return 1
@@ -149,6 +148,11 @@ otast_validate_authority_file() {
   case "$OTAST_VBMETA_AVB_VERSION" in [0-9]*.[0-9]*) ;; *) otast_stop 'invalid vbmeta AVB version'; return 1 ;; esac
   case "$OTAST_BOOT_AVB_VERSION" in [0-9]*.[0-9]*) ;; *) otast_stop 'invalid boot AVB version'; return 1 ;; esac
 
+  OTAST_PIF_IDENTITY_POLICY=$(otast_authority_optional otast.pif.identity preserve) || return 1
+  OTAST_TRICKY_PATCH_POLICY=$(otast_authority_optional otast.trickystore.securityPatch preserve) || return 1
+  case "$OTAST_PIF_IDENTITY_POLICY" in preserve|ota) ;; *) otast_stop "invalid PIF identity policy: $OTAST_PIF_IDENTITY_POLICY"; return 1 ;; esac
+  case "$OTAST_TRICKY_PATCH_POLICY" in preserve|ota) ;; *) otast_stop "invalid TrickyStore security-patch policy: $OTAST_TRICKY_PATCH_POLICY"; return 1 ;; esac
+
   OTAST_PIF_SPOOF_BUILD=$(otast_authority_optional otast.pif.spoofBuild preserve) || return 1
   OTAST_PIF_SPOOF_PROPS=$(otast_authority_optional otast.pif.spoofProps preserve) || return 1
   OTAST_PIF_SPOOF_PROVIDER=$(otast_authority_optional otast.pif.spoofProvider preserve) || return 1
@@ -166,7 +170,6 @@ otast_validate_authority_file() {
     "$OTAST_PIF_DEBUG"; do
     case "$policy" in true|false|preserve) ;; *) otast_stop "invalid PIF policy: $policy"; return 1 ;; esac
   done
-
   OTAST_AUTHORITY_SHA256=$(otast_sha256 "$OTAST_AUTHORITY") || return 1
   return 0
 }
@@ -220,14 +223,46 @@ _otast_compare_live_pairs() {
   return 0
 }
 
+otast_static_prop_value() {
+  local key path value
+  key=$1
+  shift
+  for path in "$@"; do
+    [ -f "$path" ] && [ ! -L "$path" ] || continue
+    value=$(otast_kv_value "$path" "$key" 2>/dev/null) || continue
+    printf '%s\n' "$value"
+    return 0
+  done
+  return 1
+}
+
 otast_compare_live_identity() {
+  local system_patch vendor_patch
   _otast_compare_live_pairs 'live platform identity differs from authority' \
     'ro.product.device:OTAST_DEVICE' \
     'ro.build.id:OTAST_BUILD_ID' \
     'ro.build.version.sdk:OTAST_SDK' \
-    'ro.build.version.security_patch:OTAST_SYSTEM_PATCH' \
-    'ro.vendor.build.security_patch:OTAST_VENDOR_PATCH' \
-    'ro.build.fingerprint:OTAST_FINGERPRINT'
+    'ro.build.fingerprint:OTAST_FINGERPRINT' || return 1
+
+  system_patch=$(otast_static_prop_value ro.build.version.security_patch \
+    /system/build.prop /system/system/build.prop /product/build.prop 2>/dev/null) || {
+      otast_stop 'cannot read static system security-patch property'
+      return 1
+    }
+  vendor_patch=$(otast_static_prop_value ro.vendor.build.security_patch \
+    /vendor/build.prop /odm/build.prop 2>/dev/null) || {
+      otast_stop 'cannot read static vendor security-patch property'
+      return 1
+    }
+  [ "$system_patch" = "$OTAST_SYSTEM_PATCH" ] || {
+    otast_stop "static system security patch differs from authority: static=$system_patch authority=$OTAST_SYSTEM_PATCH"
+    return 1
+  }
+  [ "$vendor_patch" = "$OTAST_VENDOR_PATCH" ] || {
+    otast_stop "static vendor security patch differs from authority: static=$vendor_patch authority=$OTAST_VENDOR_PATCH"
+    return 1
+  }
+  return 0
 }
 
 otast_compare_bootloader_vbmeta() {
@@ -246,9 +281,6 @@ otast_compare_bootloader_vbmeta() {
 }
 
 otast_compare_live_managed_vbmeta() {
-  # vbmeta.size is intentionally excluded: current ota.prop generation records
-  # OTA artifact image-size evidence, whereas libavb exports the sum of verified
-  # VBMeta struct lengths at boot. OTAST must not conflate or overwrite them.
   _otast_compare_live_pairs 'live managed VBMeta contract differs from authority; reboot after Apply before Verify' \
     'ro.boot.vbmeta.digest:OTAST_VBMETA_DIGEST' \
     'ro.boot.vbmeta.avb_version:OTAST_VBMETA_AVB_VERSION' \
