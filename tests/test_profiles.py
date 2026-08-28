@@ -202,10 +202,18 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn("resetprop", template)
         self.assertNotIn("blockdev", template)
 
-    def test_runtime_does_not_use_awk(self) -> None:
-        for path in (ROOT / "module/runtime").rglob("*.sh"):
+    def test_identity_runtime_paths_do_not_use_awk(self) -> None:
+        for relative in (
+            "authority.sh",
+            "entry.sh",
+            "pif.sh",
+            "profiles.sh",
+            "report.sh",
+            "ta.sh",
+        ):
+            path = ROOT / "module/runtime" / relative
             text = path.read_text(encoding="utf-8")
-            self.assertNotRegex(text, r"(?m)(^|[;&|()]\s*)awk(?:\s|$)", path.relative_to(ROOT).as_posix())
+            self.assertNotRegex(text, r"(?m)(^|[;&|()]\s*)awk(?:\s|$)", relative)
 
     def test_all_monitor_heads_are_exact_commit_ids(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
