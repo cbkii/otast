@@ -1,8 +1,8 @@
 #!/system/bin/sh
 
 # Compatibility-first Play Integrity Fix transformations.
-# Only the reviewed identity writers are changed. Upstream action, post-fs-data,
-# service, WebUI and update machinery remain byte-for-byte upstream-owned.
+# OTA identity takeover is opt-in. Existing PIF identity/options are preserved
+# by default while competing automatic security-patch writers are neutralized.
 
 OTAST_PIF_OVERRIDE_BEGIN='# --- otast pif authority BEGIN ---'
 OTAST_PIF_OVERRIDE_END='# --- otast pif authority END ---'
@@ -83,26 +83,37 @@ otast_prop_set_line() {
   mv -f "$temp" "$path"
 }
 
+otast_prop_apply_policy() {
+  local path key policy
+  path=$1
+  key=$2
+  policy=$3
+  [ "$policy" = preserve ] && return 0
+  otast_prop_set_line "$path" "$key" "$policy"
+}
+
 otast_transform_pif_prop() {
   local source output
   source=$1
   output=$2
   [ -f "$source" ] && [ ! -L "$source" ] || return 1
   cat "$source" >"$output" || return 1
-  otast_prop_set_line "$output" FINGERPRINT "$OTAST_FINGERPRINT" || return 1
-  otast_prop_set_line "$output" MANUFACTURER "$OTAST_MANUFACTURER" || return 1
-  otast_prop_set_line "$output" MODEL "$OTAST_MODEL" || return 1
-  otast_prop_set_line "$output" SECURITY_PATCH "$OTAST_SYSTEM_PATCH" || return 1
-  otast_prop_set_line "$output" PRODUCT "${OTAST_DEVICE}_beta" || return 1
-  otast_prop_set_line "$output" DEVICE "$OTAST_DEVICE" || return 1
-  otast_prop_set_line "$output" PRODUCT_LIST '"tegu_beta"' || return 1
-  otast_prop_set_line "$output" spoofBuild "$OTAST_PIF_SPOOF_BUILD" || return 1
-  otast_prop_set_line "$output" spoofProps "$OTAST_PIF_SPOOF_PROPS" || return 1
-  otast_prop_set_line "$output" spoofProvider "$OTAST_PIF_SPOOF_PROVIDER" || return 1
-  otast_prop_set_line "$output" spoofSignature "$OTAST_PIF_SPOOF_SIGNATURE" || return 1
-  otast_prop_set_line "$output" spoofVendingBuild "$OTAST_PIF_SPOOF_VENDING_BUILD" || return 1
-  otast_prop_set_line "$output" spoofVendingSdk "$OTAST_PIF_SPOOF_VENDING_SDK" || return 1
-  otast_prop_set_line "$output" DEBUG "$OTAST_PIF_DEBUG" || return 1
+  if [ "$OTAST_PIF_IDENTITY_POLICY" = ota ]; then
+    otast_prop_set_line "$output" FINGERPRINT "$OTAST_FINGERPRINT" || return 1
+    otast_prop_set_line "$output" MANUFACTURER "$OTAST_MANUFACTURER" || return 1
+    otast_prop_set_line "$output" MODEL "$OTAST_MODEL" || return 1
+    otast_prop_set_line "$output" SECURITY_PATCH "$OTAST_SYSTEM_PATCH" || return 1
+    otast_prop_set_line "$output" PRODUCT "${OTAST_DEVICE}_beta" || return 1
+    otast_prop_set_line "$output" DEVICE "$OTAST_DEVICE" || return 1
+    otast_prop_set_line "$output" PRODUCT_LIST '"tegu_beta"' || return 1
+  fi
+  otast_prop_apply_policy "$output" spoofBuild "$OTAST_PIF_SPOOF_BUILD" || return 1
+  otast_prop_apply_policy "$output" spoofProps "$OTAST_PIF_SPOOF_PROPS" || return 1
+  otast_prop_apply_policy "$output" spoofProvider "$OTAST_PIF_SPOOF_PROVIDER" || return 1
+  otast_prop_apply_policy "$output" spoofSignature "$OTAST_PIF_SPOOF_SIGNATURE" || return 1
+  otast_prop_apply_policy "$output" spoofVendingBuild "$OTAST_PIF_SPOOF_VENDING_BUILD" || return 1
+  otast_prop_apply_policy "$output" spoofVendingSdk "$OTAST_PIF_SPOOF_VENDING_SDK" || return 1
+  otast_prop_apply_policy "$output" DEBUG "$OTAST_PIF_DEBUG" || return 1
   chmod 0600 "$output" || return 1
 }
 
@@ -164,13 +175,22 @@ EOF_OUTPUT
 }
 
 otast_trim_trailing_blank_lines() {
-  local path temp
+  local path temp line blanks
   path=$1
   temp=${path}.trim.$$
-  awk 'NF { while (blank > 0) { print ""; blank-- } print; next } { blank++ }' "$path" >"$temp" || {
-    rm -f "$temp"
-    return 1
-  }
+  blanks=0
+  : >"$temp" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ -n "$line" ]; then
+      while [ "$blanks" -gt 0 ]; do
+        printf '\n' >>"$temp" || { rm -f "$temp"; return 1; }
+        blanks=$((blanks - 1))
+      done
+      printf '%s\n' "$line" >>"$temp" || { rm -f "$temp"; return 1; }
+    else
+      blanks=$((blanks + 1))
+    fi
+  done <"$path"
   mv -f "$temp" "$path"
 }
 
@@ -228,7 +248,6 @@ otast_transform_disabled_writer() {
   chmod 0600 "$output" || return 1
   otast_shell_file_valid "$output"
 }
-
 
 otast_transform_pif_security_patch() {
   otast_transform_disabled_writer "$1" "$2" 'OTAST owns the PIF/TrickyStore security-patch authority'
