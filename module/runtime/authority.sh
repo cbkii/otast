@@ -227,6 +227,10 @@ otast_static_prop_value() {
   local key path value
   key=$1
   shift
+  if [ -n "${OTAST_LIVE_PROP_FILE:-}" ]; then
+    otast_kv_value "$OTAST_LIVE_PROP_FILE" "$key"
+    return $?
+  fi
   for path in "$@"; do
     [ -f "$path" ] && [ ! -L "$path" ] || continue
     value=$(otast_kv_value "$path" "$key" 2>/dev/null) || continue
