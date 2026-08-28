@@ -2,27 +2,27 @@
 
 ## Design source
 
-The compatibility boundary is derived from the merged `ota-sot` PIF hardening and v4 runtime work, especially PRs #67, #69, #77 and #79.
+The compatibility boundary is derived from the merged `ota-sot` PIF hardening and v4 runtime work, then tightened around the live Pixel configuration validated in August 2026.
 
-Those changes established the following rules:
+Rules:
 
-1. Prefer configuration injection and narrow transformations over replacing upstream lifecycle entrypoints.
+1. Prefer preservation and narrow configuration transforms over replacing upstream lifecycle entrypoints.
 2. Preserve update, self-repair, Action, service, post-fs-data, WebUI and process-restart behavior unless a specific writer is proven to conflict.
-3. Preserve unrelated PIF options and comments when updating `pif.prop`.
-4. Require complete OTA-derived identity and reject stale or incomplete authority.
-5. Make refresh reconciliation read-only; only an explicit OTAST Apply may mutate reviewed targets.
-6. Disable only exact competing writer surfaces and fail closed when their source or anchors drift.
+3. Preserve the currently selected PIF identity and spoof booleans by default; official OTA identity is source evidence, not an instruction to overwrite a working attestation profile.
+4. Make OTA identity takeover explicit with `otast.pif.identity=ota`.
+5. Preserve unrelated PIF options/comments in `pif.prop`.
+6. Make refresh reconciliation read-only; only an explicit OTAST Apply may mutate reviewed targets.
+7. Disable exact competing writer surfaces and fail closed when their source or anchors drift.
 
 ## Managed surface
 
-For the reviewed PIF Inject source lineage at commits `ea93222c58f90108cef0c02a11e66bdfdf4b21b6` and `8b4a00cef9536dc9c8428d392725eacf364605a9`, OTAST manages only:
+For the reviewed PIF Inject source lineage at commits `ea93222c58f90108cef0c02a11e66bdfdf4b21b6` and `8b4a00cef9536dc9c8428d392725eacf364605a9`, OTAST manages:
 
-- `autopif.sh` — deterministic Pixel 9a selection and generated identity fields;
-- `autopif_ota.sh` — upstream refresh plus read-only OTAST preflight;
-- module and global `pif.prop` — merge authority values without discarding unrelated configuration;
-- `security_patch.sh` — exact wrapper because OTAST owns the same TrickyStore and runtime security-patch outputs.
+- module and global `pif.prop` — preserve current identity/options by default; optionally align selected fields with OTA authority;
+- `security_patch.sh` — exact wrapper because uncontrolled automatic patch writes conflict with OTAST's cross-module ownership model;
+- `autopif.sh` and `autopif_ota.sh` **only when** `otast.pif.identity=ota` is explicitly selected. In default `preserve` mode these remain upstream/user-owned.
 
-The `8b4a00ce` review changes only AutoPIF Pixel download-page selection (reverse-sorted FI/OTA URLs). The OTAST transformation anchors and managed writer surfaces are unchanged; the exact new `autopif.sh` source hash is retained as a regression fixture and allowlisted alongside the earlier reviewed sources.
+The `8b4a00ce` review changes AutoPIF Pixel download-page selection (reverse-sorted FI/OTA URLs). When OTA identity mode is selected, the reviewed transformation anchors and exact source hashes remain mandatory.
 
 The following are observed or preserved, not patched:
 
@@ -35,9 +35,28 @@ The following are observed or preserved, not patched:
 - Zygisk libraries;
 - uninstall and installer behavior.
 
+## Policy keys
+
+All omitted values default to `preserve`:
+
+```text
+otast.pif.identity=preserve|ota
+otast.pif.spoofBuild=preserve|true|false
+otast.pif.spoofProps=preserve|true|false
+otast.pif.spoofProvider=preserve|true|false
+otast.pif.spoofSignature=preserve|true|false
+otast.pif.spoofVendingBuild=preserve|true|false
+otast.pif.spoofVendingSdk=preserve|true|false
+otast.pif.DEBUG=preserve|true|false
+```
+
+For this Pixel stack, `preserve` is the safe default because the active PIF profile may intentionally be a newer attestation-compatible Pixel 9a profile while `ota.prop` continues to describe the installed official OS image.
+
 ## Runtime consequence
 
-An upstream `autopif_ota.sh` refresh may replace `autopif.sh`. OTAST then runs read-only preflight. Until the refreshed source hash and anchors are reviewed and an explicit Apply succeeds, Verify reports drift or preflight blocks. OTAST never silently re-patches downloaded source at boot.
+In `preserve` mode, OTAST does not rewrite AutoPIF selection or the chosen fingerprint/model/security patch. It still prevents known competing security-patch writers from silently changing cross-module state.
+
+In explicit `ota` mode, an upstream `autopif_ota.sh` refresh may replace `autopif.sh`; OTAST then performs read-only preflight. Until the refreshed source hash and anchors are reviewed and an explicit Apply succeeds, preflight/Verify blocks. OTAST never silently re-patches downloaded source at boot.
 
 ## Regression requirements
 
@@ -45,8 +64,8 @@ A PIF change is acceptable only when tests prove:
 
 - upstream Action, post-fs-data and service bytes do not change;
 - unknown `pif.prop` keys and comments survive OTAST's merge;
-- authority fingerprint, model, product, device and security patch reach generated PIF output;
-- spoof booleans continue to follow `ota.prop` options;
+- preserve mode leaves the selected identity and spoof booleans unchanged;
+- explicit OTA mode propagates authority fingerprint, model, product, device and security patch;
 - transformation is byte-idempotent;
 - automatic PIF security-patch generation blocks rather than competing;
 - unknown hashes or missing anchors fail before mutation;
