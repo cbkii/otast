@@ -20,7 +20,13 @@ class ActionMenuTests(unittest.TestCase):
             runtime_dir = module_dir / "runtime"
             runtime_dir.mkdir(parents=True)
             action_path = module_dir / "action.sh"
-            action_path.write_text(self.action_text, encoding="utf-8")
+            action_path.write_text(
+                self.action_text.replace(
+                    "if [ -x /system/bin/getevent ] && [ -x /system/bin/timeout ]; then",
+                    "if false; then",
+                ),
+                encoding="utf-8",
+            )
             entry_path = runtime_dir / "entry.sh"
             entry_path.write_text(
                 "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$OTAST_TEST_OUTPUT\"\n",
