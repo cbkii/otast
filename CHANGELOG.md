@@ -4,16 +4,11 @@ All notable user-visible changes are recorded here.
 
 ## v1.0.1
 
-- Make `cbkii/otast` the sole supported OTAST module source and keep predecessor-name handling only as fail-closed migration detection.
-- Preserve bootloader/libavb VBMeta runtime values; retain OTA-derived `ro.boot.vbmeta.size` as artifact provenance rather than forcing it over runtime telemetry.
-- Require live Pixel bootconfig VBMeta digest and AVB-version evidence to be present and match OTA authority before Preflight, Apply or Verify.
-- Neutralize the reviewed Android VBMeta Fixer runtime writer instead of accepting its hard-coded AVB 1.0 and block-size-derived VBMeta values.
-- Harden Yurikey: make its root Action read-only by default, disable all-packages TrickyStore target regeneration, retain zero-digest/property-writer protections, and prevent implicit Zygisk Next policy changes.
-- Preserve current PIF identity/spoof options and TrickyStore security-patch selection by default; OTA takeover is now explicit opt-in.
-- Validate official system/vendor security patches from static partition properties rather than potentially spoofed runtime properties.
-- Accept reviewed PIF Inject head `b994391970b51a2dfefed0e1d420dd6b017756e8` and TA UTL head `cf167849aaa7696972a3c7826ec94294e9e47fce` without widening OTAST's managed runtime surface.
-- Add read-only Preflight to the Magisk Action menu while keeping Report as the timeout/default action.
-- Extend fake-root/runtime tests for preserve-mode PIF, Yurikey writer ownership, VBMeta provenance semantics and fail-closed bootloader evidence.
+- Merge pull request #11 from cbkii/fix/yurikey-vbmeta-hardening
+- docs(release): link physical proof runbook
+- docs(release): align guide with optional physical proof
+- docs(release): document physical Pixel proof workflow
+- Harden manual Release workflow and make physical proof optional (#8)
 - Simplify release UX and automate version preparation (#7)
 - Overhaul Magisk release workflow and branch builds (#6)
 - Optimize host hashing and clean-room validation safely (#2)
@@ -21,7 +16,7 @@ All notable user-visible changes are recorded here.
 - fix(release): follow latest main and self-heal common failures
 - feat(release): add resumable physical-device release wizard
 - fix(maintenance): refresh reviewed upstream targets
-- guard analysis and testbook
+- guard anakysis and testbook
 - fix(release): finalise exact proof and v1.0.0
 - fix(tooling): preserve executable Python entrypoints
 - fix(ci): pin ShellCheck with BusyBox support
