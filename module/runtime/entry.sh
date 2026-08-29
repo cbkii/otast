@@ -18,20 +18,6 @@ case "$OTAST_STATE_ROOT" in *[!A-Za-z0-9._/-]*) printf '%s\n' 'STOP: OTAST_STATE
 OTAST_TMP_ROOT=$OTAST_STATE_ROOT/tmp
 OTAST_AUTHORITY=${OTAST_AUTHORITY:-$ADB_ROOT/ota.prop}
 OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
-OTAST_BOOTCONFIG_FILE=${OTAST_BOOTCONFIG_FILE:-/proc/bootconfig}
-case "$OTAST_BOOTCONFIG_FILE" in
-  /proc/bootconfig) ;;
-  "$ADB_ROOT"/*)
-    [ "$ADB_ROOT" != /data/adb ] && [ -f "$ADB_ROOT/.otast-fake-root" ] && [ ! -L "$ADB_ROOT/.otast-fake-root" ] || {
-      printf '%s\n' 'STOP: custom bootconfig is allowed only below a guarded fake ADB root' >&2
-      exit 70
-    }
-    ;;
-  *)
-    printf '%s\n' 'STOP: OTAST_BOOTCONFIG_FILE is outside the guarded fake ADB root' >&2
-    exit 70
-    ;;
-esac
 
 . "$MODDIR/common.sh" || exit 70
 . "$MODDIR/authority.sh" || exit 70
