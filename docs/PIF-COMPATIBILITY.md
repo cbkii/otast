@@ -13,6 +13,7 @@ Rules:
 5. Preserve unrelated PIF options/comments in `pif.prop`.
 6. Make refresh reconciliation read-only; only an explicit OTAST Apply may mutate reviewed targets.
 7. Disable exact competing writer surfaces and fail closed when their source or anchors drift.
+8. Treat `/data/adb/tricky_store/pif_auto_security_patch` as user configuration, not as the writer itself. A safe regular flag may exist at Preflight; Apply must neutralize the reviewed `security_patch.sh` writer before OTAST considers the stack managed.
 
 ## Managed surface
 
@@ -33,7 +34,8 @@ The following are observed or preserved, not patched:
 - `classes.dex`;
 - WebUI assets and configuration;
 - Zygisk libraries;
-- uninstall and installer behavior.
+- uninstall and installer behavior;
+- a safe regular `/data/adb/tricky_store/pif_auto_security_patch` flag. Its existence is preserved across Apply/Restore, while the reviewed script it would invoke is neutralized during OTAST ownership.
 
 ## Policy keys
 
@@ -56,6 +58,8 @@ For this Pixel stack, `preserve` is the safe default because the active PIF prof
 
 In `preserve` mode, OTAST does not rewrite AutoPIF selection or the chosen fingerprint/model/security patch. It still prevents known competing security-patch writers from silently changing cross-module state.
 
+PIF's own Auto Security Patch toggle is implemented as a marker file. Upstream `autopif.sh` checks that marker and invokes `security_patch.sh`; the reviewed upstream `security_patch.sh` then rewrites TrickyStore patch state and runtime security-patch properties. OTAST therefore governs the writer, not the marker. An already-enabled marker is accepted when safe, and Apply replaces the reviewed writer with the managed no-op form. Restore recovers the exact upstream writer while leaving the user's original marker state intact.
+
 In explicit `ota` mode, an upstream `autopif_ota.sh` refresh may replace `autopif.sh`; OTAST then performs read-only preflight. Until the refreshed source hash and anchors are reviewed and an explicit Apply succeeds, preflight/Verify blocks. OTAST never silently re-patches downloaded source at boot.
 
 ## Regression requirements
@@ -67,6 +71,7 @@ A PIF change is acceptable only when tests prove:
 - preserve mode leaves the selected identity and spoof booleans unchanged;
 - explicit OTA mode propagates authority fingerprint, model, product, device and security patch;
 - transformation is byte-idempotent;
-- automatic PIF security-patch generation blocks rather than competing;
-- unknown hashes or missing anchors fail before mutation;
+- a safe existing `pif_auto_security_patch` marker does not block Preflight merely because the user previously enabled the option;
+- Apply neutralizes the reviewed automatic security-patch writer before managed verification succeeds;
+- unsafe marker types/symlinks, unknown writer hashes or missing anchors fail before mutation;
 - Restore recovers exact upstream originals.
