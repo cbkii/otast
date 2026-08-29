@@ -4,6 +4,13 @@ All notable user-visible changes are recorded here.
 
 ## v1.0.1
 
+- Merge pull request #12 from cbkii/fix/release-preflight-auto-patch
+- tests: prove exact PIF auto-patch marker preservation
+- tests: qualify enabled PIF auto-patch state
+- tests: cover enabled PIF auto-patch compatibility
+- docs: define safe handling for enabled PIF auto patch
+- docs: allow existing PIF auto-patch flag under OTAST ownership
+- fix: absorb enabled PIF auto-patch state during Apply
 - Merge pull request #11 from cbkii/fix/yurikey-vbmeta-hardening
 - docs(release): link physical proof runbook
 - docs(release): align guide with optional physical proof
@@ -15,14 +22,6 @@ All notable user-visible changes are recorded here.
 - feat(ci): add manual release readiness report
 - fix(release): follow latest main and self-heal common failures
 - feat(release): add resumable physical-device release wizard
-- fix(maintenance): refresh reviewed upstream targets
-- guard anakysis and testbook
-- fix(release): finalise exact proof and v1.0.0
-- fix(tooling): preserve executable Python entrypoints
-- fix(ci): pin ShellCheck with BusyBox support
-- TAutil target hash
-- feat: add reliable Termux maintenance and target monitoring
-- Initial public release candidate
 
 ## v1.0.0 — initial stable release
 
