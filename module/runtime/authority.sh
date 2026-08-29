@@ -271,6 +271,8 @@ otast_compare_live_identity() {
 
 otast_compare_bootloader_vbmeta() {
   local digest avb mismatch
+  # Host/fake-root qualification intentionally has no Android bootloader evidence.
+  [ "${OTAST_TEST_MODE:-0}" = 1 ] && return 0
   [ -r /proc/bootconfig ] || return 0
 
   digest=$(otast_bootconfig_value androidboot.vbmeta.digest 2>/dev/null) || {
