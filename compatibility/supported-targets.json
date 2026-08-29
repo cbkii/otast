@@ -52,7 +52,7 @@
       ],
       "monitor": {
         "branch": "inject_s",
-        "expected_head": "8b4a00cef9536dc9c8428d392725eacf364605a9",
+        "expected_head": "b994391970b51a2dfefed0e1d420dd6b017756e8",
         "repository": "KOWX712/PlayIntegrityFix"
       },
       "observed_only_hashes": {
@@ -86,6 +86,10 @@
         {
           "commit": "8b4a00cef9536dc9c8428d392725eacf364605a9",
           "ref": "inject_s AutoPIF crawler refresh reviewed 2026-08-10"
+        },
+        {
+          "commit": "b994391970b51a2dfefed0e1d420dd6b017756e8",
+          "ref": "inject_s docs/WebUI-only delta reviewed 2026-08-29; managed runtime sources unchanged"
         }
       ],
       "strategy": "preserve current PIF identity/options by default; OTA identity takeover is explicit opt-in; competing security-patch writer remains neutralized"
@@ -105,11 +109,11 @@
       ],
       "monitor": {
         "branch": "main",
-        "expected_head": "eab6fa9104e6a3d895d258b8f976478c81244220",
+        "expected_head": "cf167849aaa7696972a3c7826ec94294e9e47fce",
         "repository": "KOWX712/Tricky-Addon-Update-Target-List"
       },
       "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file",
-      "reviewed_ref": "v4.4 installed writer contract",
+      "reviewed_ref": "v4.4 prop.sh writer contract unchanged through cf167849aaa7696972a3c7826ec94294e9e47fce; upstream service/action/WebUI lifecycle delta remains preserved and outside OTAST mutation scope",
       "strategy": "exact v4.4 prop.sh transformation; competing VBMeta block only"
     },
     "trickystore": {
