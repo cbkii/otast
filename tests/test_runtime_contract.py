@@ -128,13 +128,27 @@ class RuntimeContractTests(unittest.TestCase):
         runtime_hashes = set(match.group(1).split(","))
         self.assertEqual(runtime_hashes, manifest_hashes)
 
-    def test_legacy_governor_and_auto_generator_fail_closed(self) -> None:
+    def test_legacy_governor_and_pif_auto_patch_contract(self) -> None:
         common = (ROOT / "module/runtime/common.sh").read_text(encoding="utf-8")
         entry = (ROOT / "module/runtime/entry.sh").read_text(encoding="utf-8")
         profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
+        pif = (ROOT / "module/runtime/pif.sh").read_text(encoding="utf-8")
+        upstream_autopif = (ROOT / "tests/fixtures/upstream/pif-autopif-ea93222c.sh").read_text(encoding="utf-8")
+
         self.assertIn("otast_require_no_legacy_governors()", common)
         self.assertGreaterEqual(entry.count("otast_require_no_legacy_governors"), 4)
+
+        # PIF's flag only requests the reviewed writer when AutoPIF runs. OTAST
+        # therefore accepts a safe existing marker and neutralizes that writer on
+        # Apply instead of making installation impossible for an enabled option.
+        self.assertIn("pif_auto_security_patch", upstream_autopif)
+        self.assertIn('sh "$MODDIR/security_patch.sh"', upstream_autopif)
         self.assertIn("pif_auto_security_patch", profiles)
+        self.assertIn("will neutralize its reviewed writer on Apply", profiles)
+        self.assertIn("PIF automatic security-patch flag is not a safe regular file", profiles)
+        self.assertNotIn("PIF automatic security-patch generation conflicts with OTAST ownership", profiles)
+        self.assertIn("otast_transform_pif_security_patch", profiles)
+        self.assertIn("OTAST owns the PIF/TrickyStore security-patch authority", pif)
 
     def test_no_automatic_apply_service(self) -> None:
         service = (ROOT / "module/service.sh").read_text(encoding="utf-8")
