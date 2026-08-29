@@ -2,7 +2,7 @@
 
 ## Design source
 
-The compatibility boundary is derived from the merged `ota-sot` PIF hardening and v4 runtime work, then tightened around the live Pixel configuration validated in August 2026.
+This contract is maintained only in `cbkii/otast`. Historical predecessor repositories are deprecated; their earlier findings are relevant only as migration history, not as supported runtime authorities.
 
 Rules:
 
@@ -16,13 +16,13 @@ Rules:
 
 ## Managed surface
 
-For the reviewed PIF Inject source lineage at commits `ea93222c58f90108cef0c02a11e66bdfdf4b21b6` and `8b4a00cef9536dc9c8428d392725eacf364605a9`, OTAST manages:
+For the reviewed PIF Inject source lineage at commits `ea93222c58f90108cef0c02a11e66bdfdf4b21b6`, `8b4a00cef9536dc9c8428d392725eacf364605a9`, and current monitored head `b994391970b51a2dfefed0e1d420dd6b017756e8`, OTAST manages:
 
 - module and global `pif.prop` — preserve current identity/options by default; optionally align selected fields with OTA authority;
 - `security_patch.sh` — exact wrapper because uncontrolled automatic patch writes conflict with OTAST's cross-module ownership model;
 - `autopif.sh` and `autopif_ota.sh` **only when** `otast.pif.identity=ota` is explicitly selected. In default `preserve` mode these remain upstream/user-owned.
 
-The `8b4a00ce` review changes AutoPIF Pixel download-page selection (reverse-sorted FI/OTA URLs). When OTA identity mode is selected, the reviewed transformation anchors and exact source hashes remain mandatory.
+The `8b4a00ce` review changed AutoPIF Pixel download-page selection (reverse-sorted FI/OTA URLs). The later `b994391` monitored delta is documentation/WebUI localization only: no OTAST-managed runtime source or reviewed lifecycle entrypoint changed, so the existing source hashes and transformations remain valid.
 
 The following are observed or preserved, not patched:
 
