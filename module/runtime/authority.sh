@@ -272,11 +272,27 @@ otast_compare_live_identity() {
 otast_compare_bootloader_vbmeta() {
   local digest avb mismatch
   [ -r /proc/bootconfig ] || return 0
-  digest=$(otast_bootconfig_value androidboot.vbmeta.digest 2>/dev/null) || digest=''
-  avb=$(otast_bootconfig_value androidboot.vbmeta.avb_version 2>/dev/null) || avb=''
+
+  digest=$(otast_bootconfig_value androidboot.vbmeta.digest 2>/dev/null) || {
+    otast_stop 'required bootloader VBMeta evidence is missing: androidboot.vbmeta.digest'
+    return 1
+  }
+  [ -n "$digest" ] || {
+    otast_stop 'required bootloader VBMeta evidence is empty: androidboot.vbmeta.digest'
+    return 1
+  }
+  avb=$(otast_bootconfig_value androidboot.vbmeta.avb_version 2>/dev/null) || {
+    otast_stop 'required bootloader VBMeta evidence is missing: androidboot.vbmeta.avb_version'
+    return 1
+  }
+  [ -n "$avb" ] || {
+    otast_stop 'required bootloader VBMeta evidence is empty: androidboot.vbmeta.avb_version'
+    return 1
+  }
+
   mismatch=''
-  [ -z "$digest" ] || [ "$digest" = "$OTAST_VBMETA_DIGEST" ] || mismatch="${mismatch}androidboot.vbmeta.digest:bootloader=$digest,authority=$OTAST_VBMETA_DIGEST;"
-  [ -z "$avb" ] || [ "$avb" = "$OTAST_VBMETA_AVB_VERSION" ] || mismatch="${mismatch}androidboot.vbmeta.avb_version:bootloader=$avb,authority=$OTAST_VBMETA_AVB_VERSION;"
+  [ "$digest" = "$OTAST_VBMETA_DIGEST" ] || mismatch="${mismatch}androidboot.vbmeta.digest:bootloader=$digest,authority=$OTAST_VBMETA_DIGEST;"
+  [ "$avb" = "$OTAST_VBMETA_AVB_VERSION" ] || mismatch="${mismatch}androidboot.vbmeta.avb_version:bootloader=$avb,authority=$OTAST_VBMETA_AVB_VERSION;"
   if [ -n "$mismatch" ]; then
     otast_stop "bootloader VBMeta evidence differs from OTA authority: $mismatch"
     return 1
