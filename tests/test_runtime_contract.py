@@ -24,6 +24,14 @@ class RuntimeContractTests(unittest.TestCase):
             set(manifest["authority"]["required_vbmeta_keys"]),
             {"ro.boot.vbmeta.digest", "ro.boot.vbmeta.size", "ro.boot.vbmeta.avb_version", "ro.boot.avb_version"},
         )
+        self.assertEqual(
+            set(manifest["authority"]["runtime_vbmeta_keys"]),
+            {"ro.boot.vbmeta.digest", "ro.boot.vbmeta.avb_version", "ro.boot.avb_version"},
+        )
+        self.assertEqual(
+            set(manifest["authority"]["provenance_only_vbmeta_keys"]),
+            {"ro.boot.vbmeta.size"},
+        )
 
     def test_id_validation_uses_predicate_not_printing_helper(self) -> None:
         common = ROOT / "module/runtime/common.sh"
@@ -62,19 +70,26 @@ class RuntimeContractTests(unittest.TestCase):
         ):
             self.assertIn(key, authority)
 
-    def test_managed_vbmeta_is_post_reboot_contract_not_preflight_identity(self) -> None:
+    def test_runtime_vbmeta_contract_excludes_artifact_size(self) -> None:
         authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
         entry = (ROOT / "module/runtime/entry.sh").read_text(encoding="utf-8")
-        identity = authority.split("otast_compare_live_identity()", 1)[1].split("otast_compare_live_managed_vbmeta()", 1)[0]
+        identity = authority.split("otast_compare_live_identity()", 1)[1].split("otast_compare_bootloader_vbmeta()", 1)[0]
+        bootloader = authority.split("otast_compare_bootloader_vbmeta()", 1)[1].split("otast_compare_live_managed_vbmeta()", 1)[0]
         managed = authority.split("otast_compare_live_managed_vbmeta()", 1)[1]
+
         for key in (
             "ro.boot.vbmeta.digest",
-            "ro.boot.vbmeta.size",
             "ro.boot.vbmeta.avb_version",
             "ro.boot.avb_version",
         ):
             self.assertNotIn(key, identity)
             self.assertIn(key, managed)
+
+        self.assertNotIn("ro.boot.vbmeta.size:OTAST_VBMETA_SIZE", managed)
+        self.assertIn("androidboot.vbmeta.digest", bootloader)
+        self.assertIn("androidboot.vbmeta.avb_version", bootloader)
+        self.assertNotIn("androidboot.vbmeta.size", bootloader)
+
         preflight = entry.split("_otast_preflight()", 1)[1].split("_otast_apply()", 1)[0]
         apply = entry.split("_otast_apply()", 1)[1].split("_otast_verify()", 1)[0]
         verify = entry.split("_otast_verify()", 1)[1].split("_otast_restore()", 1)[0]
