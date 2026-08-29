@@ -1,7 +1,7 @@
 #!/system/bin/sh
 
 # Tricky Addon v4.4 compatibility. Preserve all non-vbmeta behaviour while
-# assigning the vbmeta property writer role exclusively to VBMeta Fixer.
+# disabling its competing runtime VBMeta property writer.
 
 OTAST_TA_BEGIN='# --- otast vbmeta ownership BEGIN ---'
 OTAST_TA_END='# --- otast vbmeta ownership END ---'
@@ -27,7 +27,7 @@ otast_transform_ta_prop() {
     if [ "$skip" -eq 0 ] && [ "$line" = '# Reset vbmeta related prop' ]; then
       cat >>"$temp" <<EOF_OWNER
 $OTAST_TA_BEGIN
-# VBMeta authority is applied by the OTAST-managed VBMeta Fixer service.
+# Bootloader/libavb runtime VBMeta values are preserved by OTAST.
 # TA UTL's overlapping vbmeta writer is disabled; all other TA behaviour remains.
 $OTAST_TA_END
 EOF_OWNER

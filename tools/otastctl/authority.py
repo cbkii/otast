@@ -9,10 +9,13 @@ from .util import OtastError, sha256_file
 KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+AVB_RE = re.compile(r"^\d+\.\d+$")
 REQUIRED = (
     "boot.img.sha256",
     "ro.boot.vbmeta.digest",
     "ro.boot.vbmeta.size",
+    "ro.boot.vbmeta.avb_version",
+    "ro.boot.avb_version",
     "ro.build.fingerprint",
     "ro.build.id",
     "ro.build.version.sdk",
@@ -73,7 +76,17 @@ def parse_authority(path: Path) -> Authority:
     if not HEX64_RE.fullmatch(values["ro.boot.vbmeta.digest"]):
         raise OtastError("ro.boot.vbmeta.digest must be lowercase SHA-256")
     if not values["ro.boot.vbmeta.size"].isdigit() or int(values["ro.boot.vbmeta.size"]) <= 0:
-        raise OtastError("ro.boot.vbmeta.size must be positive")
+        raise OtastError("ro.boot.vbmeta.size must be positive artifact provenance")
+    for key in ("ro.boot.vbmeta.avb_version", "ro.boot.avb_version"):
+        if not AVB_RE.fullmatch(values[key]):
+            raise OtastError(f"{key} must be major.minor")
+
+    identity_policy = values.get("otast.pif.identity", "preserve")
+    if identity_policy not in {"preserve", "ota"}:
+        raise OtastError("otast.pif.identity must be preserve or ota")
+    tricky_policy = values.get("otast.trickystore.securityPatch", "preserve")
+    if tricky_policy not in {"preserve", "ota"}:
+        raise OtastError("otast.trickystore.securityPatch must be preserve or ota")
     for key in (
         "otast.pif.spoofBuild",
         "otast.pif.spoofProps",
@@ -83,6 +96,6 @@ def parse_authority(path: Path) -> Authority:
         "otast.pif.spoofVendingSdk",
         "otast.pif.DEBUG",
     ):
-        if key in values and values[key] not in {"true", "false"}:
-            raise OtastError(f"{key} must be true or false")
+        if key in values and values[key] not in {"preserve", "true", "false"}:
+            raise OtastError(f"{key} must be preserve, true or false")
     return Authority(path=path, values=values, sha256=sha256_file(path))

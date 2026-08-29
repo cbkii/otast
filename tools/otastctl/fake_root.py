@@ -94,7 +94,9 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
 
     yuri = adb_root / "modules/Yurikey"
     for name in (
+        "action.sh",
         "service.sh",
+        "Yuri/target_txt.sh",
         "Yuri/boot_hash.sh",
         "Yuri/security_patch.sh",
         "Yuri/pif.sh",
@@ -134,6 +136,8 @@ def _authority_text(system_patch: str = "2026-03-05", vendor_patch: str = "2026-
             "ro.product.device=tegu",
             "ro.product.manufacturer=Google",
             "ro.product.model=Pixel 9a",
+            "otast.pif.identity=ota",
+            "otast.trickystore.securityPatch=ota",
             "otast.pif.spoofBuild=true",
             "otast.pif.spoofProps=true",
             "otast.pif.spoofProvider=true",
@@ -266,7 +270,6 @@ def _simulate_managed_boot(adb_root: Path) -> None:
         live[key] = value
     for key in (
         "ro.boot.vbmeta.digest",
-        "ro.boot.vbmeta.size",
         "ro.boot.vbmeta.avb_version",
         "ro.boot.avb_version",
     ):
@@ -493,6 +496,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "pif_unknown_options_preserved": True,
                 "ta_non_vbmeta_behaviour_preserved": True,
                 "boot_hash_uses_vbmeta_digest": True,
+                "vbmeta_size_is_provenance_only": True,
                 "tampered_state_rejected": True,
                 "drift_verify_rejected": drift_verify.returncode == 1,
                 "drift_apply_rejected": drift_apply.returncode == 1,

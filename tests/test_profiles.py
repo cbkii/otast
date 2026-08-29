@@ -45,6 +45,23 @@ class ProfileTests(unittest.TestCase):
             digest = hashlib.sha256((FIXTURES / fixture_name).read_bytes()).hexdigest()
             self.assertIn(digest, manifest["targets"][target]["accepted_hashes"][name])
 
+    def _pif_env(self, identity: str = "ota") -> str:
+        return f'''
+            OTAST_FINGERPRINT='google/tegu/tegu:16/TEST/1:user/release-keys'
+            OTAST_MANUFACTURER='Google'
+            OTAST_MODEL='Pixel 9a'
+            OTAST_SYSTEM_PATCH='2026-03-05'
+            OTAST_DEVICE='tegu'
+            OTAST_PIF_IDENTITY_POLICY='{identity}'
+            OTAST_PIF_SPOOF_BUILD='true'
+            OTAST_PIF_SPOOF_PROPS='true'
+            OTAST_PIF_SPOOF_PROVIDER='true'
+            OTAST_PIF_SPOOF_SIGNATURE='true'
+            OTAST_PIF_SPOOF_VENDING_BUILD='true'
+            OTAST_PIF_SPOOF_VENDING_SDK='true'
+            OTAST_PIF_DEBUG='false'
+        '''
+
     def test_pif_transform_preserves_lifecycle_and_unknown_configuration(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
         with tempfile.TemporaryDirectory(prefix="otast-pif-test-") as raw:
@@ -65,18 +82,7 @@ class ProfileTests(unittest.TestCase):
                 destination.write_bytes(source.read_bytes())
             command = f'''
                 . "{pif_runtime}" || exit 1
-                OTAST_FINGERPRINT='google/tegu/tegu:16/TEST/1:user/release-keys'
-                OTAST_MANUFACTURER='Google'
-                OTAST_MODEL='Pixel 9a'
-                OTAST_SYSTEM_PATCH='2026-03-05'
-                OTAST_DEVICE='tegu'
-                OTAST_PIF_SPOOF_BUILD='true'
-                OTAST_PIF_SPOOF_PROPS='true'
-                OTAST_PIF_SPOOF_PROVIDER='true'
-                OTAST_PIF_SPOOF_SIGNATURE='true'
-                OTAST_PIF_SPOOF_VENDING_BUILD='true'
-                OTAST_PIF_SPOOF_VENDING_SDK='true'
-                OTAST_PIF_DEBUG='false'
+                {self._pif_env("ota")}
                 otast_transform_pif_prop "{prop}" "{work / 'pif.out'}" || exit 2
                 otast_transform_pif_autopif "{auto}" "{work / 'auto.out'}" || exit 3
                 otast_transform_pif_ota "{ota}" "{work / 'ota.out'}" || exit 4
@@ -102,6 +108,40 @@ class ProfileTests(unittest.TestCase):
             self.assertIn("exit 0", security_text.splitlines()[:5])
             self.assertIn("Tricky Store Security Patch Util", security_text)
 
+    def test_pif_preserve_mode_leaves_identity_and_booleans_unchanged(self) -> None:
+        pif_runtime = ROOT / "module/runtime/pif.sh"
+        with tempfile.TemporaryDirectory(prefix="otast-pif-preserve-") as raw:
+            work = Path(raw)
+            prop = work / "pif.prop"
+            prop.write_text(
+                "FINGERPRINT=google/tegu_beta/tegu:CANARY/KEEP/1:user/release-keys\n"
+                "MODEL=Pixel 9a\n"
+                "SECURITY_PATCH=2026-08-05\n"
+                "spoofBuild=true\n"
+                "spoofProps=false\n"
+                "spoofVendingSdk=false\n",
+                encoding="utf-8",
+            )
+            command = f'''
+                . "{pif_runtime}" || exit 1
+                OTAST_FINGERPRINT='google/tegu/tegu:16/OTA/1:user/release-keys'
+                OTAST_MANUFACTURER='Google'
+                OTAST_MODEL='Pixel 9a'
+                OTAST_SYSTEM_PATCH='2026-03-05'
+                OTAST_DEVICE='tegu'
+                OTAST_PIF_IDENTITY_POLICY='preserve'
+                OTAST_PIF_SPOOF_BUILD='preserve'
+                OTAST_PIF_SPOOF_PROPS='preserve'
+                OTAST_PIF_SPOOF_PROVIDER='preserve'
+                OTAST_PIF_SPOOF_SIGNATURE='preserve'
+                OTAST_PIF_SPOOF_VENDING_BUILD='preserve'
+                OTAST_PIF_SPOOF_VENDING_SDK='preserve'
+                OTAST_PIF_DEBUG='preserve'
+                otast_transform_pif_prop "{prop}" "{work / 'out'}" || exit 2
+            '''
+            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+            self.assertEqual((work / "out").read_text(encoding="utf-8"), prop.read_text(encoding="utf-8"))
+
     def test_current_pif_autopif_transform_preserves_authority_contract(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
         fixture = FIXTURES / "pif-autopif-8b4a00ce.sh"
@@ -110,18 +150,7 @@ class ProfileTests(unittest.TestCase):
             output = work / "autopif.out"
             command = f'''
                 . "{pif_runtime}" || exit 1
-                OTAST_FINGERPRINT='google/tegu/tegu:16/TEST/1:user/release-keys'
-                OTAST_MANUFACTURER='Google'
-                OTAST_MODEL='Pixel 9a'
-                OTAST_SYSTEM_PATCH='2026-03-05'
-                OTAST_DEVICE='tegu'
-                OTAST_PIF_SPOOF_BUILD='true'
-                OTAST_PIF_SPOOF_PROPS='true'
-                OTAST_PIF_SPOOF_PROVIDER='true'
-                OTAST_PIF_SPOOF_SIGNATURE='true'
-                OTAST_PIF_SPOOF_VENDING_BUILD='true'
-                OTAST_PIF_SPOOF_VENDING_SDK='true'
-                OTAST_PIF_DEBUG='false'
+                {self._pif_env("ota")}
                 otast_transform_pif_autopif "{fixture}" "{output}" || exit 2
             '''
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
@@ -156,6 +185,35 @@ class ProfileTests(unittest.TestCase):
             self.assertIn('check_reset_prop "ro.boot.verifiedbootstate" "green"', text)
             self.assertIn('contains_reset_prop "ro.bootmode" "recovery" "unknown"', text)
             self.assertIn("resetprop -c || true", text)
+
+    def test_yurikey_action_and_target_regenerator_are_neutralized(self) -> None:
+        action = (ROOT / "module/runtime/templates/yurikey/action.sh").read_text(encoding="utf-8")
+        target = (ROOT / "module/runtime/templates/yurikey/target_txt.sh").read_text(encoding="utf-8")
+        self.assertIn('exec sh "$OTAST_ENTRY" report', action)
+        self.assertNotIn("memory-type anonymous", action)
+        self.assertNotIn("zygiskd", action)
+        self.assertIn("target regeneration is disabled", target)
+        self.assertNotIn("pm list packages", target)
+        self.assertNotIn("rm -rf", target)
+
+    def test_vbmeta_fixer_template_never_writes_runtime_properties(self) -> None:
+        template = (ROOT / "module/runtime/templates/vbmeta-fixer/service.sh").read_text(encoding="utf-8")
+        self.assertIn("exit 0", template)
+        self.assertNotIn("resetprop", template)
+        self.assertNotIn("blockdev", template)
+
+    def test_identity_runtime_paths_do_not_use_awk(self) -> None:
+        for relative in (
+            "authority.sh",
+            "entry.sh",
+            "pif.sh",
+            "profiles.sh",
+            "report.sh",
+            "ta.sh",
+        ):
+            path = ROOT / "module/runtime" / relative
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"(?m)(^|[;&|()]\s*)awk(?:\s|$)", relative)
 
     def test_all_monitor_heads_are_exact_commit_ids(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))

@@ -86,7 +86,7 @@ EOF_BOOT
 ) || return 1
   otast_plan_add boot-hash platform "$ADB_ROOT/boot_hash" 0644 "$source" external '' || return 1
 
-  if otast_effective_module_dirs tricky_store | grep -q .; then
+  if [ "$OTAST_TRICKY_PATCH_POLICY" = ota ] && otast_effective_module_dirs tricky_store | grep -q .; then
     source=$(otast_plan_source_text tricky-security-patch <<EOF_TRICKY
 system=prop
 boot=$OTAST_SYSTEM_PATCH
@@ -108,13 +108,15 @@ otast_plan_pif() {
   for dir in $(otast_effective_module_dirs playintegrityfix); do
     role=$(_otast_role_for_dir "$dir") || return 1
 
-    _otast_plan_transformed_file pif-autopif-$role playintegrityfix "$dir/autopif.sh" 0755 \
-      otast_transform_pif_autopif \
-      '1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1,67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a,04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213' || return 1
+    if [ "$OTAST_PIF_IDENTITY_POLICY" = ota ]; then
+      _otast_plan_transformed_file pif-autopif-$role playintegrityfix "$dir/autopif.sh" 0755 \
+        otast_transform_pif_autopif \
+        '1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1,67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a,04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213' || return 1
 
-    _otast_plan_transformed_file pif-autopif-ota-$role playintegrityfix "$dir/autopif_ota.sh" 0755 \
-      otast_transform_pif_ota \
-      'cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
+      _otast_plan_transformed_file pif-autopif-ota-$role playintegrityfix "$dir/autopif_ota.sh" 0755 \
+        otast_transform_pif_ota \
+        'cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
+    fi
 
     _otast_plan_transformed_external pif-prop-$role playintegrityfix "$dir/pif.prop" 0644 \
       otast_transform_pif_prop || return 1
@@ -142,13 +144,9 @@ otast_plan_pif() {
 }
 
 otast_plan_ta_utl() {
-  local id dir role found vbmeta_found id_tag
-  found=0
-  vbmeta_found=0
-  otast_effective_module_dirs vbmeta-fixer | grep -q . && vbmeta_found=1
+  local id dir role id_tag
   for id in TA_utl .TA_utl; do
     for dir in $(otast_effective_module_dirs "$id"); do
-      found=1
       role=$(_otast_role_for_dir "$dir") || return 1
       case "$id" in
         TA_utl) id_tag=canonical ;;
@@ -160,18 +158,18 @@ otast_plan_ta_utl() {
         'fffa4d98aafb444594480ccaecbdbc083fee8e860418f86cc55e2422dc7a647f' || return 1
     done
   done
-  if [ "$found" -eq 1 ] && [ "$vbmeta_found" -ne 1 ]; then
-    otast_stop 'TA UTL is present but the reviewed VBMeta Fixer authority owner is absent'
-    return 1
-  fi
 }
 
 otast_plan_yurikey() {
   local dir role
   for dir in $(otast_effective_module_dirs Yurikey); do
     role=$(_otast_role_for_dir "$dir") || return 1
+    _otast_plan_exact_file yurikey-action-$role yurikey "$dir/action.sh" 0755 "$MODDIR/templates/yurikey/action.sh" \
+      'cf2808d234d10cd627bc49b487a4b7884dd6dc4d80f271e23f40061ebcb83682,bdc1b5ae67c94b26fef19e5a461559b81e9c3f345b3d820fbfc17ea8ab87557e' || return 1
     _otast_plan_exact_file yurikey-service-$role yurikey "$dir/service.sh" 0755 "$MODDIR/templates/yurikey/service.sh" \
       '6bc09314d843eb04ba7f682bdb9b03091a061e537dc5acbf80cd5eb339b68756' || return 1
+    _otast_plan_exact_file yurikey-target-$role yurikey "$dir/Yuri/target_txt.sh" 0755 "$MODDIR/templates/yurikey/target_txt.sh" \
+      '12de2efb87a6763d514a35b291ab08022ffa46dda5d4759c505d905651ef19a9' || return 1
     _otast_plan_exact_file yurikey-boot-hash-$role yurikey "$dir/Yuri/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
       'ec9ad40fb5f2df51b5c773f93824f366fa2428b20a827ebd70fc648d7f0585fb' || return 1
     _otast_plan_exact_file yurikey-web-boot-hash-$role yurikey "$dir/webroot/common/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \

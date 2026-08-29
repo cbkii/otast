@@ -17,6 +17,10 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(authority.values["ro.product.device"], "tegu")
         self.assertEqual(authority.values["ro.build.version.sdk"], "36")
         self.assertEqual(authority.values["ro.product.model"], "Pixel 9a")
+        self.assertEqual(authority.values["ro.boot.vbmeta.avb_version"], "1.3")
+        self.assertEqual(authority.values["ro.boot.avb_version"], "1.3")
+        self.assertEqual(authority.values["otast.pif.identity"], "preserve")
+        self.assertEqual(authority.values["otast.trickystore.securityPatch"], "preserve")
 
     def test_duplicate_key_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -38,6 +42,33 @@ class AuthorityTests(unittest.TestCase):
             path = Path(raw) / "ota.prop"
             path.write_text(FIXTURE.read_text().replace("ro.product.device=tegu", "ro.product.device=shiba"), encoding="utf-8")
             with self.assertRaisesRegex(OtastError, "tegu"):
+                parse_authority(path)
+
+    def test_preserve_policy_is_valid_and_invalid_policy_is_rejected(self) -> None:
+        authority = parse_authority(FIXTURE)
+        self.assertEqual(authority.values["otast.pif.spoofVendingSdk"], "preserve")
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "ota.prop"
+            path.write_text(
+                FIXTURE.read_text().replace(
+                    "otast.pif.spoofVendingSdk=preserve",
+                    "otast.pif.spoofVendingSdk=maybe",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(OtastError, "preserve, true or false"):
+                parse_authority(path)
+
+    def test_vbmeta_avb_version_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "ota.prop"
+            lines = [
+                line
+                for line in FIXTURE.read_text(encoding="utf-8").splitlines()
+                if not line.startswith("ro.boot.vbmeta.avb_version=")
+            ]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(OtastError, "ro.boot.vbmeta.avb_version"):
                 parse_authority(path)
 
 
