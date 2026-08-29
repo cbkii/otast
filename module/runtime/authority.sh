@@ -187,7 +187,7 @@ otast_live_value() {
 otast_bootconfig_value() {
   local key line value
   key=$1
-  [ -r /proc/bootconfig ] || return 1
+  [ -r "$OTAST_BOOTCONFIG_FILE" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       "$key = "*)
@@ -198,7 +198,7 @@ otast_bootconfig_value() {
         return 0
         ;;
     esac
-  done </proc/bootconfig
+  done <"$OTAST_BOOTCONFIG_FILE"
   return 1
 }
 
@@ -271,9 +271,7 @@ otast_compare_live_identity() {
 
 otast_compare_bootloader_vbmeta() {
   local digest avb mismatch
-  # Host/fake-root qualification intentionally has no Android bootloader evidence.
-  [ "${OTAST_TEST_MODE:-0}" = 1 ] && return 0
-  [ -r /proc/bootconfig ] || return 0
+  [ -r "$OTAST_BOOTCONFIG_FILE" ] || return 0
 
   digest=$(otast_bootconfig_value androidboot.vbmeta.digest 2>/dev/null) || {
     otast_stop 'required bootloader VBMeta evidence is missing: androidboot.vbmeta.digest'
