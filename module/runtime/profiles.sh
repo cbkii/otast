@@ -99,9 +99,18 @@ EOF_TRICKY
 
 otast_plan_pif() {
   local dir role source global_planned
+
+  # An existing pif_auto_security_patch flag is a user-selected PIF state, not
+  # by itself an unsafe writer. The reviewed security_patch.sh below is always
+  # transformed into an OTAST-managed no-op writer on Apply, so automatic PIF
+  # refreshes cannot rewrite TrickyStore/runtime SPL while OTAST owns the stack.
+  # Preserve the flag so Restore returns the exact pre-OTAST user behaviour.
   if [ -e "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] || [ -L "$ADB_ROOT/tricky_store/pif_auto_security_patch" ]; then
-    otast_stop 'PIF automatic security-patch generation conflicts with OTAST ownership'
-    return 1
+    [ -f "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] && [ ! -L "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] || {
+      otast_stop 'PIF automatic security-patch flag is not a safe regular file'
+      return 1
+    }
+    otast_log WARN 'PIF automatic security-patch flag is enabled; OTAST will neutralize its reviewed writer on Apply'
   fi
 
   global_planned=0

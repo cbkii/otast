@@ -11,9 +11,9 @@ OTAST follows a preserve-first compatibility boundary:
 - `otast.pif.identity=ota` is an explicit opt-in that constrains the reviewed Pixel identity fields to `ota.prop`; without that opt-in, AutoPIF selection remains upstream/user-owned.
 - individual `otast.pif.spoof*` and `otast.pif.DEBUG` values default to `preserve`; explicit `true` or `false` is required for OTAST to replace a selected boolean.
 - `security_patch.sh` is wrapped as a competing writer so one helper cannot silently rewrite the TrickyStore patch contract.
-- `/data/adb/tricky_store/pif_auto_security_patch` blocks preflight because it would re-enable a competing writer.
+- an existing `/data/adb/tricky_store/pif_auto_security_patch` flag is accepted when it is a safe regular file. The flag is user configuration, not the writer itself; on Apply OTAST neutralizes the reviewed `security_patch.sh`, so later AutoPIF runs cannot rewrite the TrickyStore/runtime security-patch contract while OTAST owns the stack. The flag is preserved so Restore returns the exact pre-OTAST user behavior.
 
-Unknown managed-source hashes or missing transformation anchors stop preflight. See [PIF compatibility](PIF-COMPATIBILITY.md).
+Unknown managed-source hashes, unsafe flag types/links or missing transformation anchors stop preflight. See [PIF compatibility](PIF-COMPATIBILITY.md).
 
 ## TrickyStore
 
