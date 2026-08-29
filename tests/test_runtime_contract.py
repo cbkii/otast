@@ -89,6 +89,10 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("androidboot.vbmeta.digest", bootloader)
         self.assertIn("androidboot.vbmeta.avb_version", bootloader)
         self.assertNotIn("androidboot.vbmeta.size", bootloader)
+        self.assertIn("required bootloader VBMeta evidence is missing", bootloader)
+        self.assertIn("required bootloader VBMeta evidence is empty", bootloader)
+        self.assertNotIn('[ -z "$digest" ] ||', bootloader)
+        self.assertNotIn('[ -z "$avb" ] ||', bootloader)
 
         preflight = entry.split("_otast_preflight()", 1)[1].split("_otast_apply()", 1)[0]
         apply = entry.split("_otast_apply()", 1)[1].split("_otast_verify()", 1)[0]
