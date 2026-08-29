@@ -2,9 +2,11 @@
 
 OTAST is a transactional Magisk module for a **Pixel 9a (`tegu`) running Android 16**. It treats `/data/adb/ota.prop` as the authority for OTA-derived platform identity and coordinates a reviewed set of interacting integrity modules without silently replacing user-selected runtime spoof configuration.
 
+**`https://github.com/cbkii/otast` is the only supported OTAST repository and module source.** Older similarly named OTA-governor repositories/modules are deprecated and must not be installed or used. OTAST retains legacy-trace detection only so coexistence or an incomplete migration fails closed.
+
 This repository is the complete public source tree. It includes the Magisk module, deterministic release tooling, a fake-Magisk-root lifecycle harness, private device-fixture tooling, CI, target monitoring, and public-repository initialization checks.
 
-> **Release status:** use the repository's GitHub Releases page and stable Magisk `update.json` channel for the current published version. Release candidates and development source may intentionally be ahead of that stable channel.
+> **Release status:** use this repository's GitHub Releases page and stable Magisk `update.json` channel for the current published version. Release candidates and development source may intentionally be ahead of that stable channel.
 
 ## Managed contracts
 
@@ -16,7 +18,7 @@ OTAST currently supports reviewed profiles for:
 - Tricky Addon Update Target List (`TA_utl` or `.TA_utl`): exact reviewed `prop.sh` transformation that removes the overlapping VBMeta writer while retaining unrelated behavior.
 - Android VBMeta Fixer (`vbmeta-fixer`): if enabled and recognised, its upstream runtime property writer is neutralized. OTAST preserves the bootloader/libavb runtime VBMeta values rather than deriving replacements from block-device geometry.
 
-Unknown target hashes, unsafe links, authority/source mismatch, active legacy `ota-sot`/`otasst` traces, competing PIF automatic patch generation, managed drift, malformed state, and incomplete transaction recovery all fail closed.
+Unknown target hashes, unsafe links, authority/source mismatch, active deprecated OTA-governor traces, competing PIF automatic patch generation, managed drift, malformed state, and incomplete transaction recovery all fail closed.
 
 ## VBMeta evidence model
 
