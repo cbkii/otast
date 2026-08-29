@@ -444,13 +444,44 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("legacy-governor scenario failed for the wrong reason")
         logs.append("## legacy governor rejection\n" + legacy.stdout)
 
-        # PIF's automatic security-patch generator would compete with OTAST.
-        auto_root, auto_entry, _ = _new_root(base / "pif-auto-generator", module_zip, staged_pif=False)
-        _write(auto_root / "tricky_store/pif_auto_security_patch", "1\n", 0o600)
-        auto = _run(auto_entry, auto_root, "preflight", expect=1)
-        if "automatic security-patch generation conflicts" not in auto.stdout:
-            raise OtastError("PIF automatic generator scenario failed for the wrong reason")
-        logs.append("## PIF automatic generator rejection\n" + auto.stdout)
+        # PIF's Auto Security Patch flag is user configuration. The flag itself is
+        # preserved while OTAST neutralizes the reviewed writer it would invoke.
+        auto_root, auto_entry, auto_originals = _new_root(base / "pif-auto-generator", module_zip, staged_pif=False)
+        auto_flag = auto_root / "tricky_store/pif_auto_security_patch"
+        _write(auto_flag, "", 0o600)
+        auto_preflight = _run(auto_entry, auto_root, "preflight")
+        if "will neutralize its reviewed writer on Apply" not in auto_preflight.stdout:
+            raise OtastError("PIF auto-patch flag was accepted without explicit ownership evidence")
+        auto_apply = _run(auto_entry, auto_root, "apply")
+        auto_writer = auto_root / "modules/playintegrityfix/security_patch.sh"
+        auto_writer_text = auto_writer.read_text(encoding="utf-8")
+        if "# otast managed" not in auto_writer_text or "exit 0" not in auto_writer_text.splitlines()[:5]:
+            raise OtastError("PIF automatic security-patch writer was not neutralized on Apply")
+        if not auto_flag.is_file() or auto_flag.is_symlink():
+            raise OtastError("PIF auto-patch user flag was not preserved during Apply")
+        auto_restore = _run(auto_entry, auto_root, "restore")
+        if auto_writer.read_bytes() != auto_originals["modules/playintegrityfix/security_patch.sh"]:
+            raise OtastError("Restore did not recover the original PIF security-patch writer")
+        if not auto_flag.is_file() or auto_flag.is_symlink():
+            raise OtastError("PIF auto-patch user flag was not preserved through Restore")
+        logs.append(
+            "## PIF automatic generator ownership\n"
+            + auto_preflight.stdout
+            + auto_apply.stdout
+            + auto_restore.stdout
+        )
+
+        # The compatibility exception applies only to a safe regular marker.
+        auto_link_root, auto_link_entry, _ = _new_root(base / "pif-auto-generator-symlink", module_zip, staged_pif=False)
+        outside_auto_flag = base / "outside-auto-flag"
+        outside_auto_flag.write_text("unchanged\n", encoding="utf-8")
+        os.symlink(outside_auto_flag, auto_link_root / "tricky_store/pif_auto_security_patch")
+        auto_link = _run(auto_link_entry, auto_link_root, "preflight", expect=1)
+        if "PIF automatic security-patch flag is not a safe regular file" not in auto_link.stdout:
+            raise OtastError("unsafe PIF auto-patch marker scenario failed for the wrong reason")
+        if outside_auto_flag.read_text(encoding="utf-8") != "unchanged\n":
+            raise OtastError("unsafe PIF auto-patch marker modified its symlink target")
+        logs.append("## PIF automatic generator unsafe marker rejection\n" + auto_link.stdout)
 
         # Tampered state may never redirect Restore outside ADB_ROOT.
         state_root, state_entry, _ = _new_root(base / "state-tamper", module_zip, staged_pif=False)
@@ -491,7 +522,8 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "active_lock_rejected": True,
                 "missing_required_writer_rejected": True,
                 "legacy_governor_rejected": True,
-                "pif_auto_generator_rejected": True,
+                "pif_auto_flag_absorbed": True,
+                "pif_auto_flag_unsafe_symlink_rejected": True,
                 "pif_lifecycle_entrypoints_preserved": True,
                 "pif_unknown_options_preserved": True,
                 "ta_non_vbmeta_behaviour_preserved": True,
