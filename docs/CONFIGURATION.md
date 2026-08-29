@@ -15,7 +15,7 @@ Values are not inferred from target modules. A missing required key, duplicate k
 
 `ro.boot.vbmeta.size` is intentionally **not** treated as a runtime correction target. The current OTA extractor records an artifact-derived size, whereas bootloader/libavb publishes runtime `androidboot.vbmeta.size`. OTAST reports both and never writes the runtime size.
 
-When `/proc/bootconfig` is available, Preflight/Apply/Verify require its VBMeta digest and AVB version to agree with the OTA authority. Runtime security-patch props are not used as source evidence because integrity modules may legitimately spoof them; OTAST validates the static `/system` and `/vendor` build properties instead.
+When `/proc/bootconfig` is available, Preflight/Apply/Verify require both `androidboot.vbmeta.digest` and `androidboot.vbmeta.avb_version` to be present, non-empty and equal to the OTA authority. Missing bootloader evidence fails closed rather than being treated as an optional comparison. Runtime security-patch props are not used as source evidence because integrity modules may legitimately spoof them; OTAST validates the static `/system` and `/vendor` build properties instead.
 
 ## Preserve-first integrity policy
 
