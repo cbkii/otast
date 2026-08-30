@@ -2,6 +2,11 @@
 
 All notable user-visible changes are recorded here.
 
+## v1.0.2
+
+- Simplify Release into one authoritative workflow (#14)
+- Fix Magisk Action volume-key menu (#13)
+
 ## v1.0.1
 
 - Merge pull request #12 from cbkii/fix/release-preflight-auto-patch
