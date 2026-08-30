@@ -2,6 +2,12 @@
 
 The machine-readable source of truth is `compatibility/supported-targets.json`.
 
+## Device scope
+
+OTAST is documented for Google Pixel devices rather than a single Pixel model. Physical-device testing to date is limited to **Pixel 9a** and **Pixel 8**. Other Pixel models remain untested until their exact device/build path and managed-module combination have been qualified.
+
+This model-agnostic documentation does not weaken the fail-closed compatibility boundary: authority identity, live-device identity, source hashes and transformation anchors must still match what the running release accepts.
+
 ## PIF Inject
 
 OTAST follows a preserve-first compatibility boundary:
@@ -42,7 +48,7 @@ TA UTL no longer requires Android VBMeta Fixer to be enabled. Other TA UTL versi
 
 ## Android VBMeta Fixer
 
-OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The reviewed upstream service currently derives runtime values that do not match this Pixel's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
+OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The reviewed upstream service currently derives runtime values that do not match the live Pixel device's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
 
 If a recognised VBMeta Fixer module is enabled, OTAST replaces its `service.sh` with a no-op. This preserves bootloader/libavb runtime values and prevents the companion-app writer from overwriting them. VBMeta Fixer does not need to be enabled for OTAST operation.
 
