@@ -9,38 +9,50 @@
 - Target-module versions matching an accepted profile.
 - No active or staged legacy `ota-sot`/`otasst` module, persistent state root or dispatcher.
 
-## Normal v1 release/install path
+## Production release path
 
-For the repository owner, do **not** manually execute the release lifecycle one
-command at a time. The supported release path is:
+For the repository owner, the authoritative production path is:
+
+```text
+Actions -> Release -> Run workflow
+```
+
+For a normal release:
+
+```text
+Version:          [blank]
+Full validation:  off
+Physical proof:   off
+```
+
+Blank Version automatically resolves the next stable patch and monotonic `versionCode`. The single workflow run stamps the release identity, performs mandatory package integrity checks, builds and verifies the exact Magisk ZIP, publishes the GitHub Release, verifies its tag/source identity, and updates stable `update.json`.
+
+Enable full validation or physical Pixel proof only when those stricter gates are specifically wanted. Both are disabled by default.
+
+See [`docs/RELEASE.md`](RELEASE.md) for the full release and retry contract.
+
+## Optional physical-device qualification
+
+`otast release` is retained for the stronger physical-Pixel proof path; it is not the normal publisher.
 
 ```bash
 source scripts/otast-playbook.sh
 otast release
 ```
 
-The wizard uses the latest GitHub `main` when preparing a new draft. You do not
-select or pin a commit SHA. Commit identity is diagnostic metadata only; the
-physical proof and final publication are bound to the exact module ZIP SHA-256.
+It qualifies the exact proof-gated draft across the required reboot boundaries, uploads proof, and asks the same authoritative GitHub Release workflow to publish that proven candidate.
 
-After every requested reboot, wait for Android to finish booting and run the exact
-same command again:
+Use:
 
 ```bash
-otast release
+otast release --no-publish
 ```
 
-The wizard handles ordinary repair routes automatically where safe: dependency
-installation, bounded network/Actions retries, stale draft refresh, transaction
-boot-recovery, Apply/Restore retries and settling reboots. Persistent drift or a
-state that cannot be safely verified still stops rather than being hidden.
-
-See [`RELEASE.md`](RELEASE.md) for the full recovery policy.
+to upload proof but intentionally leave the candidate draft unpublished.
 
 ## Manual runtime interface
 
-The individual runtime actions remain available for engineering diagnostics and
-recovery, but they are no longer the normal release UX:
+The individual runtime actions remain available for engineering diagnostics and recovery:
 
 ```sh
 su -c 'sh /data/adb/modules/otast/runtime/entry.sh report'
@@ -50,17 +62,10 @@ su -c 'sh /data/adb/modules/otast/runtime/entry.sh verify'
 su -c 'sh /data/adb/modules/otast/runtime/entry.sh restore'
 ```
 
-A changing Apply returns `REBOOT_REQUIRED`. An already-current Apply may return
-`NO_CHANGES_REQUIRED`; the release wizard treats that as a valid no-op path rather
-than forcing an artificial failure.
+A changing Apply returns `REBOOT_REQUIRED`. An already-current Apply may return `NO_CHANGES_REQUIRED`.
 
-## Before installing outside the release wizard
+## Before installing outside the release workflow
 
-Remove legacy `ota-sot` and `otasst` only through a restore-first cleanup. Do not
-manually delete their module or state directories while managed targets may still
-be active. OTAST intentionally blocks normal operation if known legacy traces
-remain.
+Remove legacy `ota-sot` and `otasst` only through a restore-first cleanup. Do not manually delete their module or state directories while managed targets may still be active. OTAST intentionally blocks normal operation if known legacy traces remain.
 
-The module installer itself runs a non-mutating target preflight. Installation
-stops if authority, live identity, target hashes or path safety cannot be proven.
-It does not Apply target changes during installation.
+The module installer itself runs a non-mutating target preflight. Installation stops if authority, live identity, target hashes or path safety cannot be proven. It does not Apply target changes during installation.

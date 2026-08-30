@@ -1,58 +1,46 @@
 name: Release
-run-name: Release ${{ inputs.action }} ${{ inputs.version != '' && inputs.version || 'auto' }}
+run-name: Release ${{ inputs.version != '' && inputs.version || 'auto' }}
 
 on:
   workflow_dispatch:
     inputs:
-      action:
-        description: What do you want to do?
-        required: true
-        type: choice
-        options:
-          - prepare-release
-          - publish-release
-        default: prepare-release
       version:
-        description: Release version (blank = automatic next/reusable candidate)
+        description: Release version (blank = next stable patch)
         required: false
         type: string
         default: ''
       full_validation:
-        description: Run full repository and fake-root validation before preparing
+        description: Run full test/fake-root qualification
         required: true
         type: boolean
-        default: true
+        default: false
       physical_proof:
-        description: Require Pixel physical-device proof before publishing
+        description: Require physical Pixel proof before publishing
         required: true
         type: boolean
-        default: true
+        default: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
-  prepare-release:
-    if: inputs.action == 'prepare-release'
+  release:
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: Require repository owner
         shell: bash
         run: |
           if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then
-            printf 'Only the repository owner may prepare production releases.\n' >&2
+            printf 'Only the repository owner may publish OTAST releases.\n' >&2
             exit 1
           fi
 
-      - name: Checkout current main
+      - name: Checkout authoritative main
         uses: actions/checkout@v6
         with:
           ref: main
@@ -63,13 +51,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install mandatory packaging tools
+      - name: Install release tools
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y busybox-static unzip zip
 
-      - name: Install pinned ShellCheck for full validation
+      - name: Install full-validation tools
         if: inputs.full_validation
         env:
           SHELLCHECK_VERSION: v0.11.0
@@ -85,522 +73,317 @@ jobs:
           printf '%s  %s\n' "$SHELLCHECK_SHA256" "$archive" | sha256sum -c -
           tar -xJf "$archive" -C "$RUNNER_TEMP"
           sudo install -m 0755 "$extracted/shellcheck" /usr/local/bin/shellcheck
-          shellcheck --version
 
-      - name: Resolve candidate version
-        id: candidate
-        shell: bash
+      - name: Resolve release version
+        id: version
         env:
           REQUESTED_VERSION: ${{ inputs.version }}
+        shell: bash
         run: |
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" resolve-release-version \
-            --requested "$REQUESTED_VERSION" >"$RUNNER_TEMP/candidate.json"
-          python3 - "$RUNNER_TEMP/candidate.json" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
-          import json, sys
-          candidate = json.load(open(sys.argv[1], encoding="utf-8"))
-          with open(sys.argv[2], "a", encoding="utf-8") as output:
-              output.write(f"version={candidate['version']}\n")
-              output.write(f"version_code={candidate['version_code']}\n")
-              output.write(f"stable={candidate['stable_version']}\n")
-              output.write(f"reused={str(candidate['reused_candidate']).lower()}\n")
-              output.write(f"prerelease={str(candidate['prerelease']).lower()}\n")
-          with open(sys.argv[3], "a", encoding="utf-8") as summary:
-              summary.write("## Release candidate\n\n")
-              summary.write(f"- Stable: `{candidate['stable_version']}`\n")
-              summary.write(f"- Candidate: `{candidate['version']}`\n")
-              summary.write(f"- VersionCode: `{candidate['version_code']}`\n")
-              summary.write(f"- Existing candidate reused: `{str(candidate['reused_candidate']).lower()}`\n")
-          PY
-
-      - name: Generate concise release notes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.candidate.outputs.version }}
-          STABLE_VERSION: ${{ steps.candidate.outputs.stable }}
-        run: |
-          notes="$RUNNER_TEMP/release-notes.md"
-          if ! gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-              -f tag_name="$VERSION" -f target_commitish=main -f previous_tag_name="$STABLE_VERSION" \
-              --jq .body >"$notes" 2>/dev/null; then
-            if git rev-parse --verify "$STABLE_VERSION" >/dev/null 2>&1; then
-              git log "$STABLE_VERSION"..HEAD --pretty='format:- %s' >"$notes"
-            else
-              git log -20 --pretty='format:- %s' >"$notes"
-            fi
-          fi
-          python3 - "$notes" <<'PY'
-          from pathlib import Path
-          import sys
-          path = Path(sys.argv[1])
-          lines = [line.rstrip() for line in path.read_text(encoding="utf-8").splitlines()
-                   if "chore(release): prepare " not in line]
-          value = "\n".join(lines).strip() or "- Release metadata and validated package refresh."
-          path.write_text(value + "\n", encoding="utf-8")
-          PY
-
-      - name: Stamp candidate source metadata
-        shell: bash
-        env:
-          VERSION: ${{ steps.candidate.outputs.version }}
-          VERSION_CODE: ${{ steps.candidate.outputs.version_code }}
-        run: |
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" stamp-release \
-            --version "$VERSION" --version-code "$VERSION_CODE" \
-            --notes-file "$RUNNER_TEMP/release-notes.md"
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json update.json >/dev/null
-
-      - name: Mandatory release-focused regression tests
-        shell: bash
-        run: |
-          python3 -m unittest discover -s tests -p 'test_release*.py' -v
-          python3 -m unittest discover -s tests -p 'test_public_contract.py' -v
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify >/dev/null
-          printf 'MANDATORY RELEASE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Full repository qualification
-        if: inputs.full_validation
-        shell: bash
-        run: |
-          bash scripts/test.sh --full
-          printf 'FULL VALIDATION: RUN / PASS\n' >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Record intentional full-validation skip
-        if: ${{ !inputs.full_validation }}
-        shell: bash
-        run: |
-          {
-            printf 'FULL VALIDATION: SKIPPED BY OWNER\n'
-            printf 'MANDATORY RELEASE INTEGRITY: PASS\n'
-          } >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Persist release metadata to main
-        id: source
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.candidate.outputs.version }}
-          VERSION_CODE: ${{ steps.candidate.outputs.version_code }}
-        run: |
-          original=$(git rev-parse HEAD)
-          if git diff --quiet -- module/module.prop CHANGELOG.md; then
-            source_sha=$original
-          else
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add module/module.prop CHANGELOG.md
-            git commit -m "chore(release): prepare $VERSION"
-            remote_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
-            [[ $remote_main == "$original" ]] || {
-              printf 'main moved during release preparation: expected=%s observed=%s\n' "$original" "$remote_main" >&2
-              exit 1
-            }
-            if ! git push origin HEAD:main; then
-              release_branch="release-meta/${VERSION#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-              printf 'Direct protected-branch update was rejected; attempting an internal release-metadata PR.\n'
-              git push origin "HEAD:refs/heads/$release_branch"
-              pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$release_branch" \
-                --title "chore(release): prepare $VERSION" \
-                --body "Automated release metadata for $VERSION / versionCode $VERSION_CODE. No runtime behavior change.")
-              pr_number=${pr_url##*/}
-              if ! gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
-                gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" --watch --interval 10 || true
-                if ! gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
-                  merged=$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" --json mergedAt --jq '.mergedAt // ""')
-                  [[ -n $merged ]] || {
-                    printf 'Release metadata could not reach protected main automatically; no production draft was created.\n' >&2
-                    exit 1
-                  }
-                fi
-              fi
-            fi
-            git fetch --no-tags origin main
-            git checkout --detach origin/main
-            source_sha=$(git rev-parse HEAD)
-          fi
-          observed_version=$(sed -n 's/^version=//p' module/module.prop | sed -n '1p')
-          observed_code=$(sed -n 's/^versionCode=//p' module/module.prop | sed -n '1p')
-          [[ $observed_version == "$VERSION" && $observed_code == "$VERSION_CODE" ]] || {
-            printf 'Final main release metadata differs from resolved candidate.\n' >&2
-            exit 1
-          }
-          printf 'sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
-
-      - name: Build canonical production bundle once
-        shell: bash
-        env:
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: |
-          rm -rf -- dist
-          bash scripts/build-release.sh
-          manifest=dist/release-manifest.json
-          recorded=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$manifest")
-          [[ $recorded == "$SOURCE_SHA" ]] || {
-            printf 'Release manifest source %s differs from final main %s.\n' "$recorded" "$SOURCE_SHA" >&2
-            exit 1
-          }
-
-      - name: Verify exact production bundle
-        id: release
-        shell: bash
-        env:
-          EXPECTED_VERSION: ${{ steps.candidate.outputs.version }}
-          EXPECTED_CODE: ${{ steps.candidate.outputs.version_code }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-        run: |
-          manifest=dist/release-manifest.json
-          python3 - "$manifest" "$GITHUB_OUTPUT" "$EXPECTED_VERSION" "$EXPECTED_CODE" "$SOURCE_SHA" <<'PY'
-          import json, sys
-          value = json.load(open(sys.argv[1], encoding="utf-8"))
-          expected_version, expected_code, expected_source = sys.argv[3:6]
-          if value["version"] != expected_version or str(value["version_code"]) != expected_code or value["source_commit"] != expected_source:
-              raise SystemExit("Canonical bundle identity differs from resolved release candidate")
-          with open(sys.argv[2], "a", encoding="utf-8") as out:
-              out.write(f"version={value['version']}\nzip={value['zip_filename']}\ndigest={value['zip_sha256']}\n")
-          PY
-          zip=$(python3 -c 'import json; print(json.load(open("dist/release-manifest.json"))["zip_filename"])')
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify-release \
-            --zip "dist/$zip" --checksum "dist/$zip.sha256" --manifest "$manifest"
-
-      - name: Create or refresh unproven draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-          ZIP: ${{ steps.release.outputs.zip }}
-        run: |
-          proof="otast-${VERSION}-device-proof.json"
-          if existing=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,assets 2>/dev/null); then
-            is_draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$existing")
-            [[ $is_draft == true ]] || { printf 'Release %s is already published.\n' "$VERSION" >&2; exit 1; }
-            has_proof=$(PROOF_NAME="$proof" python3 -c 'import json,os,sys; d=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["PROOF_NAME"] for a in d.get("assets", [])) else "no")' <<<"$existing")
-            [[ $has_proof != yes ]] || { printf 'Draft %s already contains physical proof; proven assets are immutable.\n' "$VERSION" >&2; exit 1; }
-          fi
-
-          if tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" 2>/dev/null); then
-            tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json")
-            tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json")
-            [[ $tag_type == commit ]] || { printf 'Existing tag %s is annotated/non-commit; refusing automatic rewrite.\n' "$VERSION" >&2; exit 1; }
-            if [[ $tag_sha != "$SOURCE_SHA" ]]; then
-              gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$VERSION" -f sha="$SOURCE_SHA" -F force=true >/dev/null
-            fi
-          fi
-
-          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_SHA" --title "OTAST $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
-            gh release upload "$VERSION" "dist/$ZIP" "dist/$ZIP.sha256" dist/release-manifest.json \
-              --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$VERSION" "dist/$ZIP" "dist/$ZIP.sha256" dist/release-manifest.json \
-              --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "OTAST $VERSION" \
-              --notes-file "$RUNNER_TEMP/release-notes.md" --draft
-          fi
-          [[ "$VERSION" != *-* ]] || gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --prerelease
-
-      - name: Redownload and verify hosted draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
-          ZIP: ${{ steps.release.outputs.zip }}
-          EXPECTED_SHA: ${{ steps.release.outputs.digest }}
-        run: |
-          remote="$RUNNER_TEMP/remote-draft"
-          rm -rf -- "$remote" && mkdir -p -- "$remote"
-          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$ZIP" --pattern "$ZIP.sha256" --pattern release-manifest.json --dir "$remote"
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify-release \
-            --zip "$remote/$ZIP" --checksum "$remote/$ZIP.sha256" --manifest "$remote/release-manifest.json"
-          remote_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}')
-          [[ $remote_sha == "$EXPECTED_SHA" ]] || { printf 'Hosted draft ZIP differs from qualified ZIP.\n' >&2; exit 1; }
-
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$RUNNER_TEMP/draft-releases.json"
-          python3 scripts/select-release-candidate.py --releases-json "$RUNNER_TEMP/draft-releases.json" \
-            --requested "$VERSION" >"$RUNNER_TEMP/draft-selected.json"
-          draft=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["draft"]).lower())' "$RUNNER_TEMP/draft-selected.json")
-          target=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["target_commitish"])' "$RUNNER_TEMP/draft-selected.json")
-          [[ $draft == true && $target == "$SOURCE_SHA" ]] || {
-            printf 'Hosted draft metadata is not pinned to qualified source: draft=%s target=%s expected=%s\n' "$draft" "$target" "$SOURCE_SHA" >&2
-            exit 1
-          }
-
-          # GitHub draft releases commonly have no refs/tags/<version> until publish.
-          # If a tag exists early, validate it; absence is normal and not an error.
-          if tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" 2>/dev/null); then
-            tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json")
-            tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json")
-            [[ $tag_type == commit && $tag_sha == "$SOURCE_SHA" ]] || {
-              printf 'Existing draft tag does not resolve to qualified source.\n' >&2
-              exit 1
-            }
-          else
-            printf 'Draft has no Git tag yet; this is normal for an unpublished GitHub draft.\n'
-          fi
-
-          {
-            printf '## DRAFT READY\n\n'
-            printf -- '- Version: `%s`\n' "$VERSION"
-            printf -- '- Source: `%s`\n' "$SOURCE_SHA"
-            printf -- '- ZIP: `%s`\n' "$ZIP"
-            printf -- '- SHA-256: `%s`\n' "$EXPECTED_SHA"
-            printf '\nPublish can require physical proof or explicitly bypass it from workflow_dispatch.\n'
-          } >>"$GITHUB_STEP_SUMMARY"
-
-  publish-release:
-    if: inputs.action == 'publish-release'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Require repository owner
-        shell: bash
-        run: |
-          if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then
-            printf 'Only the repository owner may publish releases.\n' >&2
-            exit 1
-          fi
-
-      - name: Checkout current main validator
-        uses: actions/checkout@v6
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Select release candidate
-        id: release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REQUESTED_VERSION: ${{ inputs.version }}
-          REQUIRE_PHYSICAL_PROOF: ${{ inputs.physical_proof }}
-        run: |
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$RUNNER_TEMP/release-pages.json"
-          args=(--releases-json "$RUNNER_TEMP/release-pages.json" --requested "$REQUESTED_VERSION")
-          [[ $REQUIRE_PHYSICAL_PROOF == true ]] && args+=(--require-proof)
-          if ! python3 scripts/select-release-candidate.py "${args[@]}" >"$RUNNER_TEMP/selected.json"; then
-            {
-              printf '## RELEASE NOT READY\n\n'
-              printf 'No eligible release candidate matched the selected proof policy.\n'
-              printf 'Run **prepare-release** first. If a complete draft exists without device proof, either run `otast release` or uncheck **Require Pixel physical-device proof before publishing**.\n'
-            } >>"$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          python3 - "$RUNNER_TEMP/selected.json" "$GITHUB_OUTPUT" <<'PY'
+            --requested "$REQUESTED_VERSION" >"$RUNNER_TEMP/version.json"
+          python3 - "$RUNNER_TEMP/version.json" "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'PY'
           import json, sys
           value = json.load(open(sys.argv[1], encoding="utf-8"))
           with open(sys.argv[2], "a", encoding="utf-8") as out:
-              for key in ("version", "prerelease", "proof_present", "draft", "target_commitish"):
+              for key in ("version", "version_code", "stable_version", "prerelease"):
                   item = value[key]
                   if isinstance(item, bool):
                       item = str(item).lower()
                   out.write(f"{key}={item}\n")
+          with open(sys.argv[3], "a", encoding="utf-8") as summary:
+              summary.write("## OTAST release\n\n")
+              summary.write(f"- Stable: `{value['stable_version']}`\n")
+              summary.write(f"- Candidate: `{value['version']}`\n")
+              summary.write(f"- VersionCode: `{value['version_code']}`\n")
           PY
 
-      - name: Validate exact bundle and optional physical proof
-        id: validate
-        shell: bash
+      - name: Inspect existing release
+        id: existing
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          PROOF_PRESENT: ${{ steps.release.outputs.proof_present }}
-          REQUIRE_PHYSICAL_PROOF: ${{ inputs.physical_proof }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
         run: |
-          assets="$RUNNER_TEMP/release-assets"
-          rm -rf -- "$assets" && mkdir -p -- "$assets"
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,isPrerelease,assets,targetCommitish >"$RUNNER_TEMP/existing.json" 2>/dev/null; then
+            python3 - "$RUNNER_TEMP/existing.json" "$GITHUB_OUTPUT" "$VERSION" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          version = sys.argv[3]
+          proof = f"otast-{version}-device-proof.json"
+          names = {item.get("name") for item in value.get("assets", []) if isinstance(item, dict)}
+          with open(sys.argv[2], "a", encoding="utf-8") as out:
+              out.write("exists=true\n")
+              out.write(f"draft={str(bool(value.get('isDraft'))).lower()}\n")
+              out.write(f"published={str(not bool(value.get('isDraft'))).lower()}\n")
+              out.write(f"proof_present={str(proof in names).lower()}\n")
+              out.write(f"target={value.get('targetCommitish') or ''}\n")
+          PY
+          else
+            printf 'exists=false\ndraft=false\npublished=false\nproof_present=false\ntarget=\n' >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          STABLE_VERSION: ${{ steps.version.outputs.stable_version }}
+        shell: bash
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          if git rev-parse --verify "$STABLE_VERSION^{commit}" >/dev/null 2>&1; then
+            git log "$STABLE_VERSION"..HEAD --no-merges --pretty='%s'
+          else
+            git log -30 --no-merges --pretty='%s'
+          fi | grep -Ev '^chore\(release\): (prepare|publish) ' | sed 's/^/- /' >"$notes" || true
+          if [[ ! -s $notes ]]; then
+            printf '%s\n' '- Release metadata and validated package refresh.' >"$notes"
+          fi
+
+      - name: Stamp candidate metadata
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        shell: bash
+        run: |
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" stamp-release \
+            --version "$VERSION" --version-code "$VERSION_CODE" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" >/dev/null
+
+      - name: New-candidate source integrity
+        if: steps.existing.outputs.exists != 'true'
+        shell: bash
+        run: |
+          python3 -m unittest discover -s tests -p 'test_release_bundle.py' -v
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify >/dev/null
+          printf 'NEW CANDIDATE SOURCE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Full repository qualification
+        if: steps.existing.outputs.exists != 'true' && inputs.full_validation
+        shell: bash
+        run: |
+          bash scripts/test.sh --full
+          printf 'FULL VALIDATION: PASS\n' >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Record skipped full qualification
+        if: steps.existing.outputs.exists != 'true' && !inputs.full_validation
+        shell: bash
+        run: |
+          printf 'FULL VALIDATION: SKIPPED (default)\n' >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Persist version bump to main
+        if: steps.existing.outputs.exists != 'true'
+        id: source
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        shell: bash
+        run: |
+          base=$(git rev-parse HEAD)
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add module/module.prop CHANGELOG.md
+          if git diff --cached --quiet; then
+            source_sha=$base
+          else
+            git commit -m "chore(release): prepare $VERSION"
+            source_sha=$(git rev-parse HEAD)
+            remote_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+            [[ $remote_main == "$base" ]] || {
+              printf 'main moved during release preparation; rerun Release against the new main.\n' >&2
+              exit 1
+            }
+            git push origin HEAD:main
+          fi
+          observed_version=$(sed -n 's/^version=//p' module/module.prop | sed -n '1p')
+          observed_code=$(sed -n 's/^versionCode=//p' module/module.prop | sed -n '1p')
+          [[ $observed_version == "$VERSION" && $observed_code == "$VERSION_CODE" ]] || {
+            printf 'Persisted module identity does not match resolved release.\n' >&2
+            exit 1
+          }
+          printf 'sha=%s\n' "$source_sha" >>"$GITHUB_OUTPUT"
+
+      - name: Build canonical bundle
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          rm -rf -- dist
+          bash scripts/build-release.sh
+          recorded=$(python3 -c 'import json; print(json.load(open("dist/release-manifest.json"))["source_commit"])')
+          [[ $recorded == "$SOURCE_SHA" ]] || {
+            printf 'Release manifest source does not match persisted release commit.\n' >&2
+            exit 1
+          }
+
+      - name: Create hosted draft
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          zip=$(python3 -c 'import json; print(json.load(open("dist/release-manifest.json"))["zip_filename"])')
+          gh release create "$VERSION" "dist/$zip" "dist/$zip.sha256" dist/release-manifest.json \
+            --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "OTAST $VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" --draft
+
+      - name: Mandatory hosted release integrity
+        id: hosted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_CODE: ${{ steps.version.outputs.version_code }}
+          REQUIRE_PROOF: ${{ inputs.physical_proof }}
+        shell: bash
+        run: |
+          assets="$RUNNER_TEMP/hosted"
+          rm -rf -- "$assets"
+          mkdir -p -- "$assets"
           zip="otast-${VERSION}.zip"
           proof="otast-${VERSION}-device-proof.json"
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" \
             --pattern "$zip" --pattern "$zip.sha256" --pattern release-manifest.json --dir "$assets"
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify-release \
-            --zip "$assets/$zip" --checksum "$assets/$zip.sha256" --manifest "$assets/release-manifest.json"
+            --zip "$assets/$zip" --checksum "$assets/$zip.sha256" --manifest "$assets/release-manifest.json" >/dev/null
 
-          if [[ $PROOF_PRESENT == true ]]; then
-            gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$proof" --dir "$assets"
-            python3 scripts/validate-device-release-proof.py --proof "$assets/$proof" --module-zip "$assets/$zip" --version "$VERSION"
-            proof_state=VALIDATED
-          elif [[ $REQUIRE_PHYSICAL_PROOF == true ]]; then
-            printf 'Physical proof was required but is absent.\n' >&2
-            exit 1
-          else
-            proof_state='NOT PROVIDED (OWNER BYPASS)'
-          fi
+          python3 - "$assets/release-manifest.json" "$VERSION" "$EXPECTED_CODE" "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          version, code = sys.argv[2], int(sys.argv[3])
+          if manifest["version"] != version or manifest["version_code"] != code:
+              raise SystemExit("Hosted bundle identity does not match resolved release")
+          with open(sys.argv[4], "a", encoding="utf-8") as out:
+              out.write(f"source={manifest['source_commit']}\n")
+              out.write(f"digest={manifest['zip_sha256']}\n")
+              out.write(f"prerelease={str('-' in version).lower()}\n")
+              out.write(f"assets={sys.argv[1].rsplit('/', 1)[0]}\n")
+          PY
 
-          digest=$(sha256sum "$assets/$zip" | awk '{print $1}')
+          release=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,assets,targetCommitish)
+          draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$release")
+          target=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("targetCommitish") or "")' <<<"$release")
           source=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$assets/release-manifest.json")
-          printf 'assets=%s\nzip=%s\ndigest=%s\nsource=%s\nproof_state=%s\n' \
-            "$assets" "$zip" "$digest" "$source" "$proof_state" >>"$GITHUB_OUTPUT"
-          {
-            printf '## Publication validation\n\n'
-            printf -- '- Physical proof policy: `%s`\n' "$REQUIRE_PHYSICAL_PROOF"
-            printf -- '- Physical proof: `%s`\n' "$proof_state"
-            printf -- '- Exact bundle integrity: `PASS`\n'
-          } >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Publish exact validated candidate
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
-          WAS_DRAFT: ${{ steps.release.outputs.draft }}
-          TARGET: ${{ steps.release.outputs.target_commitish }}
-          SOURCE_SHA: ${{ steps.validate.outputs.source }}
-        run: |
-          if [[ $WAS_DRAFT == true ]]; then
-            [[ $TARGET == "$SOURCE_SHA" ]] || {
-              printf 'Draft target %s differs from validated manifest source %s.\n' "$TARGET" "$SOURCE_SHA" >&2
-              exit 1
-            }
-            if [[ $PRERELEASE == true ]]; then
-              gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
-            else
-              gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-            fi
-          else
-            printf 'Release %s is already published; continuing idempotent verification.\n' "$VERSION"
+          if [[ $draft == true && $target != "$source" ]]; then
+            printf 'Hosted draft target does not match manifest source: target=%s source=%s\n' "$target" "$source" >&2
+            exit 1
+          fi
+          has_proof=$(PROOF="$proof" python3 -c 'import json,os,sys; v=json.load(sys.stdin); print("true" if any(a.get("name")==os.environ["PROOF"] for a in v.get("assets", [])) else "false")' <<<"$release")
+          if [[ $has_proof == true ]]; then
+            gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$proof" --dir "$assets"
+            python3 scripts/validate-device-release-proof.py \
+              --proof "$assets/$proof" --module-zip "$assets/$zip" --version "$VERSION"
           fi
 
-      - name: Verify published tag and release identity
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          SOURCE_SHA: ${{ steps.validate.outputs.source }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
-        run: |
-          tag_json=
-          for attempt in {1..10}; do
-            if tag_json=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" 2>/dev/null); then
-              break
-            fi
-            sleep 2
-          done
-          [[ -n $tag_json ]] || { printf 'Published release tag %s did not become visible.\n' "$VERSION" >&2; exit 1; }
-          tag_type=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["type"])' <<<"$tag_json")
-          tag_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])' <<<"$tag_json")
-          [[ $tag_type == commit && $tag_sha == "$SOURCE_SHA" ]] || {
-            printf 'Published tag identity mismatch: type=%s sha=%s expected=%s\n' "$tag_type" "$tag_sha" "$SOURCE_SHA" >&2
-            exit 1
-          }
-          release_json=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)
-          draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$release_json")
-          remote_prerelease=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isPrerelease"]).lower())' <<<"$release_json")
-          [[ $draft == false && $remote_prerelease == "$PRERELEASE" ]] || {
-            printf 'Published release state mismatch.\n' >&2
-            exit 1
-          }
+          if [[ $REQUIRE_PROOF == true && $has_proof != true ]]; then
+            printf 'publish=false\n' >>"$GITHUB_OUTPUT"
+            {
+              printf '## DRAFT READY — PHYSICAL PROOF REQUIRED\n\n'
+              printf 'The exact candidate is hosted and verified. Run the Pixel proof flow, then rerun this same Release workflow with the same version and physical proof enabled.\n'
+            } >>"$GITHUB_STEP_SUMMARY"
+          else
+            printf 'publish=true\n' >>"$GITHUB_OUTPUT"
+          fi
+          printf 'draft=%s\nproof_present=%s\n' "$draft" "$has_proof" >>"$GITHUB_OUTPUT"
+          printf 'HOSTED RELEASE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
 
-      - name: Synchronize stable Magisk update channel
-        if: ${{ !contains(steps.release.outputs.version, '-') }}
-        shell: bash
+      - name: Publish verified release
+        if: steps.hosted.outputs.publish == 'true' && steps.hosted.outputs.draft == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          ASSETS: ${{ steps.validate.outputs.assets }}
-          ZIP: ${{ steps.validate.outputs.zip }}
-          EXPECTED_SHA: ${{ steps.validate.outputs.digest }}
-          PROOF_STATE: ${{ steps.validate.outputs.proof_state }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.hosted.outputs.prerelease }}
+        shell: bash
         run: |
-          expected="$RUNNER_TEMP/update.json.expected"
+          if [[ $PRERELEASE == true ]]; then
+            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          else
+            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
+
+      - name: Verify published identity
+        if: steps.hosted.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_SHA: ${{ steps.hosted.outputs.source }}
+        shell: bash
+        run: |
+          release=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft)
+          draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$release")
+          [[ $draft == false ]] || { printf 'Release is still a draft.\n' >&2; exit 1; }
+          git fetch --force --no-tags origin "refs/tags/$VERSION:refs/tags/$VERSION"
+          tag_sha=$(git rev-list -n 1 "$VERSION")
+          [[ $tag_sha == "$SOURCE_SHA" ]] || {
+            printf 'Published tag source mismatch: expected=%s observed=%s\n' "$SOURCE_SHA" "$tag_sha" >&2
+            exit 1
+          }
+          printf 'HOSTED RELEASE IDENTITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Update stable Magisk channel
+        if: steps.hosted.outputs.publish == 'true' && steps.hosted.outputs.prerelease != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        shell: bash
+        run: |
+          assets=${{ steps.hosted.outputs.assets }}
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" generate-update-json \
-            --manifest "$ASSETS/release-manifest.json" --output "$expected" >/dev/null
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json "$expected" >/dev/null
+            --manifest "$assets/release-manifest.json" --output "$RUNNER_TEMP/update.json" >/dev/null
 
-          current_payload=$(gh api "repos/$GITHUB_REPOSITORY/contents/update.json?ref=main")
-          current_sha=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])' <<<"$current_payload")
-          current_file="$RUNNER_TEMP/update.json.current"
-          python3 -c 'import base64,json,sys; p=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(p["content"]))' "$current_file" <<<"$current_payload"
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json "$current_file" >/dev/null
-          current_code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["versionCode"])' "$current_file")
-          next_code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["versionCode"])' "$expected")
-          if ((current_code > next_code)); then
-            printf 'Stable update channel is newer than %s; refusing downgrade.\n' "$VERSION" >&2
+          git fetch --no-tags origin main
+          git checkout -B release-update origin/main
+          python3 - "$RUNNER_TEMP/update.json" update.json <<'PY'
+          import sys
+          from pathlib import Path
+          from tools.otastctl.release import load_update_metadata, version_core
+          new = load_update_metadata(Path(sys.argv[1]))
+          old = load_update_metadata(Path(sys.argv[2]))
+          if version_core(str(old["version"])) > version_core(str(new["version"])):
+              raise SystemExit("Refusing stable updater downgrade")
+          if old["version"] == new["version"] and old != new:
+              raise SystemExit("Existing stable updater conflicts with published release")
+          PY
+
+          observed_version=$(sed -n 's/^version=//p' module/module.prop | sed -n '1p')
+          observed_code=$(sed -n 's/^versionCode=//p' module/module.prop | sed -n '1p')
+          [[ $observed_version == "$VERSION" && $observed_code == "$VERSION_CODE" ]] || {
+            printf 'Latest main no longer carries this release identity; updater not changed.\n' >&2
             exit 1
+          }
+          cp -- "$RUNNER_TEMP/update.json" update.json
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json update.json >/dev/null
+          git add update.json
+          if ! git diff --cached --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "chore(release): publish Magisk updater metadata $VERSION"
+            git push origin HEAD:main
           fi
-          if ((current_code == next_code)); then
-            python3 - "$current_file" "$expected" <<'PY'
-          import json, sys
-          if json.load(open(sys.argv[1], encoding="utf-8")) != json.load(open(sys.argv[2], encoding="utf-8")):
-              raise SystemExit("conflicting stable metadata at equal versionCode")
-          PY
-          else
-            encoded=$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read()).decode())' "$expected")
-            if ! gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/update.json" \
-                -f message="chore(release): publish Magisk updater metadata $VERSION" \
-                -f content="$encoded" -f sha="$current_sha" -f branch=main >/dev/null; then
-              git fetch --no-tags origin main
-              branch="release-update/${VERSION#v}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-              git checkout -B "$branch" origin/main
-              cp -- "$expected" update.json
-              git config user.name github-actions[bot]
-              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-              git add update.json
-              git commit -m "chore(release): publish Magisk updater metadata $VERSION"
-              git push origin "HEAD:refs/heads/$branch"
-              pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
-                --title "chore(release): publish updater metadata $VERSION" \
-                --body "Synchronize stable Magisk update.json after the exact final release was published and verified.")
-              pr_number=${pr_url##*/}
-              if ! gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch; then
-                gh pr checks "$pr_number" --repo "$GITHUB_REPOSITORY" --watch --interval 10 || true
-                gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch || {
-                  printf 'Release is public but protected main prevented automatic stable updater synchronization. Rerun Publish after repository policy permits the metadata PR.\n' >&2
-                  exit 1
-                }
-              fi
-            fi
-          fi
+          printf 'STABLE UPDATE CHANNEL: PASS\n' >>"$GITHUB_STEP_SUMMARY"
 
-          verified_payload=$(gh api "repos/$GITHUB_REPOSITORY/contents/update.json?ref=main")
-          verified="$RUNNER_TEMP/update.json.verified"
-          python3 -c 'import base64,json,sys; p=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(p["content"]))' "$verified" <<<"$verified_payload"
-          python3 - "$verified" "$expected" <<'PY'
-          import json, sys
-          if json.load(open(sys.argv[1], encoding="utf-8")) != json.load(open(sys.argv[2], encoding="utf-8")):
-              raise SystemExit("published stable update metadata differs from the validated release")
-          PY
-          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" validate-update-json "$verified" >/dev/null
-
-          remote="$RUNNER_TEMP/published-asset"
-          rm -rf -- "$remote" && mkdir -p -- "$remote"
-          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$ZIP" --dir "$remote"
-          published_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}')
-          [[ $published_sha == "$EXPECTED_SHA" ]] || { printf 'Published ZIP differs from validated release ZIP.\n' >&2; exit 1; }
-          {
-            printf '## RELEASE %s PUBLISHED\n\n' "$VERSION"
-            printf -- '- SHA-256: `%s`\n' "$EXPECTED_SHA"
-            printf -- '- Physical proof: `%s`\n' "$PROOF_STATE"
-            printf -- '- Stable Magisk update channel: verified\n'
-          } >>"$GITHUB_STEP_SUMMARY"
-
-      - name: Verify prerelease without stable-channel mutation
-        if: ${{ contains(steps.release.outputs.version, '-') }}
-        shell: bash
+      - name: Final summary
+        if: always()
         env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.release.outputs.version }}
-          ZIP: ${{ steps.validate.outputs.zip }}
-          EXPECTED_SHA: ${{ steps.validate.outputs.digest }}
-          PROOF_STATE: ${{ steps.validate.outputs.proof_state }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PUBLISH: ${{ steps.hosted.outputs.publish }}
+          PROOF: ${{ inputs.physical_proof }}
+          FULL: ${{ inputs.full_validation }}
+          STATUS: ${{ job.status }}
+        shell: bash
         run: |
-          remote="$RUNNER_TEMP/published-prerelease"
-          rm -rf -- "$remote" && mkdir -p -- "$remote"
-          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$ZIP" --dir "$remote"
-          published_sha=$(sha256sum "$remote/$ZIP" | awk '{print $1}')
-          [[ $published_sha == "$EXPECTED_SHA" ]] || { printf 'Published prerelease ZIP differs from validated ZIP.\n' >&2; exit 1; }
           {
-            printf '## PRERELEASE %s PUBLISHED\n\n' "$VERSION"
-            printf -- '- SHA-256: `%s`\n' "$EXPECTED_SHA"
-            printf -- '- Physical proof: `%s`\n' "$PROOF_STATE"
-            printf -- '- Stable Magisk update channel: unchanged by design\n'
+            printf '\n## Result\n\n'
+            printf -- '- Version: `%s`\n' "${VERSION:-unresolved}"
+            printf -- '- Workflow status: `%s`\n' "$STATUS"
+            printf -- '- Full validation requested: `%s`\n' "$FULL"
+            printf -- '- Physical proof required: `%s`\n' "$PROOF"
+            if [[ $STATUS == success && $PUBLISH == true ]]; then
+              printf -- '- Release: `PUBLISHED`\n'
+            elif [[ $STATUS == success && $PROOF == true ]]; then
+              printf -- '- Release: `DRAFT / AWAITING PHYSICAL PROOF`\n'
+            fi
           } >>"$GITHUB_STEP_SUMMARY"

@@ -1,296 +1,198 @@
 # Releasing OTAST
 
-OTAST separates production releases from development branch builds.
+`Actions -> Release -> Run workflow` is the **authoritative production release path**.
 
-Production releases are exact-ZIP and publication-gated. Physical Pixel proof is available as a stronger validation layer and is **required by default**, but the repository owner may explicitly disable that requirement for a manual `workflow_dispatch` publication.
+There is one production workflow, one release job, and no operator-facing prepare/publish state machine.
 
-The primary production identity is the module ZIP SHA-256. A source commit is useful provenance, but evidence for one ZIP never authorizes another ZIP.
+## Normal release
 
-## Stable Magisk update channel
+Open **Actions -> Release -> Run workflow**.
 
-Every production ZIP contains `module.prop` with:
+The form contains only:
 
 ```text
-updateJson=https://raw.githubusercontent.com/cbkii/otast/main/update.json
+Version:
+  optional; blank = automatic next stable patch
+
+Run full test/fake-root qualification:
+  off by default
+
+Require physical Pixel proof before publishing:
+  off by default
 ```
 
-Stable `update.json` represents the latest successfully published **final** release:
+For the normal release, leave both checkboxes off and run the workflow once.
 
-```json
-{
-  "version": "vX.Y.Z",
-  "versionCode": 123,
-  "zipUrl": "https://github.com/cbkii/otast/releases/download/vX.Y.Z/otast-vX.Y.Z.zip",
-  "changelog": "https://raw.githubusercontent.com/cbkii/otast/main/CHANGELOG.md"
-}
-```
+The workflow will:
 
-Candidate source metadata in `module/module.prop` may be ahead of `update.json`. Preparing a candidate never advertises it to Magisk users. Stable `update.json` changes only after the exact final GitHub Release is public and verified.
+1. check out current `main`;
+2. resolve the next release version and monotonic `versionCode`;
+3. generate release notes;
+4. stamp `module/module.prop` and `CHANGELOG.md`;
+5. run new-candidate source-integrity checks;
+6. persist the version bump to `main`;
+7. build the canonical Magisk ZIP once from that exact source commit;
+8. verify ZIP, checksum and release manifest;
+9. create a temporary GitHub draft containing those exact assets;
+10. redownload and run mandatory hosted-release integrity checks;
+11. publish that same verified draft;
+12. verify the published Git tag resolves to the manifest source commit;
+13. for a stable release, update `main/update.json` to the published ZIP.
 
-Prereleases may be published as GitHub prereleases but are never marked latest and never alter stable `update.json`.
+A successful normal run therefore goes from current `main` to a published, version-bumped module without a second workflow dispatch.
 
-## Automatic release versioning
+## Versioning
 
-When **Version** is blank:
+When **Version** is blank, OTAST uses the stable `update.json` channel and current `module.prop` to choose the next release:
 
-- an existing unpublished candidate on `main` with a newer `versionCode` is reused exactly;
-- otherwise the stable final patch version is incremented automatically;
+- an unpublished newer candidate on `main` is reused;
+- otherwise the stable patch version is incremented;
 - `versionCode` is generated monotonically.
 
-When **Version** is explicit, OTAST validates it and generates the next monotonic `versionCode` automatically.
+An explicit version must be a newer valid `vMAJOR.MINOR.PATCH[-prerelease]` release identity. `versionCode` remains automatic.
 
-Prepare stamps candidate metadata in `module/module.prop` and updates/replaces the matching `CHANGELOG.md` section. It does **not** modify stable `update.json`.
+The workflow does not expose a separate `versionCode` field.
 
-## Production Release form
+## Mandatory integrity contract
 
-Open **Actions → Release → Run workflow**.
+The default release path intentionally avoids expensive qualification, but it does not skip integrity of the release artifact that can be published or reused.
 
-The form contains:
+Every workflow run validates the exact hosted release bundle before publication or retry continuation:
 
-```text
-Action:
-  prepare-release | publish-release
+- canonical ZIP structure;
+- SHA-256 sidecar;
+- `release-manifest.json`;
+- manifest version and `versionCode` identity;
+- hosted draft target against the manifest source commit;
+- device proof when present, and when required;
+- published tag/source identity before stable-channel synchronization;
+- stable updater downgrade/conflict protection when applicable.
 
-Version:
-  optional; blank = automatic/reusable candidate
+A newly created candidate additionally runs source-tree checks before the bundle is built:
 
-Run full validation:
-  checked by default
+- focused release-bundle regression tests;
+- repository syntax/public-safety verification;
+- deterministic module build and manifest-source binding.
 
-Require Pixel physical-device proof before publishing:
-  checked by default
-```
+Those candidate-source checks deliberately do **not** rerun against whatever `main` happens to contain when resuming an existing draft or already-published release. A retry is bound to the historical release by its hosted manifest and verifies that exact hosted artifact instead of qualifying unrelated newer source.
 
-The physical-proof checkbox affects **Publish only**. Prepare always creates the same exact candidate bundle regardless of that setting.
+These integrity checks are not controlled by a workflow checkbox.
 
-## Prepare release
+## Optional full validation
 
-Typical preparation:
+Enable **Run full test/fake-root qualification** only when the stronger repository gate is wanted for a newly created candidate.
 
-```text
-Action:                                  prepare-release
-Version:                                 [blank]
-Run full validation:                     checked
-Require Pixel physical-device proof:     either value; ignored by Prepare
-```
-
-Prepare:
-
-1. checks out current `main`;
-2. resolves candidate version and automatic `versionCode`;
-3. generates concise release notes;
-4. stamps `module.prop` and the candidate changelog section;
-5. always runs focused release regression/integrity checks;
-6. optionally runs `bash scripts/test.sh --full`;
-7. persists release metadata to `main` before creating the production draft;
-8. builds the canonical production bundle exactly once from that final source commit;
-9. creates or refreshes an **unproven** GitHub draft;
-10. redownloads the hosted ZIP/checksum/manifest and verifies their exact bytes;
-11. verifies the draft `target_commitish` is the qualified source SHA.
-
-A GitHub draft may legitimately have no `refs/tags/vX.Y.Z` yet. That is normal. Prepare therefore does **not** require a release Git tag to exist while the release remains draft. If a tag already exists, it must resolve safely to the qualified source.
-
-A successful Prepare ends with:
-
-```text
-DRAFT READY
-```
-
-## Validation checkbox
-
-When checked, Prepare also runs:
+This additionally runs:
 
 ```bash
 bash scripts/test.sh --full
 ```
 
-When unchecked, only the expensive complete fake-root/full suite is skipped.
+That includes the complete Python suite, ShellCheck BusyBox validation, exact-ZIP fake-root lifecycle and clean-room source checks.
 
-The checkbox never disables:
+It is **off by default** for routine releases. It is not replayed against current `main` when resuming an already-hosted release.
 
-- version validation;
-- focused release tests;
-- repository/update-channel validation;
-- deterministic package validation;
-- exact ZIP/checksum/manifest verification;
-- embedded Magisk metadata checks;
-- source identity validation;
-- publication/tag verification;
-- stable updater validation.
+## Optional physical Pixel proof
 
-## Canonical production bundle
+Enable **Require physical Pixel proof before publishing** only when pre-publication device proof is required.
 
-Prepare produces:
+On the first proof-gated run, the workflow:
+
+1. prepares and persists the candidate;
+2. builds the exact canonical bundle;
+3. creates the GitHub draft;
+4. redownloads and verifies the draft;
+5. leaves it unpublished because the proof asset is absent.
+
+The run succeeds with:
 
 ```text
-dist/
-├── otast-vX.Y.Z.zip
-├── otast-vX.Y.Z.zip.sha256
-└── release-manifest.json
+DRAFT READY — PHYSICAL PROOF REQUIRED
 ```
 
-The ZIP contains `module.prop` and `release.properties`. `release-manifest.json` binds version, `versionCode`, source commit, filenames, release tag and exact ZIP SHA-256.
+Qualify that exact draft on the Pixel, then rerun **the same Release workflow** with the same version and physical proof enabled. The workflow validates the proof asset against the exact ZIP, publishes the existing draft, verifies its tag/source identity and synchronises stable `update.json`.
 
-## Physical Pixel proof
+There is no separate `prepare-release` or `publish-release` action.
 
-The complete operator procedure is documented in [Physical Pixel release proof](PHYSICAL-DEVICE-PROOF.md).
+### Pixel helper
 
-The recommended proof-only command on the Pixel is:
+The optional device helper remains:
 
 ```bash
-cd "$HOME/repos/otast"
-git switch main
-git pull --ff-only
 source scripts/otast-playbook.sh
-otast doctor
-otast release --no-publish
+otast release
 ```
 
-Run the **same** `otast release --no-publish` command after every requested reboot until the wizard reports that PASS proof was uploaded and the draft was intentionally left unpublished.
-
-The wizard locks the exact draft ZIP SHA-256 and proves:
-
-```text
-baseline recovery if required
-→ exact draft install through Magisk
-→ reboot
-→ Report
-→ Preflight READY
-→ Apply
-→ reboot if required
-→ Verify CURRENT
-→ second Apply NO_CHANGES_REQUIRED
-→ second Verify CURRENT
-→ Restore
-→ reboot
-→ confirm managed state absent
-→ final Report
-→ write + validate + upload proof
-```
-
-Successful proof is uploaded as:
-
-```text
-otast-vX.Y.Z-device-proof.json
-```
-
-It records schema 2, `result=PASS`, exact ZIP SHA-256, candidate version, diagnostic source commit, `tegu`, SDK 36 and the required lifecycle phase results.
-
-## Publish with physical proof
+It resolves the same canonical release identity, drives the proven reboot/apply/verify/restore lifecycle, uploads `otast-vX.Y.Z-device-proof.json`, and reruns the same authoritative Release workflow.
 
 Use:
 
-```text
-Action:                                  publish-release
-Version:                                 [blank]
-Require Pixel physical-device proof:     checked
+```bash
+otast release --no-publish
 ```
 
-Blank Version requires exactly one eligible draft. If several drafts are eligible, specify the exact version.
+to stop after proof upload and leave the draft unpublished.
 
-With proof required, Publish requires the draft to contain:
+See [Physical Pixel release proof](PHYSICAL-DEVICE-PROOF.md) for the device lifecycle itself.
+
+## Canonical release bundle
+
+Each release uses:
 
 ```text
 otast-vX.Y.Z.zip
 otast-vX.Y.Z.zip.sha256
 release-manifest.json
-otast-vX.Y.Z-device-proof.json
 ```
 
-Publish validates the proof against the exact ZIP before publication.
+`release-manifest.json` binds:
 
-If proof is missing, Publish stops with an actionable message: run `otast release` or explicitly disable the proof requirement for that manual publication.
+- version;
+- `versionCode`;
+- source commit;
+- ZIP/checksum filenames;
+- release tag;
+- exact ZIP SHA-256.
 
-## Publish without physical proof
+The workflow builds a new candidate only when that release does not already exist. Existing drafts or a partially completed published release are resumed from their hosted manifest instead of being rebuilt under the same version.
 
-For an owner-triggered manual release, uncheck:
+## Failure and rerun behaviour
+
+The workflow is designed so ordinary retries do not require selecting a different release operation.
+
+If a failure occurs:
+
+- before the release exists, rerun **Release**; an already-persisted candidate version is reused and a new candidate is qualified/built as required;
+- after the verified draft exists, rerun **Release**; the exact hosted bundle is redownloaded and revalidated without rebuilding it or requalifying unrelated newer `main` source;
+- after the release is public but stable `update.json` did not synchronise, rerun **Release**; the published manifest is revalidated and updater synchronisation resumes;
+- if `main` moves during the version-bump push, the workflow stops before publishing and asks for a rerun against current `main`.
+
+The workflow never creates an internal release PR or silently selects a different branch.
+
+## Stable Magisk update channel
+
+Stable releases update:
 
 ```text
-Require Pixel physical-device proof before publishing
+https://raw.githubusercontent.com/cbkii/otast/main/update.json
 ```
 
-This bypasses **only** the physical-device proof requirement.
-
-The release still must have a complete canonical bundle and still undergoes:
-
-- ZIP structural validation;
-- checksum validation;
-- manifest and embedded Magisk metadata validation;
-- source identity validation;
-- publication of the existing draft without rebuilding;
-- post-publication Git tag verification against the manifest source SHA;
-- public ZIP SHA-256 verification;
-- final-release stable `update.json` synchronization and verification.
-
-If a device-proof asset is already present, Publish validates it even when the checkbox is unchecked.
-
-## Publication sequence
-
-Publish never rebuilds.
-
-For a final release it:
-
-1. selects the exact eligible candidate;
-2. downloads ZIP/checksum/manifest and optional/required proof;
-3. verifies the canonical bundle;
-4. validates proof when present, and requires it when the checkbox is checked;
-5. publishes the existing draft;
-6. waits boundedly for GitHub to create/resolve the release tag;
-7. verifies the tag points to the exact manifest source commit;
-8. verifies the public ZIP SHA-256;
-9. generates stable `update.json` from the release manifest;
-10. refuses updater downgrade or conflicting equal-version metadata;
-11. persists and rereads stable updater metadata;
-12. confirms Magisk's stable update channel points to the exact published ZIP.
-
-A prerelease follows the same exact-bundle publication and tag verification but leaves stable `update.json` unchanged.
-
-## Physical proof recovery
-
-Private physical-release state is stored under:
+to the exact published asset:
 
 ```text
-~/.local/state/otast-release/<version>/
+https://github.com/cbkii/otast/releases/download/vX.Y.Z/otast-vX.Y.Z.zip
 ```
 
-Use:
+Prereleases are published as GitHub prereleases and do not change stable `update.json`.
 
-```bash
-otast release --status
-```
+## Development branch builds
 
-to inspect progress.
+Development ZIPs remain separate under **Actions -> Build Branch**.
 
-The wizard is resumable across reboot boundaries. If a valid proof asset is already present on the draft, it can recover that proof instead of repeating device qualification. If publication fails after proof succeeds, rerunning the release flow reuses the same proof-bearing candidate rather than rebuilding it.
+That workflow is read-only and does not:
 
-Do not manually create or edit proof JSON to force publication.
-
-## Development branch build
-
-Development builds use **Actions → Build Branch**.
-
-Its form contains only:
-
-```text
-Branch:
-  optional; blank = main
-```
-
-It resolves the selected branch HEAD, builds a Magisk-installable ZIP, structurally validates it and uploads the ZIP as an Actions artifact.
-
-It uses read-only repository permissions and never creates/releases tags, modifies production Releases, requires physical proof, updates `update.json`, or substitutes a branch into production release preparation.
-
-## Hard stops
-
-OTAST still stops rather than manufacturing success for states such as:
-
-- wrong device/SDK during physical proof;
-- unavailable Magisk root;
-- unverifiable or drifted pre-existing managed state;
-- candidate ZIP substitution after proof begins;
-- persistent second-Apply writer conflict;
-- failed Restore that cannot be recovered safely;
-- malformed or mismatched proof;
-- incomplete canonical release bundle;
-- published tag/source mismatch;
-- updater downgrade or conflicting equal-version metadata.
+- create or publish Releases;
+- create production tags;
+- update `module.prop` release identity;
+- update `update.json`;
+- substitute a branch for production `main`.

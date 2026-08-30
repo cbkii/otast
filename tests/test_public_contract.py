@@ -95,78 +95,98 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("legacy ota-sot/otasst governor traces remain", capture)
         self.assertIn("/data/adb/post-fs-data.d/000-$legacy_otasst.sh", capture)
 
-    def test_production_release_workflow_has_four_user_inputs(self) -> None:
+    def test_production_release_workflow_has_three_simple_inputs(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertNotIn("permissions: write-all", workflow)
         self.assertIn("\npermissions:\n", workflow)
         input_block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
-        for key in ("action", "version", "full_validation", "physical_proof"):
+        for key in ("version", "full_validation", "physical_proof"):
             self.assertRegex(input_block, rf"(?m)^      {key}:$")
-        self.assertEqual(len(re.findall(r"(?m)^      [A-Za-z_][A-Za-z0-9_]*:$", input_block)), 4)
-        for removed in ("branch:", "tag:", "operation:", "versionCode:", "legacy"):
-            self.assertNotIn(removed, input_block.lower())
-        self.assertIn("- prepare-release", input_block)
-        self.assertIn("- publish-release", input_block)
-        self.assertNotIn("build-branch", input_block)
-        proof_block = input_block.split("      physical_proof:\n", 1)[1]
-        self.assertIn("type: boolean", proof_block)
-        self.assertIn("default: true", proof_block)
-        self.assertIn("Require Pixel physical-device proof before publishing", proof_block)
+        self.assertEqual(len(re.findall(r"(?m)^      [A-Za-z_][A-Za-z0-9_]*:$", input_block)), 3)
+        for removed in ("action:", "branch:", "tag:", "operation:", "versionCode:", "legacy"):
+            self.assertNotIn(removed, input_block)
 
-    def test_production_release_workflow_preserves_release_safety_contract(self) -> None:
+        full_block = input_block.split("      full_validation:\n", 1)[1].split("      physical_proof:\n", 1)[0]
+        proof_block = input_block.split("      physical_proof:\n", 1)[1]
+        self.assertIn("type: boolean", full_block)
+        self.assertIn("default: false", full_block)
+        self.assertIn("type: boolean", proof_block)
+        self.assertIn("default: false", proof_block)
+
+    def test_production_release_workflow_is_single_authoritative_job(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("group: release-${{ github.repository }}", workflow)
-        self.assertEqual(workflow.count('if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then'), 2)
-        self.assertIn("resolve-release-version", workflow)
-        self.assertIn("stamp-release", workflow)
-        self.assertIn("scripts/test.sh --full", workflow)
-        self.assertIn("FULL VALIDATION: SKIPPED BY OWNER", workflow)
-        self.assertIn("MANDATORY RELEASE INTEGRITY: PASS", workflow)
-        self.assertIn("test_release*.py", workflow)
-        self.assertIn("test_public_contract.py", workflow)
-        self.assertIn("build-release.sh", workflow)
-        self.assertIn("verify-release", workflow)
-        self.assertIn("release-manifest.json", workflow)
-        self.assertIn("validate-device-release-proof.py", workflow)
-        self.assertIn("select-release-candidate.py", workflow)
-        self.assertIn("generate-update-json", workflow)
-        self.assertIn("proven assets are immutable", workflow)
-        self.assertIn("main moved during release preparation", workflow)
-        self.assertIn("release-meta/", workflow)
-        self.assertIn("release-update/", workflow)
-        self.assertIn("contents: write", workflow)
-        self.assertIn("pull-requests: write", workflow)
-        self.assertIn("OWNER BYPASS", workflow)
-        self.assertIn("Require Pixel physical-device proof before publishing", workflow)
-        self.assertIn("Draft has no Git tag yet; this is normal", workflow)
-        self.assertIn("target_commitish", workflow)
-        self.assertIn("Verify published tag and release identity", workflow)
+        self.assertEqual(workflow.count('if [[ "$GITHUB_ACTOR" != "$GITHUB_REPOSITORY_OWNER" ]]; then'), 1)
 
-        prepare_marker = "  prepare-release:\n"
-        publish_marker = "  publish-release:\n"
-        self.assertIn(prepare_marker, workflow)
-        self.assertIn(publish_marker, workflow)
-        prepare_job = workflow.split(prepare_marker, 1)[1].split(publish_marker, 1)[0]
-        publish_job = workflow.split(publish_marker, 1)[1]
-        self.assertIn("build-release.sh", prepare_job)
-        self.assertIn("Create or refresh unproven draft", prepare_job)
-        self.assertNotIn("build-release.sh", publish_job)
-        self.assertNotIn("gh release create", publish_job)
-        self.assertIn("--draft=false --prerelease", publish_job)
-        self.assertIn("--draft=false --latest", publish_job)
-        self.assertIn("if: ${{ !contains(steps.release.outputs.version, '-') }}", publish_job)
-        self.assertIn("if: ${{ contains(steps.release.outputs.version, '-') }}", publish_job)
+        jobs = workflow.split("\njobs:\n", 1)[1]
+        self.assertEqual(re.findall(r"(?m)^  ([A-Za-z][A-Za-z0-9_-]*):$", jobs), ["release"])
+        self.assertNotIn("\n  prepare-release:", workflow)
+        self.assertNotIn("\n  publish-release:", workflow)
 
-    def test_manual_publish_proof_is_optional_but_bundle_integrity_is_not(self) -> None:
+        for token in (
+            "resolve-release-version",
+            "stamp-release",
+            "NEW CANDIDATE SOURCE INTEGRITY: PASS",
+            "HOSTED RELEASE INTEGRITY: PASS",
+            "scripts/test.sh --full",
+            "FULL VALIDATION: SKIPPED (default)",
+            "build-release.sh",
+            "verify-release",
+            "release-manifest.json",
+            "gh release create",
+            "--draft",
+            "--draft=false",
+            "validate-device-release-proof.py",
+            "generate-update-json",
+            "contents: write",
+            "Published tag source mismatch",
+            "STABLE UPDATE CHANNEL: PASS",
+        ):
+            self.assertIn(token, workflow)
+
+        for removed in (
+            "select-release-candidate.py",
+            "prepare-release",
+            "publish-release",
+            "pull-requests: write",
+            "gh pr create",
+            "gh pr merge",
+            "release-meta/",
+        ):
+            self.assertNotIn(removed, workflow)
+
+    def test_hosted_integrity_is_always_on_and_source_checks_are_candidate_only(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        publish = workflow.split("  publish-release:\n", 1)[1]
-        self.assertIn("REQUIRE_PHYSICAL_PROOF: ${{ inputs.physical_proof }}", publish)
-        self.assertIn("[[ $REQUIRE_PHYSICAL_PROOF == true ]] && args+=(--require-proof)", publish)
-        self.assertIn("elif [[ $REQUIRE_PHYSICAL_PROOF == true ]]", publish)
-        self.assertIn("proof_state='NOT PROVIDED (OWNER BYPASS)'", publish)
-        self.assertIn("verify-release", publish)
-        self.assertIn("--checksum", publish)
-        self.assertIn("--manifest", publish)
+
+        source_block = workflow.split("      - name: New-candidate source integrity\n", 1)[1].split(
+            "      - name: Full repository qualification\n", 1
+        )[0]
+        self.assertIn("if: steps.existing.outputs.exists != 'true'", source_block)
+        self.assertIn("test_release_bundle.py", source_block)
+        self.assertIn('tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify', source_block)
+
+        hosted_block = workflow.split("      - name: Mandatory hosted release integrity\n", 1)[1].split(
+            "      - name: Publish verified release\n", 1
+        )[0]
+        self.assertNotRegex(hosted_block, r"(?m)^        if:")
+        self.assertIn("gh release download", hosted_block)
+        self.assertIn("verify-release", hosted_block)
+        self.assertIn("--checksum", hosted_block)
+        self.assertIn("--manifest", hosted_block)
+        self.assertIn("Hosted bundle identity does not match resolved release", hosted_block)
+        self.assertIn("Hosted draft target does not match manifest source", hosted_block)
+        self.assertIn("HOSTED RELEASE INTEGRITY: PASS", hosted_block)
+
+    def test_manual_publish_proof_is_opt_in_but_hosted_integrity_is_not(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        input_block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+        proof_block = input_block.split("      physical_proof:\n", 1)[1]
+        self.assertIn("default: false", proof_block)
+        self.assertIn("REQUIRE_PROOF: ${{ inputs.physical_proof }}", workflow)
+        self.assertIn("if [[ $REQUIRE_PROOF == true && $has_proof != true ]]; then", workflow)
+        self.assertIn("DRAFT READY — PHYSICAL PROOF REQUIRED", workflow)
+        self.assertIn("validate-device-release-proof.py", workflow)
+        self.assertIn("printf 'publish=true", workflow)
 
     def test_branch_build_is_a_separate_read_only_one_field_workflow(self) -> None:
         workflow = (ROOT / ".github/workflows/build-branch.yml").read_text(encoding="utf-8")
@@ -176,7 +196,7 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("contents: read", workflow)
         self.assertNotIn("contents: write", workflow)
         self.assertIn("git ls-remote --exit-code --heads", workflow)
-        self.assertIn("tools.otastctl --repo-root \"$GITHUB_WORKSPACE\" build", workflow)
+        self.assertIn('tools.otastctl --repo-root "$GITHUB_WORKSPACE" build', workflow)
         self.assertIn("validate-zip", workflow)
         self.assertIn("actions/upload-artifact@v4", workflow)
         self.assertIn("name: otast-branch-${{ github.run_id }}-${{ github.run_attempt }}", workflow)

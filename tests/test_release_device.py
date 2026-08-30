@@ -110,19 +110,22 @@ class ReleaseDeviceTests(unittest.TestCase):
             with self.assertRaises(module.ProofError):
                 module.validate_proof(proof, module_zip, version="v1.0.0")
 
-    def test_release_wizard_uses_canonical_versioning_and_new_workflow_api(self) -> None:
+    def test_release_wizard_uses_canonical_versioning_and_single_workflow_api(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("resolve_release_identity", text)
         self.assertIn('LIFECYCLE_SCRIPT="$SCRIPT_DIR/release-device-lifecycle.sh"', text)
         self.assertIn("operation=draft", text)
-        self.assertIn("action=prepare-release", text)
-        self.assertIn("action=publish-release", text)
+        self.assertIn("physical_proof=true", text)
         self.assertIn("full_validation=true", text)
-        self.assertIn('legacy_args+=(--version "$VERSION" --no-publish)', text)
+        self.assertIn("full_validation=false", text)
+        self.assertNotIn("action=prepare-release", text)
+        self.assertNotIn("action=publish-release", text)
+        self.assertIn('lifecycle_args+=(--version "$VERSION" --no-publish)', text)
         self.assertIn("Physical proof remains preserved", text)
         self.assertIn("mark_private_state_complete", text)
         self.assertIn("stable update.json", text)
         self.assertIn("versionCode remains automatic", text)
+        self.assertIn("authoritative GitHub Release workflow", text)
         self.assertNotIn("LEGACY_RELEASE_COMMIT", text)
         self.assertNotIn("contents/scripts/release-device.sh?ref=", text)
 
