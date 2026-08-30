@@ -2,12 +2,14 @@
 
 ## Requirements
 
-- Pixel 9a (`tegu`).
+- Google Pixel device.
 - Android 16 / SDK 36.
 - Magisk with working root access.
 - A valid, regular `/data/adb/ota.prop` matching the live device.
 - Target-module versions matching an accepted profile.
 - No active or staged legacy `ota-sot`/`otasst` module, persistent state root or dispatcher.
+
+OTAST documentation is intentionally Pixel-model agnostic. Physical-device testing to date is limited to **Pixel 9a** and **Pixel 8**. Other Pixel models are untested and must be treated as unverified until their exact device/build path passes the same authority, target-profile and physical validation gates. Documentation scope does not override fail-closed runtime compatibility checks.
 
 ## Production release path
 
