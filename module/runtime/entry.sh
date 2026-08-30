@@ -23,6 +23,7 @@ OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 . "$MODDIR/authority.sh" || exit 70
 . "$MODDIR/transaction.sh" || exit 70
 . "$MODDIR/pif.sh" || exit 70
+. "$MODDIR/policy.sh" || exit 70
 . "$MODDIR/ta.sh" || exit 70
 . "$MODDIR/profiles.sh" || exit 70
 . "$MODDIR/report.sh" || exit 70
@@ -40,6 +41,7 @@ _otast_load() {
   otast_ensure_dir "$OTAST_STATE_ROOT" || return 1
   otast_ensure_dir "$OTAST_TMP_ROOT" || return 1
   otast_validate_authority_file || return 1
+  otast_enforce_runtime_policy || return 1
 }
 
 _otast_validate_source() {
@@ -52,6 +54,7 @@ _otast_preflight() {
   otast_require_no_legacy_governors || return 1
   _otast_validate_source || return 1
   otast_plan_all || return 1
+  otast_plan_strict_runtime_identity || return 1
   printf 'READY\toperations=%s\tauthority=%s\n' "$OTAST_PLAN_COUNT" "$OTAST_AUTHORITY_SHA256"
 }
 
@@ -64,6 +67,7 @@ _otast_apply() {
   result=0
   otast_recover_transactions || result=1
   [ "$result" -ne 0 ] || otast_plan_all || result=1
+  [ "$result" -ne 0 ] || otast_plan_strict_runtime_identity || result=1
   plan_count=${OTAST_PLAN_COUNT:-0}
   [ "$result" -ne 0 ] || otast_apply_plan || result=1
   otast_release_lock || result=1
@@ -81,6 +85,7 @@ _otast_verify() {
   otast_require_no_legacy_governors || return 1
   _otast_validate_source || return 1
   otast_compare_live_managed_vbmeta || return 1
+  otast_compare_live_strict_runtime_identity || return 1
   otast_verify_managed
 }
 
@@ -98,7 +103,8 @@ _otast_restore() {
 _otast_report() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
-  otast_report
+  otast_report || return 1
+  otast_report_strict_runtime_identity
 }
 
 _otast_boot_recover() {
