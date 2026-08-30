@@ -126,7 +126,8 @@ class PublicRepositoryContractTests(unittest.TestCase):
         for token in (
             "resolve-release-version",
             "stamp-release",
-            "MANDATORY RELEASE INTEGRITY: PASS",
+            "NEW CANDIDATE SOURCE INTEGRITY: PASS",
+            "HOSTED RELEASE INTEGRITY: PASS",
             "scripts/test.sh --full",
             "FULL VALIDATION: SKIPPED (default)",
             "build-release.sh",
@@ -154,7 +155,29 @@ class PublicRepositoryContractTests(unittest.TestCase):
         ):
             self.assertNotIn(removed, workflow)
 
-    def test_manual_publish_proof_is_opt_in_but_bundle_integrity_is_not(self) -> None:
+    def test_hosted_integrity_is_always_on_and_source_checks_are_candidate_only(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+        source_block = workflow.split("      - name: New-candidate source integrity\n", 1)[1].split(
+            "      - name: Full repository qualification\n", 1
+        )[0]
+        self.assertIn("if: steps.existing.outputs.exists != 'true'", source_block)
+        self.assertIn("test_release_bundle.py", source_block)
+        self.assertIn('tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify', source_block)
+
+        hosted_block = workflow.split("      - name: Mandatory hosted release integrity\n", 1)[1].split(
+            "      - name: Publish verified release\n", 1
+        )[0]
+        self.assertNotRegex(hosted_block, r"(?m)^        if:")
+        self.assertIn("gh release download", hosted_block)
+        self.assertIn("verify-release", hosted_block)
+        self.assertIn("--checksum", hosted_block)
+        self.assertIn("--manifest", hosted_block)
+        self.assertIn("Hosted bundle identity does not match resolved release", hosted_block)
+        self.assertIn("Hosted draft target does not match manifest source", hosted_block)
+        self.assertIn("HOSTED RELEASE INTEGRITY: PASS", hosted_block)
+
+    def test_manual_publish_proof_is_opt_in_but_hosted_integrity_is_not(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         input_block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
         proof_block = input_block.split("      physical_proof:\n", 1)[1]
@@ -163,9 +186,6 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("if [[ $REQUIRE_PROOF == true && $has_proof != true ]]; then", workflow)
         self.assertIn("DRAFT READY — PHYSICAL PROOF REQUIRED", workflow)
         self.assertIn("validate-device-release-proof.py", workflow)
-        self.assertIn("verify-release", workflow)
-        self.assertIn("--checksum", workflow)
-        self.assertIn("--manifest", workflow)
         self.assertIn("printf 'publish=true", workflow)
 
     def test_branch_build_is_a_separate_read_only_one_field_workflow(self) -> None:
