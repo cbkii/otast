@@ -24,6 +24,7 @@ OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 . "$MODDIR/transaction.sh" || exit 70
 . "$MODDIR/pif.sh" || exit 70
 . "$MODDIR/policy.sh" || exit 70
+. "$MODDIR/trickystore.sh" || exit 70
 . "$MODDIR/ta.sh" || exit 70
 . "$MODDIR/profiles.sh" || exit 70
 . "$MODDIR/report.sh" || exit 70
@@ -42,6 +43,8 @@ _otast_load() {
   otast_ensure_dir "$OTAST_TMP_ROOT" || return 1
   otast_validate_authority_file || return 1
   otast_enforce_runtime_policy || return 1
+  otast_validate_trickystore_oss || return 1
+  otast_trickystore_collect_health || return 1
 }
 
 _otast_validate_source() {
@@ -104,7 +107,8 @@ _otast_report() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
   otast_report || return 1
-  otast_report_strict_runtime_identity
+  otast_report_strict_runtime_identity || return 1
+  otast_report_trickystore_health
 }
 
 _otast_boot_recover() {
