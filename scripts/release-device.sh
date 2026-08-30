@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Release UX/front-end for the qualified physical-device lifecycle.
-# The reboot/apply/verify/restore state machine is retained separately in-tree;
-# this wrapper supplies canonical versioning and the simplified GitHub workflow API.
+# GitHub Actions release.yml is the sole production publisher. This wrapper
+# only prepares/uploads optional physical proof, then reruns that same workflow.
 
 set -u
 
@@ -38,18 +38,19 @@ if ((SHOW_HELP)); then
     cat <<'EOF_HELP'
 Usage: release-device.sh [OPTIONS]
 
-Resumable physical Pixel release qualification. Versioning is resolved by the
-same canonical OTAST release logic used by GitHub Actions.
+Optional resumable physical-Pixel qualification for the exact candidate built by
+the authoritative GitHub Release workflow.
 
   otast release
-      Reuse an existing unpublished candidate, or resolve the automatic next
-      patch release from stable update.json.
+      Resolve the automatic next/reusable candidate, prepare its proof-gated
+      GitHub draft, qualify that exact ZIP, upload proof, then publish by rerunning
+      the same Release workflow.
 
   otast release --version v1.1.0
       Qualify an explicit newer version; versionCode remains automatic.
 
 Options:
-  --version VERSION   Explicit release version; blank/omitted = automatic.
+  --version VERSION   Explicit release version; blank/omitted = automatic next.
   --yes               Approve reboot and final publication prompts.
   --no-reboot         Never reboot automatically; print the required boundary.
   --no-publish        Upload PASS physical proof but leave the release as draft.
@@ -57,10 +58,9 @@ Options:
   --reset             Remove only this wizard's private state for the candidate.
   -h, --help          Show this help without device or network access.
 
-The underlying lifecycle remains the qualified OTAST sequence across real reboot
-boundaries: baseline recovery, exact draft install, Preflight, Apply, Verify,
-idempotent second Apply, Restore and final Report. Production publication still
-happens only through the GitHub Release workflow and never rebuilds the proven ZIP.
+Normal releases do not need this command: Actions -> Release publishes directly
+with physical proof disabled by default. This helper exists only for the optional
+strict physical-proof path.
 EOF_HELP
     exit 0
 fi
@@ -97,6 +97,7 @@ TMP_BASE=${TMPDIR:-${HOME:?}/.cache/otast/tmp}
 mkdir -p -- "$TMP_BASE" || exit 1
 WORK=$(mktemp -d "$TMP_BASE/release-wrapper.XXXXXX") || exit 1
 SHIM_DIR=$WORK/shim
+SHIM_STATE=$WORK/last-operation
 mkdir -p -- "$SHIM_DIR" || exit 1
 cleanup() {
     rm -rf -- "$WORK"
@@ -130,6 +131,7 @@ from pathlib import Path
 from tools.otastctl.build import module_metadata
 from tools.otastctl.release import load_update_metadata, resolve_release_identity
 from tools.otastctl.util import stable_json
+
 stable = load_update_metadata(Path(sys.argv[1]))
 current = module_metadata(Path(sys.argv[2]))
 print(stable_json(resolve_release_identity(stable, current, requested_version=sys.argv[3])), end="")
@@ -185,16 +187,19 @@ publication_prompt() {
         printf '\nPublication not requested.\n'
         return 1
     fi
-    case $answer in y|Y|yes|YES) return 0 ;; *) printf 'Publication not requested.\n'; return 1 ;; esac
+    case $answer in
+        y|Y|yes|YES) return 0 ;;
+        *) printf 'Publication not requested.\n'; return 1 ;;
+    esac
 }
 
 dispatch_publication() {
     local dispatch_at run_id runs attempt
     publication_prompt || return 0
-    printf '[INFO] Dispatching publication for physically proven %s\n' "$VERSION"
+    printf '[INFO] Dispatching authoritative Release workflow for physically proven %s\n' "$VERSION"
     dispatch_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1
     "$REAL_GH" workflow run "$WORKFLOW" -R "$REPO_SLUG" --ref main \
-        -f action=publish-release -f "version=$VERSION" -f full_validation=true || {
+        -f "version=$VERSION" -f full_validation=false -f physical_proof=true || {
         printf 'STOP: cannot dispatch publication workflow. Physical proof remains preserved.\n' >&2
         return 1
     }
@@ -203,7 +208,7 @@ dispatch_publication() {
     for ((attempt=1; attempt<=30; attempt+=1)); do
         runs=$("$REAL_GH" run list -R "$REPO_SLUG" --workflow "$WORKFLOW" --branch main \
             --event workflow_dispatch --limit 30 --json databaseId,displayTitle,createdAt 2>/dev/null) || runs='[]'
-        run_id=$(EXPECTED="Release publish-release $VERSION" SINCE="$dispatch_at" python3 -c '
+        run_id=$(EXPECTED="Release $VERSION" SINCE="$dispatch_at" python3 -c '
 import json,os,sys
 items=[r for r in json.load(sys.stdin) if r.get("displayTitle")==os.environ["EXPECTED"] and (r.get("createdAt") or "") >= os.environ["SINCE"]]
 items.sort(key=lambda r:r.get("createdAt", ""), reverse=True)
@@ -213,7 +218,7 @@ print(items[0]["databaseId"] if items else "")
         sleep 4
     done
     [[ -n $run_id ]] || {
-        printf 'STOP: publication workflow was dispatched but its run could not be identified. Physical proof remains preserved.\n' >&2
+        printf 'STOP: workflow was dispatched but its run could not be identified. Physical proof remains preserved.\n' >&2
         return 1
     }
 
@@ -228,8 +233,7 @@ print(items[0]["databaseId"] if items else "")
 }
 
 # If GitHub already has physical proof for this exact candidate, do not re-enter
-# qualification. This covers both a proven draft awaiting publication and a
-# partially published release whose updater synchronization must be retried.
+# qualification. The authoritative workflow can resume publication/update sync.
 existing=$(release_state) || existing=
 if [[ -n $existing ]]; then
     has_proof=$(release_has_proof "$existing") || has_proof=no
@@ -244,29 +248,31 @@ if [[ -n $existing ]]; then
     fi
 fi
 
+# The retained lifecycle still speaks its original operation=draft/publish API.
+# Translate those internal calls into the single authoritative workflow contract.
 cat >"$SHIM_DIR/gh" <<'SHIM'
 #!/usr/bin/env bash
 set -u
 real=${OTAST_REAL_GH:?}
+state=${OTAST_SHIM_STATE:?}
+
 if [[ ${1:-} == workflow && ${2:-} == run ]]; then
     args=("$@")
     out=()
     index=0
-    saw_action=0
+    operation=
     while ((index < ${#args[@]})); do
         value=${args[index]}
         if [[ $value == -f && $((index + 1)) -lt ${#args[@]} ]]; then
             pair=${args[index+1]}
             case $pair in
                 operation=draft)
-                    out+=("-f" "action=prepare-release")
-                    saw_action=1
+                    operation=draft
                     index=$((index + 2))
                     continue
                     ;;
                 operation=publish)
-                    out+=("-f" "action=publish-release")
-                    saw_action=1
+                    operation=publish
                     index=$((index + 2))
                     continue
                     ;;
@@ -275,18 +281,29 @@ if [[ ${1:-} == workflow && ${2:-} == run ]]; then
         out+=("$value")
         index=$((index + 1))
     done
-    ((saw_action)) && out+=("-f" "full_validation=true")
+
+    if [[ -n $operation ]]; then
+        printf '%s\n' "$operation" >"$state"
+        out+=("-f" "physical_proof=true")
+        if [[ $operation == draft ]]; then
+            out+=("-f" "full_validation=true")
+        else
+            out+=("-f" "full_validation=false")
+        fi
+    fi
     exec "$real" "${out[@]}"
 elif [[ ${1:-} == run && ${2:-} == list ]]; then
     output=$("$real" "$@") || exit $?
-    python3 -c '
-import json,sys
+    operation=$(cat "$state" 2>/dev/null || true)
+    OPERATION="$operation" python3 -c '
+import json,os,sys
 value=json.load(sys.stdin)
-for item in value:
-    title=item.get("displayTitle") or ""
-    title=title.replace("Release prepare-release ", "Release draft ", 1)
-    title=title.replace("Release publish-release ", "Release publish ", 1)
-    item["displayTitle"]=title
+op=os.environ.get("OPERATION") or ""
+if op:
+    for item in value:
+        title=item.get("displayTitle") or ""
+        if title.startswith("Release ") and not title.startswith(f"Release {op} "):
+            item["displayTitle"]=title.replace("Release ", f"Release {op} ", 1)
 json.dump(value, sys.stdout)
 ' <<<"$output"
 else
@@ -295,24 +312,28 @@ fi
 SHIM
 chmod 0700 -- "$SHIM_DIR/gh" || exit 1
 
-legacy_args=()
+lifecycle_args=()
 skip_next=0
 for ((i=0; i<${#ORIGINAL_ARGS[@]}; i+=1)); do
-    if ((skip_next)); then skip_next=0; continue; fi
+    if ((skip_next)); then
+        skip_next=0
+        continue
+    fi
     case ${ORIGINAL_ARGS[i]} in
         --version) skip_next=1 ;;
         --no-publish) ;;
         -h|--help) ;;
-        *) legacy_args+=("${ORIGINAL_ARGS[i]}") ;;
+        *) lifecycle_args+=("${ORIGINAL_ARGS[i]}") ;;
     esac
 done
-# The retained lifecycle always stops after proof upload. This wrapper alone may
-# request publication, preventing partial GitHub publication from being mistaken
-# for a completed release when updater synchronization still failed.
-legacy_args+=(--version "$VERSION" --no-publish)
 
-PATH="$SHIM_DIR:$PATH" OTAST_REAL_GH="$REAL_GH" OTAST_RELEASE_WRAPPER_AUTOPUBLISH="$AUTO_PUBLISH" \
-    bash "$LIFECYCLE_SCRIPT" "${legacy_args[@]}"
+# Qualification always stops after proof upload. This wrapper alone requests
+# publication so a failed updater sync can be retried without repeating proof.
+lifecycle_args+=(--version "$VERSION" --no-publish)
+
+PATH="$SHIM_DIR:$PATH" OTAST_REAL_GH="$REAL_GH" OTAST_SHIM_STATE="$SHIM_STATE" \
+    OTAST_RELEASE_WRAPPER_AUTOPUBLISH="$AUTO_PUBLISH" \
+    bash "$LIFECYCLE_SCRIPT" "${lifecycle_args[@]}"
 rc=$?
 if ((rc != 0)); then
     exit "$rc"
