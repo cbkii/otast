@@ -151,13 +151,13 @@ jobs:
             --version "$VERSION" --version-code "$VERSION_CODE" \
             --notes-file "$RUNNER_TEMP/release-notes.md" >/dev/null
 
-      - name: Mandatory release integrity
+      - name: New-candidate source integrity
         if: steps.existing.outputs.exists != 'true'
         shell: bash
         run: |
           python3 -m unittest discover -s tests -p 'test_release_bundle.py' -v
           python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify >/dev/null
-          printf 'MANDATORY RELEASE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
+          printf 'NEW CANDIDATE SOURCE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
 
       - name: Full repository qualification
         if: steps.existing.outputs.exists != 'true' && inputs.full_validation
@@ -231,7 +231,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "OTAST $VERSION" \
             --notes-file "$RUNNER_TEMP/release-notes.md" --draft
 
-      - name: Verify hosted candidate
+      - name: Mandatory hosted release integrity
         id: hosted
         env:
           GH_TOKEN: ${{ github.token }}
@@ -288,6 +288,7 @@ jobs:
             printf 'publish=true\n' >>"$GITHUB_OUTPUT"
           fi
           printf 'draft=%s\nproof_present=%s\n' "$draft" "$has_proof" >>"$GITHUB_OUTPUT"
+          printf 'HOSTED RELEASE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
 
       - name: Publish verified release
         if: steps.hosted.outputs.publish == 'true' && steps.hosted.outputs.draft == 'true'
