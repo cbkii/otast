@@ -59,7 +59,13 @@ otast_transform_pif_prop() {
 
 otast_plan_runtime_system_prop() {
   local source path
-  path=$MODDIR/../system.prop
+  case "$MODDIR" in
+    */runtime) path=${MODDIR%/runtime}/system.prop ;;
+    *)
+      otast_stop "unexpected OTAST runtime directory: $MODDIR"
+      return 1
+      ;;
+  esac
   source=$(otast_plan_source_text otast-runtime-system-prop <<EOF_PROP
 # OTAST-managed runtime identity. Generated from /data/adb/ota.prop.
 ro.build.version.security_patch=$OTAST_SYSTEM_PATCH
