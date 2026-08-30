@@ -15,11 +15,27 @@ Values are not inferred from target modules. A missing required key, duplicate k
 
 `ro.boot.vbmeta.size` is intentionally **not** treated as a runtime correction target. The current OTA extractor records an artifact-derived size, whereas bootloader/libavb publishes runtime `androidboot.vbmeta.size`. OTAST reports both and never writes the runtime size.
 
-When `/proc/bootconfig` is available, Preflight/Apply/Verify require both `androidboot.vbmeta.digest` and `androidboot.vbmeta.avb_version` to be present, non-empty and equal to the OTA authority. Missing bootloader evidence fails closed rather than being treated as an optional comparison. Runtime security-patch props are not used as source evidence because integrity modules may legitimately spoof them; OTAST validates the static `/system` and `/vendor` build properties instead.
+When `/proc/bootconfig` is available, Preflight/Apply/Verify require both `androidboot.vbmeta.digest` and `androidboot.vbmeta.avb_version` to be present, non-empty and equal to the OTA authority. Missing bootloader evidence fails closed rather than being treated as an optional comparison.
 
-## Preserve-first integrity policy
+## OTA security-patch authority
 
-The default policy is to preserve current, working integrity configuration rather than overwrite it merely because an OTA authority exists.
+The official system/vendor security patch dates in `ota.prop` are authoritative runtime identity, not optional attestation-profile preferences.
+
+OTAST therefore reconciles all reviewed SPL writers to the authority during Apply:
+
+- OTAST's own runtime `system.prop` exposes the authority system/vendor SPL;
+- PIF `pif.prop` `SECURITY_PATCH` is forced to the authority while unrelated PIF fingerprint/options may remain preserved;
+- an existing PIF `system.prop` is reconciled line-by-line so unrelated entries survive while the system/vendor SPL matches the authority;
+- the reviewed PIF automatic security-patch writer remains neutralized;
+- TrickyStore `security_patch.txt` is treated as OTA-owned so its KeyAttestation patch metadata agrees with the same authority.
+
+After the required reboot, Verify fails if `ro.build.version.security_patch` or `ro.vendor.build.security_patch` differs from the authority.
+
+The historical `otast.trickystore.securityPatch=preserve` setting is accepted for compatibility with older authority files but is overridden at runtime. OTAST v1.0.2 and earlier could preserve a non-OTA SPL; that is no longer the intended contract.
+
+## Preserve-first PIF policy
+
+Preserve-first behavior still applies to PIF fields that are not OTA source identity.
 
 Optional authority keys:
 
@@ -35,13 +51,27 @@ otast.pif.DEBUG=preserve|true|false
 otast.trickystore.securityPatch=preserve|ota
 ```
 
-All omitted keys default to `preserve`.
-
-- `otast.pif.identity=preserve` leaves the current PIF fingerprint/model/security patch/product selection unchanged. `ota` explicitly aligns those identity fields with the OTA authority and enables the reviewed AutoPIF reconciliation transforms.
+- `otast.pif.identity=preserve` keeps the current PIF fingerprint/model/product selection. It no longer permits a different `SECURITY_PATCH`; SPL always follows `ota.prop`.
+- `otast.pif.identity=ota` additionally aligns the reviewed PIF fingerprint/model/product fields with the OTA authority and enables the reviewed AutoPIF reconciliation transforms.
 - Each `otast.pif.spoof*`/`DEBUG` key independently preserves the current value unless explicitly set to `true` or `false`.
-- `otast.trickystore.securityPatch=preserve` leaves the current TrickyStore `security_patch.txt` unchanged. `ota` explicitly writes the authority's system/vendor patch dates.
+- `otast.trickystore.securityPatch` remains parse-compatible with older files, but effective runtime policy is `ota`.
 
-Competing automatic writers remain blocked/neutralized even in preserve mode. Preserve means "do not replace the current selected value", not "allow another module to overwrite it unpredictably".
+## Software boot-state policy
+
+OTAST owns the conservative Android-readable Pixel boot-state contract so Yurikey, TA UTL, PIF and other property modules do not compete over the same values:
+
+```text
+ro.boot.flash.locked=1
+ro.boot.vbmeta.device_state=locked
+ro.boot.verifiedbootstate=green
+ro.boot.veritymode=enforcing
+vendor.boot.vbmeta.device_state=locked
+vendor.boot.verifiedbootstate=green
+```
+
+Verify checks the primary `ro.boot.*` values after reboot. OTAST deliberately does **not** set unrelated semantics such as `ro.oem_unlock_supported=0`; that property describes whether the device supports OEM unlocking, not its current lock state.
+
+This software policy does not rewrite hardware-backed RootOfTrust. A local app that performs genuine KeyAttestation can still observe the physical bootloader state unless it is explicitly handled by an attestation-layer mechanism such as a reviewed TrickyStore leaf-hack target.
 
 ## Yurikey behavior
 
@@ -54,7 +84,7 @@ For a reviewed Yurikey build OTAST replaces the dangerous multi-purpose entrypoi
 - broad detection-trace cleanup: disabled;
 - Yurikey security-patch/PIF helper writers: redirected through OTAST.
 
-Existing TrickyStore targets are not destructively pruned by normal Apply. Target-list reduction is a separate migration problem and must remain independently reversible.
+Existing TrickyStore targets are not destructively pruned by normal Apply. Target-list reduction and targeted local-attestation handling remain independently reversible operations.
 
 ## Zygisk Next
 
