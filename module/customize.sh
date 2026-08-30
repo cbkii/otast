@@ -4,15 +4,31 @@
 
 _otast_version=$(sed -n 's/^version=//p' "$MODPATH/module.prop" 2>/dev/null | sed -n '1p')
 ui_print "- OTAST ${_otast_version:-unknown}"
-ui_print '- Validating Pixel 9a Android 16 authority and runtime package'
+ui_print '- Validating Google Pixel Android 16 authority and runtime package'
 
 _otast_install_failed=0
 _otast_device=$(getprop ro.product.device 2>/dev/null)
+_otast_manufacturer=$(getprop ro.product.manufacturer 2>/dev/null)
+_otast_model=$(getprop ro.product.model 2>/dev/null)
 _otast_sdk=$(getprop ro.build.version.sdk 2>/dev/null)
-if [ "$_otast_device" != tegu ]; then
-  ui_print "! Unsupported device: ${_otast_device:-unknown}; expected tegu"
+
+case "$_otast_device" in
+  ''|*[!a-z0-9_]*)
+    ui_print "! Unsupported or malformed Pixel device identity: ${_otast_device:-unknown}"
+    _otast_install_failed=1
+    ;;
+esac
+if [ "$_otast_manufacturer" != Google ]; then
+  ui_print "! Unsupported manufacturer: ${_otast_manufacturer:-unknown}; expected Google"
   _otast_install_failed=1
 fi
+case "$_otast_model" in
+  'Pixel '*) ;;
+  *)
+    ui_print "! Unsupported model: ${_otast_model:-unknown}; expected Google Pixel"
+    _otast_install_failed=1
+    ;;
+esac
 if [ "$_otast_sdk" != 36 ]; then
   ui_print "! Unsupported SDK: ${_otast_sdk:-unknown}; expected 36"
   _otast_install_failed=1
@@ -41,4 +57,18 @@ if ! ADB_ROOT=/data/adb OTAST_AUTHORITY=/data/adb/ota.prop sh "$MODPATH/runtime/
   while IFS= read -r _otast_line; do ui_print "! $_otast_line"; done <"$TMPDIR/otast-preflight.log"
   abort 'OTAST was not installed because authority or target compatibility is unsafe.'
 fi
-ui_print '- Preflight passed; install the module and reboot'
+
+ui_print ''
+ui_print '*******************************'
+ui_print '*         SUCCESS !!          *'
+ui_print '*******************************'
+ui_print '- OTAST installation validation passed.'
+ui_print ''
+ui_print '- Next steps:'
+ui_print '  1. Reboot the device.'
+ui_print '  2. Open Magisk > Modules > OTAST > Action.'
+ui_print '  3. Select Preflight (read-only).'
+ui_print '  4. If Preflight passes, run Action again and select Apply.'
+ui_print '  5. If Apply reports REBOOT_REQUIRED, reboot again.'
+ui_print '  6. Run Action > Verify (read-only) after that reboot.'
+ui_print '- Do not run Apply before the first reboot.'
