@@ -11,6 +11,21 @@
 
 OTAST documentation is intentionally Pixel-model agnostic. Physical-device testing to date is limited to **Pixel 9a** and **Pixel 8**. Other Pixel models are untested and must be treated as unverified until their exact device/build path passes the same authority, target-profile and physical validation gates. Documentation scope does not override fail-closed runtime compatibility checks.
 
+## After installing the Magisk module
+
+The installer performs a non-mutating Preflight before Magisk completes the installation. A successful installer does **not** Apply OTAST-managed changes automatically.
+
+After the installer reports `SUCCESS !!`:
+
+1. reboot the device;
+2. open **Magisk -> Modules -> OTAST -> Action**;
+3. select **Preflight (read-only)**;
+4. if Preflight passes, run Action again and select **Apply**;
+5. if Apply reports `REBOOT_REQUIRED`, reboot again;
+6. run **Action -> Verify (read-only)** after that reboot.
+
+Do not run Apply before the first reboot. `Report`, `Preflight` and `Verify` are read-only.
+
 ## Production release path
 
 For the repository owner, the authoritative production path is:
