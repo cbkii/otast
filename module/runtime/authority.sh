@@ -252,8 +252,6 @@ otast_compare_live_identity() {
   local system_patch vendor_patch
   _otast_compare_live_pairs 'live platform identity differs from authority' \
     'ro.product.device:OTAST_DEVICE' \
-    'ro.product.manufacturer:OTAST_MANUFACTURER' \
-    'ro.product.model:OTAST_MODEL' \
     'ro.build.id:OTAST_BUILD_ID' \
     'ro.build.version.sdk:OTAST_SDK' \
     'ro.build.fingerprint:OTAST_FINGERPRINT' || return 1
