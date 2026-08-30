@@ -87,6 +87,9 @@ class RuntimeIdentityPolicyTests(unittest.TestCase):
         self.assertIn("pif-runtime-system-prop-$role", text)
         self.assertIn("ro.build.version.security_patch=$OTAST_SYSTEM_PATCH", text)
         self.assertIn("ro.vendor.build.security_patch=$OTAST_VENDOR_PATCH", text)
+        self.assertNotIn("$MODDIR/../system.prop", text)
+        self.assertIn("path=${MODDIR%/runtime}/system.prop", text)
+        self.assertIn('unexpected OTAST runtime directory: $MODDIR', text)
 
 
 if __name__ == "__main__":
