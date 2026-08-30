@@ -1,12 +1,23 @@
 # OTAST — OTA Source of Truth
 
-OTAST is a transactional Magisk module for a **Pixel 9a (`tegu`) running Android 16**. It treats `/data/adb/ota.prop` as the authority for OTA-derived platform identity and coordinates a reviewed set of interacting integrity modules without silently replacing user-selected runtime spoof configuration.
+OTAST is a transactional Magisk module for **Google Pixel devices running Android 16**. It treats `/data/adb/ota.prop` as the authority for OTA-derived platform identity and coordinates a reviewed set of interacting integrity modules without silently replacing user-selected runtime spoof configuration.
 
 **`https://github.com/cbkii/otast` is the only supported OTAST repository and module source.** Older similarly named OTA-governor repositories/modules are deprecated and must not be installed or used. OTAST retains legacy-trace detection only so coexistence or an incomplete migration fails closed.
 
 This repository is the complete public source tree. It includes the Magisk module, deterministic release tooling, a fake-Magisk-root lifecycle harness, private device-fixture tooling, CI, target monitoring, and public-repository initialization checks.
 
 > **Release status:** use this repository's GitHub Releases page and stable Magisk `update.json` channel for the current published version. Release candidates and development source may intentionally be ahead of that stable channel.
+
+## Device scope
+
+OTAST's project scope and documentation are **Pixel-device model-agnostic** rather than tied to one Pixel model. Device-specific OTA identity must come from the authority file and must agree with the live device; OTAST does not treat another model's captured identity as interchangeable.
+
+Physical-device testing to date is limited to:
+
+- **Pixel 9a**;
+- **Pixel 8**.
+
+Other Pixel models are currently **untested**. Treat them as unverified until the exact device/build path has been qualified; OTAST's authority, source-hash and live-identity checks are intended to fail closed rather than assume compatibility.
 
 ## Managed contracts
 
@@ -72,15 +83,15 @@ bash scripts/fake-magisk-root.sh
 
 The harness tests active and staged targets, Apply, Verify, no-op Apply, authority rollover, interrupted-transaction recovery, drift rejection, complete Restore, symlink containment, identity mismatch, unknown hashes, and strict-exclusion byte preservation.
 
-For a private fixture derived from this Pixel:
+For a private fixture derived from a test Pixel device:
 
 ```bash
-bash scripts/capture-device-fixture.sh --label tegu-current
+bash scripts/capture-device-fixture.sh --label pixel-current
 bash scripts/reset-fake-magisk-root.sh \
-  "$HOME/.local/share/otast/device-fixtures/tegu-current" \
-  tegu-current
+  "$HOME/.local/share/otast/device-fixtures/pixel-current" \
+  pixel-current
 bash scripts/validate-fake-magisk-root.sh \
-  "$HOME/.cache/otast/fake-roots/tegu-current" \
+  "$HOME/.cache/otast/fake-roots/pixel-current" \
   preflight
 ```
 

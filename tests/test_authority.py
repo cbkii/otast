@@ -22,6 +22,18 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(authority.values["otast.pif.identity"], "preserve")
         self.assertEqual(authority.values["otast.trickystore.securityPatch"], "preserve")
 
+    def test_pixel_8_authority_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "ota.prop"
+            text = FIXTURE.read_text(encoding="utf-8")
+            text = text.replace("ro.product.device=tegu", "ro.product.device=shiba")
+            text = text.replace("ro.product.model=Pixel 9a", "ro.product.model=Pixel 8")
+            text = text.replace("google/tegu/tegu:16/", "google/shiba/shiba:16/")
+            path.write_text(text, encoding="utf-8")
+            authority = parse_authority(path)
+            self.assertEqual(authority.values["ro.product.device"], "shiba")
+            self.assertEqual(authority.values["ro.product.model"], "Pixel 8")
+
     def test_duplicate_key_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "ota.prop"
@@ -37,11 +49,30 @@ class AuthorityTests(unittest.TestCase):
             with self.assertRaisesRegex(OtastError, "NUL"):
                 parse_authority(path)
 
-    def test_wrong_device_rejected(self) -> None:
+    def test_non_pixel_product_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "ota.prop"
-            path.write_text(FIXTURE.read_text().replace("ro.product.device=tegu", "ro.product.device=shiba"), encoding="utf-8")
-            with self.assertRaisesRegex(OtastError, "tegu"):
+            path.write_text(
+                FIXTURE.read_text(encoding="utf-8").replace(
+                    "ro.product.manufacturer=Google",
+                    "ro.product.manufacturer=Other",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(OtastError, "Google Pixel"):
+                parse_authority(path)
+
+    def test_device_fingerprint_mismatch_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "ota.prop"
+            path.write_text(
+                FIXTURE.read_text(encoding="utf-8").replace(
+                    "ro.product.device=tegu",
+                    "ro.product.device=shiba",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(OtastError, "matching Google Pixel"):
                 parse_authority(path)
 
     def test_preserve_policy_is_valid_and_invalid_policy_is_rejected(self) -> None:

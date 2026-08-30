@@ -92,7 +92,7 @@ otast_validate_authority_lines() {
 }
 
 otast_validate_authority_file() {
-  local size policy
+  local size policy fingerprint_prefix
   [ -f "$OTAST_AUTHORITY" ] && [ ! -L "$OTAST_AUTHORITY" ] || {
     otast_stop "authority file missing or unsafe: $OTAST_AUTHORITY"
     return 1
@@ -130,15 +130,23 @@ otast_validate_authority_file() {
   OTAST_VBMETA_AVB_VERSION=$(otast_authority_value ro.boot.vbmeta.avb_version) || return 1
   OTAST_BOOT_AVB_VERSION=$(otast_authority_value ro.boot.avb_version) || return 1
 
-  [ "$OTAST_DEVICE" = tegu ] || { otast_stop "unsupported authority device: $OTAST_DEVICE"; return 1; }
+  case "$OTAST_DEVICE" in
+    ''|*[!a-z0-9_]*) otast_stop "malformed Pixel authority device identity: ${OTAST_DEVICE:-MISSING}"; return 1 ;;
+  esac
   [ "$OTAST_SDK" = 36 ] || { otast_stop "unsupported authority SDK: $OTAST_SDK"; return 1; }
+  [ "$OTAST_MANUFACTURER" = Google ] || { otast_stop "authority manufacturer is not Google: $OTAST_MANUFACTURER"; return 1; }
+  case "$OTAST_MODEL" in
+    'Pixel '*) ;;
+    *) otast_stop "authority model is not a Google Pixel device: $OTAST_MODEL"; return 1 ;;
+  esac
+  fingerprint_prefix="google/$OTAST_DEVICE/$OTAST_DEVICE:16/"
+  case "$OTAST_FINGERPRINT" in
+    "$fingerprint_prefix"*:user/release-keys) ;;
+    *) otast_stop 'authority fingerprint is not a matching Google Pixel Android 16 release fingerprint'; return 1 ;;
+  esac
+
   otast_valid_date "$OTAST_SYSTEM_PATCH" || { otast_stop "invalid system patch date: $OTAST_SYSTEM_PATCH"; return 1; }
   otast_valid_date "$OTAST_VENDOR_PATCH" || { otast_stop "invalid vendor patch date: $OTAST_VENDOR_PATCH"; return 1; }
-  case "$OTAST_FINGERPRINT" in google/tegu/tegu:16/*:user/release-keys) ;; *) otast_stop 'authority fingerprint is not a Pixel 9a Android 16 release fingerprint'; return 1 ;; esac
-  [ "$OTAST_MANUFACTURER" = Google ] && [ "$OTAST_MODEL" = 'Pixel 9a' ] || {
-    otast_stop 'authority product identity is not Pixel 9a'
-    return 1
-  }
   case "$OTAST_BOOT_SHA256" in *[!0-9a-f]*|'') otast_stop 'invalid boot.img SHA-256'; return 1 ;; esac
   [ "${#OTAST_BOOT_SHA256}" -eq 64 ] || { otast_stop 'invalid boot.img SHA-256 length'; return 1; }
   case "$OTAST_VBMETA_DIGEST" in *[!0-9a-f]*|'') otast_stop 'invalid vbmeta digest'; return 1 ;; esac

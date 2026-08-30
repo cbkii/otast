@@ -11,4 +11,6 @@ It does not prove behavior of:
 - Binder services, package manager, HALs or proprietary Pixel components;
 - bootloader, AVB, TEE or hardware-backed attestation.
 
-Those claims require a controlled Pixel 9a validation after installing the exact candidate ZIP.
+Those claims require controlled physical-device validation on the exact Pixel model/build after installing the exact candidate ZIP.
+
+Physical-device testing to date is limited to **Pixel 9a** and **Pixel 8**. Other Pixel models remain untested and must not be treated as validated merely because the host/fake-root suite passes.

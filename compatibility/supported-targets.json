@@ -1,7 +1,12 @@
 {
   "authority": {
     "android": "16",
-    "device": "tegu",
+    "device_family": "Google Pixel",
+    "tested_models": [
+      "Pixel 9a",
+      "Pixel 8"
+    ],
+    "reference_device": "tegu",
     "reference_build": "CP1A.260305.018",
     "required_vbmeta_keys": [
       "ro.boot.vbmeta.digest",
@@ -19,7 +24,7 @@
     ],
     "sdk": 36
   },
-  "schema_version": 3,
+  "schema_version": 4,
   "strict_exclusions": [
     "AshLooper",
     "AshReXcue",

@@ -1,9 +1,11 @@
 # Documentation
 
+OTAST documentation is scoped to **Google Pixel devices**, not a single Pixel model. Physical-device testing to date is limited to **Pixel 9a** and **Pixel 8**; other Pixel models are untested and should be treated as unverified until their exact device/build path is qualified.
+
 - `ARCHITECTURE.md` — authority, planning, transactions and boot behavior.
 - `INSTALLATION.md` — prerequisites and installation sequence.
 - `CONFIGURATION.md` — authority and runtime configuration.
-- `SUPPORTED-TARGETS.md` — reviewed compatibility boundary.
+- `SUPPORTED-TARGETS.md` — reviewed compatibility boundary and device-validation scope.
 - `FAKE-MAGISK-ROOT.md` — synthetic and device-derived test environments.
 - `DEVICE-FIXTURES.md` — private capture and sanitization workflow.
 - `RESTORE-AND-RECOVERY.md` — rollback, recovery and drift behavior.

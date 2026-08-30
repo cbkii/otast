@@ -17,21 +17,34 @@ class RuntimeContractTests(unittest.TestCase):
 
     def test_compatibility_manifest_templates_match(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["authority"]["device"], "tegu")
-        self.assertEqual(manifest["authority"]["sdk"], 36)
+        authority = manifest["authority"]
+        self.assertEqual(manifest["schema_version"], 4)
+        self.assertEqual(authority["device_family"], "Google Pixel")
+        self.assertEqual(authority["reference_device"], "tegu")
+        self.assertEqual(set(authority["tested_models"]), {"Pixel 9a", "Pixel 8"})
+        self.assertNotIn("device", authority)
+        self.assertEqual(authority["sdk"], 36)
         self.assertEqual(set(manifest["strict_exclusions"]), {"AshLooper", "AshReXcue", "BetterKnownInstalled", "BKI"})
         self.assertEqual(
-            set(manifest["authority"]["required_vbmeta_keys"]),
+            set(authority["required_vbmeta_keys"]),
             {"ro.boot.vbmeta.digest", "ro.boot.vbmeta.size", "ro.boot.vbmeta.avb_version", "ro.boot.avb_version"},
         )
         self.assertEqual(
-            set(manifest["authority"]["runtime_vbmeta_keys"]),
+            set(authority["runtime_vbmeta_keys"]),
             {"ro.boot.vbmeta.digest", "ro.boot.vbmeta.avb_version", "ro.boot.avb_version"},
         )
         self.assertEqual(
-            set(manifest["authority"]["provenance_only_vbmeta_keys"]),
+            set(authority["provenance_only_vbmeta_keys"]),
             {"ro.boot.vbmeta.size"},
         )
+
+    def test_runtime_authority_is_pixel_family_not_model_pinned(self) -> None:
+        authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
+        self.assertNotIn("Pixel 9a", authority)
+        self.assertNotIn('[ "$OTAST_DEVICE" = tegu ]', authority)
+        self.assertIn('fingerprint_prefix="google/$OTAST_DEVICE/$OTAST_DEVICE:16/"', authority)
+        self.assertIn("authority model is not a Google Pixel device", authority)
+        self.assertIn("authority manufacturer is not Google", authority)
 
     def test_id_validation_uses_predicate_not_printing_helper(self) -> None:
         common = ROOT / "module/runtime/common.sh"

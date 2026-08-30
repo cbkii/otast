@@ -52,7 +52,7 @@ otast.pif.spoofVendingSdk=preserve|true|false
 otast.pif.DEBUG=preserve|true|false
 ```
 
-For this Pixel stack, `preserve` is the safe default because the active PIF profile may intentionally be a newer attestation-compatible Pixel 9a profile while `ota.prop` continues to describe the installed official OS image.
+For a Pixel stack, `preserve` is the safe default because the active PIF profile may intentionally be a different or newer attestation-compatible Pixel profile while `ota.prop` continues to describe the installed official OS image for the live device.
 
 ## Runtime consequence
 

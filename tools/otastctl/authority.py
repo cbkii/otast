@@ -7,6 +7,7 @@ from pathlib import Path
 from .util import OtastError, sha256_file
 
 KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+DEVICE_RE = re.compile(r"^[a-z0-9_]+$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 AVB_RE = re.compile(r"^\d+\.\d+$")
@@ -62,10 +63,23 @@ def parse_authority(path: Path) -> Authority:
     missing = [key for key in REQUIRED if not values.get(key)]
     if missing:
         raise OtastError("authority is missing: " + ", ".join(missing))
-    if values["ro.product.device"] != "tegu":
-        raise OtastError("authority device must be tegu")
-    if values["ro.build.version.sdk"] != "36":
+
+    device = values["ro.product.device"]
+    manufacturer = values["ro.product.manufacturer"]
+    model = values["ro.product.model"]
+    fingerprint = values["ro.build.fingerprint"]
+    sdk = values["ro.build.version.sdk"]
+
+    if not DEVICE_RE.fullmatch(device):
+        raise OtastError("authority Pixel device identity is malformed")
+    if sdk != "36":
         raise OtastError("authority SDK must be 36")
+    if manufacturer != "Google" or not model.startswith("Pixel "):
+        raise OtastError("authority product identity must describe a Google Pixel device")
+    expected_fingerprint_prefix = f"google/{device}/{device}:16/"
+    if not fingerprint.startswith(expected_fingerprint_prefix) or not fingerprint.endswith(":user/release-keys"):
+        raise OtastError("authority fingerprint is not a matching Google Pixel Android 16 release fingerprint")
+
     if not DATE_RE.fullmatch(values["ro.build.version.security_patch"]):
         raise OtastError("invalid system security patch date")
     vendor = values.get("ro.vendor.build.security_patch", values["ro.build.version.security_patch"])
