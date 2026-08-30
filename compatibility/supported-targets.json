@@ -22,6 +22,18 @@
     "provenance_only_vbmeta_keys": [
       "ro.boot.vbmeta.size"
     ],
+    "runtime_security_patch_keys": [
+      "ro.build.version.security_patch",
+      "ro.vendor.build.security_patch"
+    ],
+    "software_boot_state_keys": [
+      "ro.boot.flash.locked",
+      "ro.boot.vbmeta.device_state",
+      "ro.boot.verifiedbootstate",
+      "ro.boot.veritymode",
+      "vendor.boot.vbmeta.device_state",
+      "vendor.boot.verifiedbootstate"
+    ],
     "sdk": 36
   },
   "schema_version": 4,
@@ -50,7 +62,8 @@
         "autopif.sh",
         "autopif_ota.sh",
         "pif.prop",
-        "security_patch.sh"
+        "security_patch.sh",
+        "system.prop"
       ],
       "module_ids": [
         "playintegrityfix"
@@ -97,7 +110,7 @@
           "ref": "inject_s docs/WebUI-only delta reviewed 2026-08-29; managed runtime sources unchanged"
         }
       ],
-      "strategy": "preserve current PIF identity/options by default; OTA identity takeover is explicit opt-in; competing security-patch writer remains neutralized"
+      "strategy": "preserve unrelated PIF identity/options by default while forcing SECURITY_PATCH and runtime system.prop SPL to OTA authority; competing automatic security-patch writer remains neutralized"
     },
     "ta-utl": {
       "accepted_hashes": {
@@ -133,7 +146,7 @@
         "repository": "5ec1cff/TrickyStore"
       },
       "reviewed_ref": "1.4.1",
-      "strategy": "preserve current security_patch.txt by default; OTA-derived rewrite is explicit opt-in"
+      "strategy": "OTA-derived security-patch authority is mandatory; local-attestation target ownership remains separate until explicitly qualified"
     },
     "vbmeta-fixer": {
       "managed_templates": {
