@@ -40,14 +40,21 @@ def _extract_exact_zip(module_zip: Path, module_dir: Path) -> Path:
     return module_dir
 
 
-def _synthetic_module_prop(module_id: str, name: str, version: str) -> str:
-    numeric = "".join(character for character in version if character.isdigit()) or "1"
+def _synthetic_module_prop(
+    module_id: str,
+    name: str,
+    version: str,
+    *,
+    author: str = "fixture",
+    version_code: str | None = None,
+) -> str:
+    numeric = version_code or "".join(character for character in version if character.isdigit()) or "1"
     return (
         f"id={module_id}\n"
         f"name={name}\n"
         f"version={version}\n"
         f"versionCode={numeric}\n"
-        "author=fixture\n"
+        f"author={author}\n"
         "description=synthetic compatibility fixture\n"
     )
 
@@ -79,14 +86,38 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
         target(pif / "module.prop", _synthetic_module_prop("playintegrityfix", "PIF synthetic", "v4.7.1"), 0o644)
         target(
             pif / "pif.prop",
-            "# preserve this comment\nFINGERPRINT=old\nCUSTOM_OPTION=keep-me\nspoofBuild=false\n",
+            "# preserve this comment\n"
+            "FINGERPRINT=old\n"
+            "SECURITY_PATCH=2026-07-05\n"
+            "CUSTOM_OPTION=keep-me\n"
+            "spoofBuild=false\n"
+            "spoofProps=false\n",
             0o644,
         )
 
     tricky = adb_root / "modules/tricky_store"
-    target(tricky / "module.prop", _synthetic_module_prop("tricky_store", "TrickyStore", "1.4.1"), 0o644)
+    target(
+        tricky / "module.prop",
+        _synthetic_module_prop(
+            "tricky_store",
+            "Tricky Store OSS",
+            "v3.1.0 (172-41383f5-release)",
+            author="beakthoven",
+            version_code="172",
+        ),
+        0o644,
+    )
     target(tricky / "service.sh", "#!/system/bin/sh\nexit 0\n")
     target(adb_root / "tricky_store/security_patch.txt", "system=prop\nboot=2000-01-01\nvendor=2000-01-01\n", 0o644)
+    target(
+        adb_root / "tricky_store/keybox.xml",
+        "<AndroidAttestation><Keybox><Key algorithm=\"ecdsa\"><PrivateKey>fixture-private-not-real</PrivateKey>"
+        "<CertificateChain><Certificate>fixture-certificate-not-real</Certificate></CertificateChain>"
+        "</Key></Keybox></AndroidAttestation>\n",
+        0o600,
+    )
+    target(adb_root / "tricky_store/target.txt", "com.example.fixture\n", 0o644)
+    target(adb_root / "tricky_store/tee_status", "teeBroken=false\n", 0o644)
 
     ta = adb_root / "modules/TA_utl"
     target(ta / "module.prop", _synthetic_module_prop("TA_utl", "TA UTL", "v4.4"), 0o644)
@@ -105,6 +136,7 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
         "webroot/common/pif2.sh",
     ):
         target(yuri / name, f"#!/system/bin/sh\n# synthetic Yurikey {name}\nexit 0\n")
+    target_bytes(yuri / "Yuri/yuri_keybox.sh", fixture_root / "yurikey-keybox-3.0.6.sh")
     target(yuri / "module.prop", _synthetic_module_prop("Yurikey", "Yurikey", "3.0.6"), 0o644)
 
     vbmeta = adb_root / "modules/vbmeta-fixer"
@@ -165,8 +197,14 @@ def _live_text(
             f"ro.build.version.security_patch={system_patch}",
             f"ro.vendor.build.security_patch={vendor_patch}",
             "ro.product.device=tegu",
+            "ro.boot.flash.locked=1",
+            "ro.boot.vbmeta.device_state=locked",
+            "ro.boot.verifiedbootstate=green",
+            "ro.boot.veritymode=enforcing",
+            "vendor.boot.vbmeta.device_state=locked",
+            "vendor.boot.verifiedbootstate=green",
             "ro.boot.vbmeta.digest=" + ("2" * 64 if managed_vbmeta_current else "3" * 64),
-            "ro.boot.vbmeta.size=" + ("20480" if managed_vbmeta_current else "4096"),
+            "ro.boot.vbmeta.size=" + ("21888" if managed_vbmeta_current else "4096"),
             "ro.boot.vbmeta.avb_version=" + ("1.3" if managed_vbmeta_current else "1.0"),
             "ro.boot.avb_version=" + ("1.3" if managed_vbmeta_current else "1.0"),
             "",
@@ -268,16 +306,38 @@ def _simulate_managed_boot(adb_root: Path) -> None:
         if key not in live:
             order.append(key)
         live[key] = value
-    for key in (
-        "ro.boot.vbmeta.digest",
-        "ro.boot.vbmeta.avb_version",
-        "ro.boot.avb_version",
-    ):
-        if key not in authority:
-            raise OtastError(f"authority missing managed runtime key: {key}")
+
+    authority_pairs = {
+        "ro.boot.vbmeta.digest": "ro.boot.vbmeta.digest",
+        "ro.boot.vbmeta.avb_version": "ro.boot.vbmeta.avb_version",
+        "ro.boot.avb_version": "ro.boot.avb_version",
+        "ro.build.version.security_patch": "ro.build.version.security_patch",
+        "ro.vendor.build.security_patch": "ro.vendor.build.security_patch",
+    }
+    for live_key, authority_key in authority_pairs.items():
+        if authority_key not in authority:
+            raise OtastError(f"authority missing managed runtime key: {authority_key}")
+        if live_key not in live:
+            order.append(live_key)
+        live[live_key] = authority[authority_key]
+
+    fixed = {
+        "ro.boot.flash.locked": "1",
+        "ro.boot.vbmeta.device_state": "locked",
+        "ro.boot.verifiedbootstate": "green",
+        "ro.boot.veritymode": "enforcing",
+        "vendor.boot.vbmeta.device_state": "locked",
+        "vendor.boot.verifiedbootstate": "green",
+    }
+    for key, value in fixed.items():
         if key not in live:
             order.append(key)
-        live[key] = authority[key]
+        live[key] = value
+
+    # Runtime libavb size deliberately differs from artifact provenance.
+    if "ro.boot.vbmeta.size" not in live:
+        order.append("ro.boot.vbmeta.size")
+    live["ro.boot.vbmeta.size"] = "21888"
     _write(live_path, "\n".join(f"{key}={live[key]}" for key in order) + "\n", 0o600)
 
 
@@ -323,6 +383,16 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             ):
                 if expected not in pif_text:
                     raise OtastError(f"PIF configuration merge lost required content: {expected}")
+            system_prop = (pif_dir / "system.prop").read_text(encoding="utf-8")
+            if "ro.build.version.security_patch=2026-03-05" not in system_prop:
+                raise OtastError("PIF global system.prop did not converge to OTA system SPL")
+            if "ro.vendor.build.security_patch=2026-03-05" not in system_prop:
+                raise OtastError("PIF global system.prop did not converge to OTA vendor SPL")
+
+        yuri_keybox = adb_root / "modules/Yurikey/Yuri/yuri_keybox.sh"
+        if "automatic keybox replacement is disabled" not in yuri_keybox.read_text(encoding="utf-8"):
+            raise OtastError("Yurikey unattended keybox writer was not neutralized")
+
         ta_text = (adb_root / "modules/TA_utl/prop.sh").read_text(encoding="utf-8")
         if "# --- otast vbmeta ownership BEGIN ---" not in ta_text:
             raise OtastError("TA UTL vbmeta writer was not narrowly neutralised")
@@ -335,6 +405,23 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         verify_one = _run(entry, adb_root, "verify")
         logs.append("## pre-reboot verify rejection\n" + pre_reboot_verify.stdout)
         logs.append("## post-reboot verify\n" + verify_one.stdout)
+
+        # Semantic drift must fail even if managed file hashes remain CURRENT.
+        semantic_live = adb_root / "live.prop"
+        semantic_original = semantic_live.read_text(encoding="utf-8")
+        semantic_live.write_text(
+            semantic_original.replace(
+                "ro.build.version.security_patch=2026-03-05",
+                "ro.build.version.security_patch=2026-08-05",
+            ),
+            encoding="utf-8",
+        )
+        semantic_verify = _run(entry, adb_root, "verify", expect=1)
+        if "live OTA security-patch contract differs from authority" not in semantic_verify.stdout:
+            raise OtastError("semantic runtime SPL drift failed for the wrong reason")
+        semantic_live.write_text(semantic_original, encoding="utf-8")
+        semantic_live.chmod(0o600)
+
         transactions_before = len(list((adb_root / "otast/transactions").glob("*")))
         second_apply = _run(entry, adb_root, "apply")
         transactions_after = len(list((adb_root / "otast/transactions").glob("*")))
@@ -353,7 +440,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("authority update did not reach the TrickyStore contract")
         staged_pif = adb_root / "modules_update/playintegrityfix/pif.prop"
         if "SECURITY_PATCH=2026-04-05" not in staged_pif.read_text(encoding="utf-8"):
-            raise OtastError("authority update did not reach the staged PIF contract")
+            raise OtastError("authority update did not reach the staged PIF contract under explicit OTA identity takeover")
 
         managed_autopif = adb_root / "modules/playintegrityfix/autopif.sh"
         managed_bytes = managed_autopif.read_bytes()
@@ -450,7 +537,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         auto_flag = auto_root / "tricky_store/pif_auto_security_patch"
         _write(auto_flag, "", 0o600)
         auto_preflight = _run(auto_entry, auto_root, "preflight")
-        if "will neutralize its reviewed writer on Apply" not in auto_preflight.stdout:
+        if "will neutralize its reviewed global writer on Apply" not in auto_preflight.stdout:
             raise OtastError("PIF auto-patch flag was accepted without explicit ownership evidence")
         auto_apply = _run(auto_entry, auto_root, "apply")
         auto_writer = auto_root / "modules/playintegrityfix/security_patch.sh"
@@ -483,6 +570,16 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("unsafe PIF auto-patch marker modified its symlink target")
         logs.append("## PIF automatic generator unsafe marker rejection\n" + auto_link.stdout)
 
+        # Targeted Tricky Store OSS may not verify cleanly with a broken active keybox.
+        keybox_root, keybox_entry, _ = _new_root(base / "broken-keybox", module_zip, staged_pif=False)
+        _run(keybox_entry, keybox_root, "apply")
+        _simulate_managed_boot(keybox_root)
+        _write(keybox_root / "tricky_store/keybox.xml", "", 0o600)
+        keybox_verify = _run(keybox_entry, keybox_root, "verify", expect=1)
+        if "local-attestation readiness is not CURRENT" not in keybox_verify.stdout:
+            raise OtastError("broken targeted keybox scenario failed for the wrong reason")
+        logs.append("## broken Tricky Store keybox rejection\n" + keybox_verify.stdout)
+
         # Tampered state may never redirect Restore outside ADB_ROOT.
         state_root, state_entry, _ = _new_root(base / "state-tamper", module_zip, staged_pif=False)
         _run(state_entry, state_root, "apply")
@@ -500,7 +597,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         logs.append("## state tamper rejection\n" + tampered.stdout)
 
         evidence = {
-            "schema_version": 2,
+            "schema_version": 3,
             "result": "PASS",
             "module_zip": module_zip.name,
             "module_sha256": sha256_file(module_zip),
@@ -512,6 +609,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "stale_lock_recovered": True,
                 "identical_external_contract_adopted": True,
                 "verify": verify_one.returncode,
+                "semantic_runtime_spl_drift_rejected": semantic_verify.returncode == 1,
                 "idempotent_apply_without_transaction": True,
                 "authority_update": authority_update.returncode,
                 "verify_updated": verify_two.returncode,
@@ -527,6 +625,8 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "pif_lifecycle_entrypoints_preserved": True,
                 "pif_unknown_options_preserved": True,
                 "ta_non_vbmeta_behaviour_preserved": True,
+                "yurikey_keybox_writer_neutralized": True,
+                "trickystore_targeted_broken_keybox_rejected": True,
                 "boot_hash_uses_vbmeta_digest": True,
                 "vbmeta_size_is_provenance_only": True,
                 "tampered_state_rejected": True,
