@@ -1,8 +1,9 @@
 #!/system/bin/sh
 
-# Reviewed Tricky Store OSS v3.1.0 compatibility and read-only health checks.
+# Reviewed Tricky Store OSS v3.1.0 compatibility and health checks.
 # OTAST manages only the security-patch contract here. Keybox/target files are
-# observed, never replaced implicitly.
+# observed and validated for readiness; key material is never printed or
+# implicitly replaced by ordinary Apply.
 
 OTAST_TRICKY_NAME='Tricky Store OSS'
 OTAST_TRICKY_AUTHOR='beakthoven'
@@ -63,6 +64,9 @@ otast_trickystore_keybox_state() {
   case "$size" in ''|*[!0-9]*) printf 'UNREADABLE\n'; return 0 ;; esac
   [ "$size" -gt 0 ] || { printf 'EMPTY\n'; return 0; }
 
+  # Deliberately structural only in the boot/runtime module. Deep private-key /
+  # certificate validation belongs to an explicit local helper and must never
+  # emit key material into OTAST logs or public release proof.
   if grep -q '<AndroidAttestation' "$path" 2>/dev/null &&
      grep -q '<Keybox[[:space:]>]' "$path" 2>/dev/null &&
      grep -q '<PrivateKey[[:space:]>]' "$path" 2>/dev/null &&
@@ -108,6 +112,24 @@ otast_trickystore_collect_health() {
     UNSAFE) otast_stop 'Tricky Store OSS target.txt is not a safe regular file'; return 1 ;;
   esac
   return 0
+}
+
+otast_verify_trickystore_health() {
+  local targets
+  targets=$OTAST_TRICKY_TARGET_COUNT
+  case "$targets" in
+    ''|ABSENT|UNAVAILABLE) return 0 ;;
+    *[!0-9]*) otast_stop "Tricky Store OSS target health is indeterminate: $targets"; return 1 ;;
+    0) return 0 ;;
+  esac
+
+  case "$OTAST_TRICKY_KEYBOX_STATE" in
+    STRUCTURE_OK_UNPROVEN) return 0 ;;
+    *)
+      otast_stop "Tricky Store OSS has $targets configured targets but active keybox state is $OTAST_TRICKY_KEYBOX_STATE; local-attestation readiness is not CURRENT"
+      return 1
+      ;;
+  esac
 }
 
 otast_report_trickystore_health() {
