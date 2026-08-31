@@ -9,6 +9,7 @@ All notable user-visible changes are recorded here.
 - Pin and validate Tricky Store OSS v3.1.0 health, preserve the active keybox, and fail Verify when configured targets depend on an unusable keybox.
 - Neutralize Yurikey's unattended keybox updater in addition to its existing boot-hash, target-list, PIF and security-patch writers.
 - Preserve bootloader/libavb VBMeta runtime evidence, including the distinct runtime size, while retaining OTA artifact size only as provenance.
+- Make stale unproven draft replacement resumable when `gh release delete --cleanup-tag` removes the draft but reports a tag-cleanup error.
 
 ## v1.0.2
 
