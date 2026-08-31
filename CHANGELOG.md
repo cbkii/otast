@@ -2,6 +2,14 @@
 
 All notable user-visible changes are recorded here.
 
+## v1.0.3
+
+- Make the official OTA system/vendor security patch authoritative for platform-visible runtime identity while keeping the selected PIF attestation profile isolated in preserve mode.
+- Reconcile OTAST/PIF runtime property writers, enforce the conservative Pixel locked/green/enforcing software boot-state contract, and verify semantic runtime convergence after reboot.
+- Pin and validate Tricky Store OSS v3.1.0 health, preserve the active keybox, and fail Verify when configured targets depend on an unusable keybox.
+- Neutralize Yurikey's unattended keybox updater in addition to its existing boot-hash, target-list, PIF and security-patch writers.
+- Preserve bootloader/libavb VBMeta runtime evidence, including the distinct runtime size, while retaining OTA artifact size only as provenance.
+
 ## v1.0.2
 
 - Simplify Release into one authoritative workflow (#14)
