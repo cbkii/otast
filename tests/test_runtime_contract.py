@@ -122,6 +122,7 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("NO_CHANGES_REQUIRED", apply)
         self.assertIn("otast_compare_live_managed_vbmeta", verify)
         self.assertIn("otast_compare_live_strict_runtime_identity", verify)
+        self.assertIn("otast_verify_trickystore_health", verify)
 
     def test_pif_managed_surface_is_minimal(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
@@ -167,7 +168,7 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("pif_auto_security_patch", upstream_autopif)
         self.assertIn('sh "$MODDIR/security_patch.sh"', upstream_autopif)
         self.assertIn("pif_auto_security_patch", profiles)
-        self.assertIn("will neutralize its reviewed writer on Apply", profiles)
+        self.assertIn("will neutralize its reviewed global writer on Apply", profiles)
         self.assertIn("PIF automatic security-patch flag is not a safe regular file", profiles)
         self.assertNotIn("PIF automatic security-patch generation conflicts with OTAST ownership", profiles)
         self.assertIn("otast_transform_pif_security_patch", profiles)
