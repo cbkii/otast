@@ -122,6 +122,11 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
     ta = adb_root / "modules/TA_utl"
     target(ta / "module.prop", _synthetic_module_prop("TA_utl", "TA UTL", "v4.4"), 0o644)
     target_bytes(ta / "prop.sh", fixture_root / "ta-utl-prop-v4.4.sh")
+    target_bytes(
+        ta / "webui/assets/boot_hash-C0kIcwCH.js",
+        fixture_root / "ta-utl-boot-hash-v4.4.js",
+        0o644,
+    )
 
     yuri = adb_root / "modules/Yurikey"
     for name in (
