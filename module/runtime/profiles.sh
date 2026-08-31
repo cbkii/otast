@@ -124,7 +124,7 @@ otast_plan_pif() {
 
       _otast_plan_transformed_file pif-autopif-ota-$role playintegrityfix "$dir/autopif_ota.sh" 0755 \
         otast_transform_pif_ota \
-        'cf26c37ae06524e557b6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
+        'cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
     fi
 
     _otast_plan_transformed_external pif-prop-$role playintegrityfix "$dir/pif.prop" 0644 \
