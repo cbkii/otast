@@ -110,7 +110,7 @@ otast_plan_pif() {
       otast_stop 'PIF automatic security-patch flag is not a safe regular file'
       return 1
     }
-    otast_log WARN 'PIF automatic security-patch flag is enabled; OTAST will neutralize its reviewed writer on Apply'
+    otast_log WARN 'PIF automatic security-patch flag is enabled; OTAST will neutralize its reviewed global writer on Apply'
   fi
 
   global_planned=0
@@ -124,7 +124,7 @@ otast_plan_pif() {
 
       _otast_plan_transformed_file pif-autopif-ota-$role playintegrityfix "$dir/autopif_ota.sh" 0755 \
         otast_transform_pif_ota \
-        'cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
+        'cf26c37ae06524e557b6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
     fi
 
     _otast_plan_transformed_external pif-prop-$role playintegrityfix "$dir/pif.prop" 0644 \
@@ -179,6 +179,8 @@ otast_plan_yurikey() {
       '6bc09314d843eb04ba7f682bdb9b03091a061e537dc5acbf80cd5eb339b68756' || return 1
     _otast_plan_exact_file yurikey-target-$role yurikey "$dir/Yuri/target_txt.sh" 0755 "$MODDIR/templates/yurikey/target_txt.sh" \
       '12de2efb87a6763d514a35b291ab08022ffa46dda5d4759c505d905651ef19a9' || return 1
+    _otast_plan_exact_file yurikey-keybox-$role yurikey "$dir/Yuri/yuri_keybox.sh" 0755 "$MODDIR/templates/yurikey/keybox.sh" \
+      'c1e24d5b6219f5dc084390e1a28fc420df0c95cd89d9c7b923c5bc28a947f23e' || return 1
     _otast_plan_exact_file yurikey-boot-hash-$role yurikey "$dir/Yuri/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
       'ec9ad40fb5f2df51b5c773f93824f366fa2428b20a827ebd70fc648d7f0585fb' || return 1
     _otast_plan_exact_file yurikey-web-boot-hash-$role yurikey "$dir/webroot/common/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
