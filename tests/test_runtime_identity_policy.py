@@ -17,23 +17,16 @@ class RuntimeIdentityPolicyTests(unittest.TestCase):
         self.assertLess(text.index('. "$MODDIR/pif.sh"'), text.index('. "$MODDIR/policy.sh"'))
         self.assertLess(text.index('. "$MODDIR/policy.sh"'), text.index('. "$MODDIR/profiles.sh"'))
 
-    def test_pif_preserve_identity_still_forces_ota_security_patch(self) -> None:
+    def _run_transform(self, source_text: str, identity: str) -> str:
         with tempfile.TemporaryDirectory(prefix="otast-policy-") as raw:
             work = Path(raw)
             source = work / "pif.prop"
             output = work / "out.prop"
-            source.write_text(
-                "FINGERPRINT=google/tegu_beta/tegu:CANARY/KEEP/1:user/release-keys\n"
-                "MODEL=Pixel 9a\n"
-                "SECURITY_PATCH=2026-08-05\n"
-                "spoofBuild=true\n"
-                "spoofProps=false\n",
-                encoding="utf-8",
-            )
+            source.write_text(source_text, encoding="utf-8")
             command = f'''
                 . "{PIF}" || exit 1
                 . "{POLICY}" || exit 2
-                OTAST_PIF_IDENTITY_POLICY=preserve
+                OTAST_PIF_IDENTITY_POLICY={identity}
                 OTAST_FINGERPRINT='google/tegu/tegu:16/CP1A.260305.018/14887507:user/release-keys'
                 OTAST_MANUFACTURER=Google
                 OTAST_MODEL='Pixel 9a'
@@ -49,12 +42,40 @@ class RuntimeIdentityPolicyTests(unittest.TestCase):
                 otast_transform_pif_prop "{source}" "{output}" || exit 3
             '''
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=10)
-            text = output.read_text(encoding="utf-8")
-            self.assertIn("FINGERPRINT=google/tegu_beta/tegu:CANARY/KEEP/1:user/release-keys", text)
-            self.assertIn("SECURITY_PATCH=2026-03-05", text)
-            self.assertIn("spoofBuild=true", text)
-            self.assertIn("spoofProps=false", text)
-            self.assertNotIn("SECURITY_PATCH=2026-08-05", text)
+            return output.read_text(encoding="utf-8")
+
+    def test_pif_preserve_identity_keeps_attestation_profile_security_patch(self) -> None:
+        text = self._run_transform(
+            "FINGERPRINT=google/oriole_beta/oriole:CANARY/KEEP/1:user/release-keys\n"
+            "MODEL=Pixel 6\n"
+            "SECURITY_PATCH=2026-07-05\n"
+            "spoofBuild=true\n"
+            "spoofProps=false\n",
+            "preserve",
+        )
+        self.assertIn("FINGERPRINT=google/oriole_beta/oriole:CANARY/KEEP/1:user/release-keys", text)
+        self.assertIn("MODEL=Pixel 6", text)
+        self.assertIn("SECURITY_PATCH=2026-07-05", text)
+        self.assertIn("spoofBuild=true", text)
+        self.assertIn("spoofProps=false", text)
+        self.assertNotIn("SECURITY_PATCH=2026-03-05", text)
+
+    def test_explicit_pif_ota_identity_takeover_reconciles_profile_patch(self) -> None:
+        text = self._run_transform(
+            "FINGERPRINT=google/oriole_beta/oriole:CANARY/KEEP/1:user/release-keys\n"
+            "MODEL=Pixel 6\n"
+            "SECURITY_PATCH=2026-07-05\n"
+            "spoofBuild=true\n"
+            "spoofProps=false\n",
+            "ota",
+        )
+        self.assertIn(
+            "FINGERPRINT=google/tegu/tegu:16/CP1A.260305.018/14887507:user/release-keys",
+            text,
+        )
+        self.assertIn("MODEL=Pixel 9a", text)
+        self.assertIn("SECURITY_PATCH=2026-03-05", text)
+        self.assertNotIn("SECURITY_PATCH=2026-07-05", text)
 
     def test_lock_state_contract_is_conservative_pixel_subset(self) -> None:
         text = POLICY.read_text(encoding="utf-8")
@@ -76,6 +97,7 @@ class RuntimeIdentityPolicyTests(unittest.TestCase):
         policy = POLICY.read_text(encoding="utf-8")
         verify = entry.split("_otast_verify()", 1)[1].split("_otast_restore()", 1)[0]
         self.assertIn("otast_compare_live_strict_runtime_identity", verify)
+        self.assertIn("otast_verify_trickystore_health", verify)
         self.assertIn("ro.build.version.security_patch:OTAST_SYSTEM_PATCH", policy)
         self.assertIn("ro.vendor.build.security_patch:OTAST_VENDOR_PATCH", policy)
         self.assertIn("ro.boot.flash.locked:OTAST_EXPECT_FLASH_LOCKED", policy)
@@ -90,6 +112,15 @@ class RuntimeIdentityPolicyTests(unittest.TestCase):
         self.assertNotIn("$MODDIR/../system.prop", text)
         self.assertIn("path=${MODDIR%/runtime}/system.prop", text)
         self.assertIn('unexpected OTAST runtime directory: $MODDIR', text)
+
+    def test_report_separates_profile_patch_from_platform_patch(self) -> None:
+        text = POLICY.read_text(encoding="utf-8")
+        self.assertIn("pif_effective_profile_path", text)
+        self.assertIn("pif_profile_security_patch", text)
+        self.assertIn("pif_profile_spoofProps", text)
+        self.assertIn("pif_profile_patch_scope", text)
+        self.assertIn("ro.boot.verifiedbooterror", text)
+        self.assertIn("ro.boot.verifyerrorpart", text)
 
 
 if __name__ == "__main__":
