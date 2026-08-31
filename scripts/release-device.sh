@@ -256,6 +256,43 @@ set -u
 real=${OTAST_REAL_GH:?}
 state=${OTAST_SHIM_STATE:?}
 
+# `gh release delete --cleanup-tag` can delete a draft successfully and still
+# return non-zero when tag cleanup fails (for example when a draft tag ref is
+# absent). The retained lifecycle interprets that status as total deletion
+# failure and then retries a release that no longer exists. Normalize only this
+# partial-success case: if the release is gone, deletion succeeded for the
+# lifecycle's purpose. If the release still exists, preserve the real failure.
+if [[ ${1:-} == release && ${2:-} == delete ]]; then
+    args=("$@")
+    version=${3:-}
+    repo=
+    index=0
+    while ((index < ${#args[@]})); do
+        value=${args[index]}
+        case $value in
+            -R|--repo)
+                if (($((index + 1)) < ${#args[@]})); then
+                    repo=${args[index+1]}
+                    index=$((index + 2))
+                    continue
+                fi
+                ;;
+        esac
+        index=$((index + 1))
+    done
+
+    "$real" "$@"
+    rc=$?
+    ((rc == 0)) && exit 0
+    [[ -n $version ]] || exit "$rc"
+    view=(release view "$version")
+    [[ -z $repo ]] || view+=(--repo "$repo")
+    if ! "$real" "${view[@]}" >/dev/null 2>&1; then
+        exit 0
+    fi
+    exit "$rc"
+fi
+
 if [[ ${1:-} == workflow && ${2:-} == run ]]; then
     args=("$@")
     out=()
