@@ -166,30 +166,32 @@ otast_plan_ta_utl() {
         otast_transform_ta_prop \
         'fffa4d98aafb444594480ccaecbdbc083fee8e860418f86cc55e2422dc7a647f' || return 1
 
-      webui_found=0
-      if [ -d "$dir/webui/assets" ] && [ ! -L "$dir/webui/assets" ]; then
-        for candidate in "$dir"/webui/assets/boot_hash-*.js; do
-          [ -e "$candidate" ] || continue
-          [ -f "$candidate" ] && [ ! -L "$candidate" ] || {
-            otast_stop "TA UTL WebUI boot-hash asset is unsafe: $candidate"
-            return 1
-          }
-          if [ "$candidate" != "$dir/webui/assets/boot_hash-C0kIcwCH.js" ]; then
-            otast_stop "unreviewed TA UTL WebUI boot-hash asset: $candidate"
-            return 1
-          fi
-          webui_found=1
-        done
-      elif [ -e "$dir/webui/assets" ] || [ -L "$dir/webui/assets" ]; then
-        otast_stop "TA UTL WebUI assets path is unsafe: $dir/webui/assets"
+      [ -d "$dir/webui/assets" ] && [ ! -L "$dir/webui/assets" ] || {
+        otast_stop "required reviewed TA UTL WebUI assets path is missing or unsafe: $dir/webui/assets"
         return 1
-      fi
+      }
 
-      if [ "$webui_found" -eq 1 ]; then
-        _otast_plan_transformed_file ta-webui-boot-hash-$role-$id_tag ta-utl "$dir/webui/assets/boot_hash-C0kIcwCH.js" 0644 \
-          otast_transform_ta_webui_boot_hash \
-          'bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc' || return 1
-      fi
+      webui_found=0
+      for candidate in "$dir"/webui/assets/boot_hash-*.js; do
+        [ -e "$candidate" ] || continue
+        [ -f "$candidate" ] && [ ! -L "$candidate" ] || {
+          otast_stop "TA UTL WebUI boot-hash asset is unsafe: $candidate"
+          return 1
+        }
+        if [ "$candidate" != "$dir/webui/assets/boot_hash-C0kIcwCH.js" ]; then
+          otast_stop "unreviewed TA UTL WebUI boot-hash asset: $candidate"
+          return 1
+        fi
+        webui_found=$((webui_found + 1))
+      done
+      [ "$webui_found" -eq 1 ] || {
+        otast_stop "required reviewed TA UTL WebUI boot-hash asset is missing or ambiguous: $dir/webui/assets"
+        return 1
+      }
+
+      _otast_plan_transformed_file ta-webui-boot-hash-$role-$id_tag ta-utl "$dir/webui/assets/boot_hash-C0kIcwCH.js" 0644 \
+        otast_transform_ta_webui_boot_hash \
+        'bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc' || return 1
     done
   done
 }
