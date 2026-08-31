@@ -195,7 +195,7 @@ otast_plan_yurikey() {
     _otast_plan_exact_file yurikey-clear-$role yurikey "$dir/Yuri/clear_all_detection_traces.sh" 0755 "$MODDIR/templates/yurikey/clear-all.sh" \
       'e0249324a156f163625d7bb1ea141b6baa0d54f7dd54e7df1cac6493c851f861,efd7ae12259efea5640dc5fdd8d950dfbffaf154f7aa78dba9d782335d4c0893' || return 1
     _otast_plan_exact_file yurikey-pif2-$role yurikey "$dir/webroot/common/pif2.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
-      '8125d05e170e10ac76b20f879fc093fdac576791cfb058983ea1547d1647677' || return 1
+      '8125d05e170e10ac76b20f879fc093fdac576791cf5b058983ea1547d1647677' || return 1
   done
 }
 
