@@ -23,4 +23,4 @@ otast.pif.spoofSignature=preserve
 otast.pif.spoofVendingBuild=preserve
 otast.pif.spoofVendingSdk=preserve
 otast.pif.DEBUG=preserve
-otast.trickystore.securityPatch=preserve
+otast.trickystore.securityPatch=ota

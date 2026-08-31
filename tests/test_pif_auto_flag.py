@@ -26,7 +26,7 @@ class PifAutoPatchFlagTests(unittest.TestCase):
             expected_mode = stat.S_IMODE(flag.stat().st_mode)
 
             preflight = _run(entry, adb_root, "preflight")
-            self.assertIn("will neutralize its reviewed writer on Apply", preflight.stdout)
+            self.assertIn("will neutralize its reviewed global writer on Apply", preflight.stdout)
 
             _run(entry, adb_root, "apply")
             self.assertFalse(flag.is_symlink())

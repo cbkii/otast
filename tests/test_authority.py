@@ -20,7 +20,7 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(authority.values["ro.boot.vbmeta.avb_version"], "1.3")
         self.assertEqual(authority.values["ro.boot.avb_version"], "1.3")
         self.assertEqual(authority.values["otast.pif.identity"], "preserve")
-        self.assertEqual(authority.values["otast.trickystore.securityPatch"], "preserve")
+        self.assertEqual(authority.values["otast.trickystore.securityPatch"], "ota")
 
     def test_pixel_8_authority_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

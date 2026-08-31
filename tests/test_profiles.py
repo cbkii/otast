@@ -186,15 +186,20 @@ class ProfileTests(unittest.TestCase):
             self.assertIn('contains_reset_prop "ro.bootmode" "recovery" "unknown"', text)
             self.assertIn("resetprop -c || true", text)
 
-    def test_yurikey_action_and_target_regenerator_are_neutralized(self) -> None:
+    def test_yurikey_action_target_and_keybox_writers_are_neutralized(self) -> None:
         action = (ROOT / "module/runtime/templates/yurikey/action.sh").read_text(encoding="utf-8")
         target = (ROOT / "module/runtime/templates/yurikey/target_txt.sh").read_text(encoding="utf-8")
+        keybox = (ROOT / "module/runtime/templates/yurikey/keybox.sh").read_text(encoding="utf-8")
         self.assertIn('exec sh "$OTAST_ENTRY" report', action)
         self.assertNotIn("memory-type anonymous", action)
         self.assertNotIn("zygiskd", action)
         self.assertIn("target regeneration is disabled", target)
         self.assertNotIn("pm list packages", target)
         self.assertNotIn("rm -rf", target)
+        self.assertIn("automatic keybox replacement is disabled", keybox)
+        self.assertNotIn("curl", keybox)
+        self.assertNotIn("wget", keybox)
+        self.assertNotIn("base64", keybox)
 
     def test_vbmeta_fixer_template_never_writes_runtime_properties(self) -> None:
         template = (ROOT / "module/runtime/templates/vbmeta-fixer/service.sh").read_text(encoding="utf-8")
@@ -207,9 +212,11 @@ class ProfileTests(unittest.TestCase):
             "authority.sh",
             "entry.sh",
             "pif.sh",
+            "policy.sh",
             "profiles.sh",
             "report.sh",
             "ta.sh",
+            "trickystore.sh",
         ):
             path = ROOT / "module/runtime" / relative
             text = path.read_text(encoding="utf-8")

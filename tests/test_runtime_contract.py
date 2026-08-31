@@ -37,6 +37,12 @@ class RuntimeContractTests(unittest.TestCase):
             set(authority["provenance_only_vbmeta_keys"]),
             {"ro.boot.vbmeta.size"},
         )
+        self.assertEqual(
+            set(authority["runtime_security_patch_keys"]),
+            {"ro.build.version.security_patch", "ro.vendor.build.security_patch"},
+        )
+        self.assertIn("ro.boot.flash.locked", authority["software_boot_state_keys"])
+        self.assertIn("ro.boot.verifiedbootstate", authority["software_boot_state_keys"])
 
     def test_runtime_authority_is_pixel_family_not_model_pinned(self) -> None:
         authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
@@ -115,11 +121,16 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("REBOOT_REQUIRED", apply)
         self.assertIn("NO_CHANGES_REQUIRED", apply)
         self.assertIn("otast_compare_live_managed_vbmeta", verify)
+        self.assertIn("otast_compare_live_strict_runtime_identity", verify)
+        self.assertIn("otast_verify_trickystore_health", verify)
 
     def test_pif_managed_surface_is_minimal(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         pif = manifest["targets"]["playintegrityfix"]
-        self.assertEqual(set(pif["managed_paths"]), {"autopif.sh", "autopif_ota.sh", "pif.prop", "security_patch.sh"})
+        self.assertEqual(
+            set(pif["managed_paths"]),
+            {"autopif.sh", "autopif_ota.sh", "pif.prop", "security_patch.sh", "system.prop"},
+        )
         profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
         pif_block = profiles.split("otast_plan_pif()", 1)[1].split("otast_plan_ta_utl()", 1)[0]
         for observed in ("action.sh", "post-fs-data.sh", "service.sh"):
@@ -157,7 +168,7 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("pif_auto_security_patch", upstream_autopif)
         self.assertIn('sh "$MODDIR/security_patch.sh"', upstream_autopif)
         self.assertIn("pif_auto_security_patch", profiles)
-        self.assertIn("will neutralize its reviewed writer on Apply", profiles)
+        self.assertIn("will neutralize its reviewed global writer on Apply", profiles)
         self.assertIn("PIF automatic security-patch flag is not a safe regular file", profiles)
         self.assertNotIn("PIF automatic security-patch generation conflicts with OTAST ownership", profiles)
         self.assertIn("otast_transform_pif_security_patch", profiles)
