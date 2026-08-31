@@ -165,6 +165,9 @@ otast_plan_ta_utl() {
       _otast_plan_transformed_file ta-prop-$role-$id_tag ta-utl "$dir/prop.sh" 0755 \
         otast_transform_ta_prop \
         'fffa4d98aafb444594480ccaecbdbc083fee8e860418f86cc55e2422dc7a647f' || return 1
+      _otast_plan_transformed_file ta-webui-boot-hash-$role-$id_tag ta-utl "$dir/webui/assets/boot_hash-C0kIcwCH.js" 0644 \
+        otast_transform_ta_webui_boot_hash \
+        'bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc' || return 1
     done
   done
 }
@@ -192,7 +195,7 @@ otast_plan_yurikey() {
     _otast_plan_exact_file yurikey-clear-$role yurikey "$dir/Yuri/clear_all_detection_traces.sh" 0755 "$MODDIR/templates/yurikey/clear-all.sh" \
       'e0249324a156f163625d7bb1ea141b6baa0d54f7dd54e7df1cac6493c851f861,efd7ae12259efea5640dc5fdd8d950dfbffaf154f7aa78dba9d782335d4c0893' || return 1
     _otast_plan_exact_file yurikey-pif2-$role yurikey "$dir/webroot/common/pif2.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
-      '8125d05e170e10ac76b20f879fc093fdac576791cf5b058983ea1547d1647677' || return 1
+      '8125d05e170e10ac76b20f879fc093fdac576791cfb058983ea1547d1647677' || return 1
   done
 }
 
