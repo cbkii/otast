@@ -1,10 +1,10 @@
 # OTAST — OTA Source of Truth
 
-OTAST is a transactional Magisk module for **Google Pixel devices running Android 16**. It treats `/data/adb/ota.prop` as the authority for OTA-derived platform identity and coordinates a reviewed set of interacting integrity modules without silently replacing user-selected runtime spoof configuration.
+OTAST is a transactional Magisk module for **Google Pixel devices running Android 16**. It treats `/data/adb/ota.prop` as the authority for OTA-derived platform identity and coordinates a reviewed set of interacting integrity modules without silently replacing user-selected attestation-profile configuration.
 
 **`https://github.com/cbkii/otast` is the only supported OTAST repository and module source.** Older similarly named OTA-governor repositories/modules are deprecated and must not be installed or used. OTAST retains legacy-trace detection only so coexistence or an incomplete migration fails closed.
 
-This repository is the complete public source tree. It includes the Magisk module, deterministic release tooling, a fake-Magisk-root lifecycle harness, private device-fixture tooling, CI, target monitoring, and public-repository initialization checks.
+This repository is the complete public source tree. It includes the Magisk module, deterministic release tooling, a fake-Magisk-root lifecycle harness, private device-fixture tooling, CI, target monitoring, bounded read-only diagnostics, and public-repository initialization checks.
 
 > **Release status:** use this repository's GitHub Releases page and stable Magisk `update.json` channel for the current published version. Release candidates and development source may intentionally be ahead of that stable channel.
 
@@ -23,13 +23,13 @@ Other Pixel models are currently **untested**. Treat them as unverified until th
 
 OTAST currently supports reviewed profiles for:
 
-- PIF Inject (`playintegrityfix`): preserves the current PIF identity and spoof booleans by default. OTA identity takeover is explicit opt-in. The competing automatic security-patch writer remains neutralized; upstream Action, post-fs-data, service, WebUI and updater machinery otherwise stay upstream-owned.
-- TrickyStore (`tricky_store`): preserves the current `security_patch.txt` by default. OTA-derived patch alignment is explicit opt-in.
-- Yurikey (`Yurikey`): replaces reviewed authority/property writers, the empty-digest-to-zero fallback, the root Action and automatic all-packages TrickyStore target regeneration. Yurikey's Magisk Action becomes read-only Report by default.
-- Tricky Addon Update Target List (`TA_utl` or `.TA_utl`): exact reviewed `prop.sh` transformation that removes the overlapping VBMeta writer while retaining unrelated behavior.
-- Android VBMeta Fixer (`vbmeta-fixer`): if enabled and recognised, its upstream runtime property writer is neutralized. OTAST preserves the bootloader/libavb runtime VBMeta values rather than deriving replacements from block-device geometry.
+- PIF Inject (`playintegrityfix`): separates the selected attestation profile from platform identity. In `preserve` mode the profile fingerprint/model/`SECURITY_PATCH` and unrelated spoof options remain user-selected, while reviewed global `system.prop` SPL values are reconciled to OTA authority and the competing automatic `security_patch.sh` runtime writer is neutralized. Explicit `otast.pif.identity=ota` may additionally replace the profile identity.
+- Tricky Store OSS (`tricky_store`): the reviewed v3.1.0 implementation uses OTA-aligned `security_patch.txt` as the managed patch contract. Existing targets and the active keybox are preserved; OTAST reports keybox/target/TEE health and semantic Verify fails when configured targets depend on an unusable active keybox.
+- Yurikey (`Yurikey`): replaces reviewed authority/property writers, the empty-digest-to-zero fallback, the root Action and automatic all-packages TrickyStore target regeneration. Its unattended remote keybox replacement path is also neutralized. Yurikey's Magisk Action becomes read-only Report by default.
+- Tricky Addon Update Target List (`TA_utl` or `.TA_utl`): exact reviewed `prop.sh` transformation that removes its overlapping boot-time VBMeta writer while retaining unrelated behavior. The separate WebUI Boot Hash mutation path is explicitly tracked and is not silently treated as governed until its exact installed bundle is reviewed.
+- Android VBMeta Fixer (`vbmeta-fixer`): if enabled and recognised, its upstream runtime property writer is neutralized. OTAST preserves bootloader/libavb runtime VBMeta values rather than deriving replacements from block-device geometry.
 
-Unknown target hashes, unsafe links, authority/source mismatch, active deprecated OTA-governor traces, competing PIF automatic patch generation, managed drift, malformed state, and incomplete transaction recovery all fail closed.
+Unknown target hashes, unsafe links, authority/source mismatch, active deprecated OTA-governor traces, unsafe PIF auto-patch marker types, managed drift, malformed state, and incomplete transaction recovery all fail closed. A normal regular PIF Auto Security Patch marker is preserved while its reviewed global writer is neutralized.
 
 ## VBMeta evidence model
 
@@ -42,16 +42,18 @@ For runtime/source validation OTAST compares the OTA-derived VBMeta digest and A
 OTAST:
 
 - reads authority from `/data/adb/ota.prop`;
-- separates official source identity from user-selected PIF/TrickyStore runtime policy;
-- defaults PIF identity/options and TrickyStore patch policy to `preserve`;
+- separates official OTA/platform identity, the selected PIF attestation profile, and Tricky Store local-attestation state;
+- keeps PIF attestation-profile selection preserve-first unless explicit OTA takeover is requested;
+- makes platform-visible system/vendor SPL and the reviewed Tricky Store security-patch contract follow OTA authority;
 - records original bytes before the first mutation;
 - writes through a journaled transaction;
 - verifies every managed hash and mode;
 - blocks Apply and Restore when target drift is detected;
 - recovers an interrupted transaction during `post-fs-data`;
 - does not run a polling service;
-- never scans unrelated module trees;
-- never uses Yurikey Action as an implicit multi-subsystem mutation trigger.
+- never scans unrelated module trees during normal runtime operation;
+- never uses Yurikey Action as an implicit multi-subsystem mutation trigger;
+- does not rewrite raw bootloader/libavb evidence or claim software property changes alter hardware-backed RootOfTrust.
 
 The strict exclusions listed in `compatibility/supported-targets.json` are represented only as policy and test sentinels. Runtime discovery never names or traverses them.
 
@@ -112,6 +114,18 @@ sh /data/adb/modules/otast/runtime/entry.sh restore
 ```
 
 `Report`, `Preflight` and `Verify` are read-only. The Action menu defaults to `Report` on timeout/no selection. Run `preflight` before the first Apply and after any target-module update.
+
+## Read-only root-exposure doctor
+
+`OTAST` does not mutate unrelated Zygisk/LSPosed/root-hiding configuration. For detector attribution, an explicit bounded doctor can inspect one running process without exporting private keybox contents or performing cleanup/property/module changes:
+
+```bash
+python3 scripts/root-exposure-doctor.py \
+  --package com.example.detector \
+  --output "$HOME/otast-root-doctor.json"
+```
+
+If a detector reports a suspicious or clear mount headline, pass `--detector-mount-claim suspicious` or `--detector-mount-claim clear` to compare that headline with the selected detailed mount evidence. The report records only bounded root-relevant mappings/mount entries, module identity/version metadata, `sepolicy.rule` hashes rather than contents, process mount namespaces, SELinux context evidence where available, and a read-only OTAST Report result. Findings are classified as OTAST semantic inconsistency, another reviewed module's exposure, unknown/needs investigation, or detector/report inconsistency.
 
 ## Public GitHub initialization
 
