@@ -89,6 +89,7 @@ _otast_verify() {
   _otast_validate_source || return 1
   otast_compare_live_managed_vbmeta || return 1
   otast_compare_live_strict_runtime_identity || return 1
+  otast_verify_trickystore_health || return 1
   otast_verify_managed
 }
 
