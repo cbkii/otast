@@ -202,9 +202,10 @@ class ProfileTests(unittest.TestCase):
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
             text = first.read_text(encoding="utf-8")
             self.assertIn("OTAST owns boot_hash and ro.boot.vbmeta.digest", text)
+            self.assertIn("a.disabled=!0;window.trimInput=", text)
             self.assertIn("sed '/[^#]/d; /^$/d' /data/adb/boot_hash", text)
-            self.assertIn("resetprop -c || true", text)
             self.assertNotIn("resetprop -n ro.boot.vbmeta.digest", text)
+            self.assertNotIn("resetprop -c || true", text)
             self.assertNotIn("rm -f /data/adb/boot_hash", text)
             self.assertNotIn("> /data/adb/boot_hash", text)
             self.assertNotIn("chmod 644 /data/adb/boot_hash", text)
@@ -217,6 +218,8 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("for id in TA_utl .TA_utl", profiles)
         self.assertIn('"$dir/webui/assets/boot_hash-C0kIcwCH.js" 0644', profiles)
         self.assertIn("otast_transform_ta_webui_boot_hash", profiles)
+        self.assertIn("required reviewed TA UTL WebUI boot-hash asset is missing or ambiguous", profiles)
+        self.assertIn("unreviewed TA UTL WebUI boot-hash asset", profiles)
         self.assertIn(expected, profiles)
         self.assertEqual(
             manifest["targets"]["ta-utl"]["accepted_hashes"]["webui/assets/boot_hash-C0kIcwCH.js"],
