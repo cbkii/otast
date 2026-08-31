@@ -17,25 +17,34 @@ Values are not inferred from target modules. A missing required key, duplicate k
 
 When `/proc/bootconfig` is available, Preflight/Apply/Verify require both `androidboot.vbmeta.digest` and `androidboot.vbmeta.avb_version` to be present, non-empty and equal to the OTA authority. Missing bootloader evidence fails closed rather than being treated as an optional comparison.
 
+## Identity domains
+
+OTAST keeps three different identity domains explicit rather than forcing them to be byte-for-byte identical:
+
+1. **OTA/platform authority** — the installed Google build, official system/vendor SPL, and artifact-derived VBMeta provenance in `ota.prop`.
+2. **PIF attestation profile** — a deliberately selected fingerprint/model/profile patch used by the reviewed PIF implementation. It may differ from the installed device while remaining isolated from ordinary platform properties.
+3. **Tricky Store OSS local attestation** — targeted KeyAttestation certificate rewriting. OTAST validates/co-ordinates this layer but does not embed a second competing keystore interception engine.
+
+The platform must be internally coherent even when the PIF profile intentionally differs.
+
 ## OTA security-patch authority
 
-The official system/vendor security patch dates in `ota.prop` are authoritative runtime identity, not optional attestation-profile preferences.
+The official system/vendor security patch dates in `ota.prop` are authoritative for ordinary Android runtime identity.
 
-OTAST therefore reconciles all reviewed SPL writers to the authority during Apply:
+OTAST therefore reconciles all reviewed **global** SPL writers during Apply:
 
 - OTAST's own runtime `system.prop` exposes the authority system/vendor SPL;
-- PIF `pif.prop` `SECURITY_PATCH` is forced to the authority while unrelated PIF fingerprint/options may remain preserved;
-- an existing PIF `system.prop` is reconciled line-by-line so unrelated entries survive while the system/vendor SPL matches the authority;
-- the reviewed PIF automatic security-patch writer remains neutralized;
-- TrickyStore `security_patch.txt` is treated as OTA-owned so its KeyAttestation patch metadata agrees with the same authority.
+- PIF `system.prop` is reconciled line-by-line so unrelated entries survive while its global system/vendor SPL matches the authority;
+- the reviewed PIF `security_patch.sh` global resetprop/system.prop writer remains neutralized;
+- Tricky Store OSS `security_patch.txt` is OTA-owned so its patch metadata agrees with the installed OTA.
 
-After the required reboot, Verify fails if `ro.build.version.security_patch` or `ro.vendor.build.security_patch` differs from the authority.
+After the required reboot, Verify fails if `ro.build.version.security_patch` or `ro.vendor.build.security_patch` is missing or differs from the authority.
 
-The historical `otast.trickystore.securityPatch=preserve` setting is accepted for compatibility with older authority files but is overridden at runtime. OTAST v1.0.2 and earlier could preserve a non-OTA SPL; that is no longer the intended contract.
+The historical `otast.trickystore.securityPatch=preserve` setting is accepted for compatibility with older authority files but is overridden at runtime. OTAST v1.0.2 and earlier could preserve a non-OTA platform SPL; that is no longer the contract.
 
-## Preserve-first PIF policy
+## Preserve-first PIF attestation profile
 
-Preserve-first behavior still applies to PIF fields that are not OTA source identity.
+The reviewed KOWX712 PIF implementation checks `/data/adb/pif.prop` before its module-local `pif.prop`. Its Zygisk property hook consumes profile `SECURITY_PATCH` only for the targeted DroidGuard process when `spoofProps=true`; this is separate from the reviewed shell `security_patch.sh` global writer.
 
 Optional authority keys:
 
@@ -51,10 +60,12 @@ otast.pif.DEBUG=preserve|true|false
 otast.trickystore.securityPatch=preserve|ota
 ```
 
-- `otast.pif.identity=preserve` keeps the current PIF fingerprint/model/product selection. It no longer permits a different `SECURITY_PATCH`; SPL always follows `ota.prop`.
-- `otast.pif.identity=ota` additionally aligns the reviewed PIF fingerprint/model/product fields with the OTA authority and enables the reviewed AutoPIF reconciliation transforms.
+- `otast.pif.identity=preserve` keeps the current PIF fingerprint/model/product/**profile `SECURITY_PATCH`**. OTAST still prevents that profile patch from becoming the platform-visible SPL through PIF's global shell/system.prop path.
+- `otast.pif.identity=ota` explicitly aligns the reviewed PIF fingerprint/model/product/profile patch with the OTA authority and enables the reviewed AutoPIF reconciliation transforms.
 - Each `otast.pif.spoof*`/`DEBUG` key independently preserves the current value unless explicitly set to `true` or `false`.
 - `otast.trickystore.securityPatch` remains parse-compatible with older files, but effective runtime policy is `ota`.
+
+Report identifies the effective PIF profile path, fingerprint/model/profile patch, `spoofProps`, and whether the reviewed process-local patch hook is enabled. A different PIF profile fingerprint is not by itself platform drift.
 
 ## Software boot-state policy
 
@@ -71,7 +82,17 @@ vendor.boot.verifiedbootstate=green
 
 Verify checks the primary `ro.boot.*` values after reboot. OTAST deliberately does **not** set unrelated semantics such as `ro.oem_unlock_supported=0`; that property describes whether the device supports OEM unlocking, not its current lock state.
 
-This software policy does not rewrite hardware-backed RootOfTrust. A local app that performs genuine KeyAttestation can still observe the physical bootloader state unless it is explicitly handled by an attestation-layer mechanism such as a reviewed TrickyStore leaf-hack target.
+Report also exposes residual `ro.boot.verifiedbooterror` and `ro.boot.verifyerrorpart` values. Their source/semantics are tracked separately and OTAST does not delete them without a reviewed Pixel-specific basis.
+
+## Tricky Store OSS and keybox health
+
+The supported implementation is currently the exact reviewed Tricky Store OSS v3.1.0 build recorded in `compatibility/supported-targets.json`.
+
+Normal OTAST Apply never chooses or replaces `keybox.xml`. Runtime health checks classify the active keybox structurally without printing key material. If Tricky Store has configured targets and the active keybox is empty, malformed, unreadable or unsafe, Verify fails instead of reporting a clean semantic state.
+
+Deep cryptographic keybox qualification and any keybox replacement are explicit local operations. Real keybox/private-key material must never be committed, uploaded as release proof, or printed into OTAST logs.
+
+Physical Pixel 9a validation proved the existing Tricky Store OSS leaf-hack path: after replacing a previously-empty keybox with a cryptographically valid active keybox, fresh local attestation reported locked/Verified RootOfTrust and consistent StrongBox/TEE state. OTAST therefore does not duplicate this interception engine.
 
 ## Yurikey behavior
 
@@ -82,9 +103,10 @@ For a reviewed Yurikey build OTAST replaces the dangerous multi-purpose entrypoi
 - root Magisk Action: read-only OTAST Report by default;
 - automatic `target.txt` rebuild (`all user apps + all system apps`): disabled;
 - broad detection-trace cleanup: disabled;
-- Yurikey security-patch/PIF helper writers: redirected through OTAST.
+- Yurikey security-patch/PIF helper writers: redirected through OTAST;
+- unattended remote keybox replacement: disabled, because the reviewed updater can move aside a working keybox and accept a zero-byte decode result as success.
 
-Existing TrickyStore targets are not destructively pruned by normal Apply. Target-list reduction and targeted local-attestation handling remain independently reversible operations.
+Existing Tricky Store targets are not destructively pruned by normal Apply. Target-list reduction remains an independently reversible migration.
 
 ## Zygisk Next
 
