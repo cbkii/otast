@@ -40,6 +40,7 @@ class ProfileTests(unittest.TestCase):
             ("playintegrityfix", "autopif_ota.sh", "pif-autopif-ota-ea93222c.sh"),
             ("playintegrityfix", "security_patch.sh", "pif-security-patch-ea93222c.sh"),
             ("ta-utl", "prop.sh", "ta-utl-prop-v4.4.sh"),
+            ("ta-utl", "webui/assets/boot_hash-C0kIcwCH.js", "ta-utl-boot-hash-v4.4.js"),
         )
         for target, name, fixture_name in checks:
             digest = hashlib.sha256((FIXTURES / fixture_name).read_bytes()).hexdigest()
@@ -185,6 +186,45 @@ class ProfileTests(unittest.TestCase):
             self.assertIn('check_reset_prop "ro.boot.verifiedbootstate" "green"', text)
             self.assertIn('contains_reset_prop "ro.bootmode" "recovery" "unknown"', text)
             self.assertIn("resetprop -c || true", text)
+
+    def test_ta_v44_webui_boot_hash_save_is_read_only_and_idempotent(self) -> None:
+        ta_runtime = ROOT / "module/runtime/ta.sh"
+        fixture = FIXTURES / "ta-utl-boot-hash-v4.4.js"
+        with tempfile.TemporaryDirectory(prefix="otast-ta-webui-test-") as raw:
+            work = Path(raw)
+            first = work / "boot-hash.first.js"
+            second = work / "boot-hash.second.js"
+            command = f'''
+                . "{ta_runtime}" || exit 1
+                otast_transform_ta_webui_boot_hash "{fixture}" "{first}" || exit 2
+                otast_transform_ta_webui_boot_hash "{first}" "{second}" || exit 3
+            '''
+            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+            text = first.read_text(encoding="utf-8")
+            self.assertIn("OTAST owns boot_hash and ro.boot.vbmeta.digest", text)
+            self.assertIn("a.disabled=!0;window.trimInput=", text)
+            self.assertIn("sed '/[^#]/d; /^$/d' /data/adb/boot_hash", text)
+            self.assertNotIn("resetprop -n ro.boot.vbmeta.digest", text)
+            self.assertNotIn("resetprop -c || true", text)
+            self.assertNotIn("rm -f /data/adb/boot_hash", text)
+            self.assertNotIn("> /data/adb/boot_hash", text)
+            self.assertNotIn("chmod 644 /data/adb/boot_hash", text)
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+
+    def test_ta_webui_plan_is_exact_hash_managed_for_both_aliases(self) -> None:
+        profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
+        manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
+        expected = "bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"
+        self.assertIn("for id in TA_utl .TA_utl", profiles)
+        self.assertIn('"$dir/webui/assets/boot_hash-C0kIcwCH.js" 0644', profiles)
+        self.assertIn("otast_transform_ta_webui_boot_hash", profiles)
+        self.assertIn("required reviewed TA UTL WebUI boot-hash asset is missing or ambiguous", profiles)
+        self.assertIn("unreviewed TA UTL WebUI boot-hash asset", profiles)
+        self.assertIn(expected, profiles)
+        self.assertEqual(
+            manifest["targets"]["ta-utl"]["accepted_hashes"]["webui/assets/boot_hash-C0kIcwCH.js"],
+            [expected],
+        )
 
     def test_yurikey_action_target_and_keybox_writers_are_neutralized(self) -> None:
         action = (ROOT / "module/runtime/templates/yurikey/action.sh").read_text(encoding="utf-8")

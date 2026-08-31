@@ -116,10 +116,14 @@
       "accepted_hashes": {
         "prop.sh": [
           "fffa4d98aafb444594480ccaecbdbc083fee8e860418f86cc55e2422dc7a647f"
+        ],
+        "webui/assets/boot_hash-C0kIcwCH.js": [
+          "bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"
         ]
       },
       "managed_paths": [
-        "prop.sh"
+        "prop.sh",
+        "webui/assets/boot_hash-C0kIcwCH.js"
       ],
       "module_ids": [
         "TA_utl",
@@ -130,9 +134,19 @@
         "expected_head": "cf167849aaa7696972a3c7826ec94294e9e47fce",
         "repository": "KOWX712/Tricky-Addon-Update-Target-List"
       },
-      "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file; direct WebUI boot-hash writer is tracked separately pending reviewed backend interception",
-      "reviewed_ref": "v4.4 prop.sh writer contract unchanged through cf167849aaa7696972a3c7826ec94294e9e47fce; upstream service/action/WebUI lifecycle delta remains preserved and outside current OTAST mutation scope",
-      "strategy": "exact v4.4 prop.sh transformation for the reviewed competing VBMeta block; fail closed on unknown prop.sh hashes"
+      "preserved_scope": "all non-vbmeta prop.sh behaviour and all TA UTL WebUI functionality except the reviewed Boot Hash save backend; the Boot Hash field remains readable but its direct save writer is neutralized while OTAST owns VBMeta state",
+      "reviewed_sources": [
+        {
+          "commit": "5d852b6ae087758178c42e56f98a4cde9c696f49",
+          "ref": "v4.4 release tag; webui/scripts/boot_hash.js SHA-256 c3ea399eaa9686a5f29f7ff7b0271292f50ea1ec7ac0f994ea6c3adc10ff0ca7"
+        },
+        {
+          "commit": "03375e62b0c6e8fee95d401c7b1fd84aa38af24f",
+          "ref": "v4.4 workflow artifact source; generated boot_hash-C0kIcwCH.js SHA-256 bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"
+        }
+      ],
+      "reviewed_ref": "v4.4 source and generated WebUI writer reviewed 2026-08-31; prop.sh and boot_hash-C0kIcwCH.js are both exact-hash managed",
+      "strategy": "exact v4.4 transformations: remove the reviewed prop.sh competing VBMeta block and make the reviewed WebUI Boot Hash save backend a no-op; fail closed on unknown hashes or missing writer anchors"
     },
     "trickystore": {
       "implementation": "Tricky Store OSS",

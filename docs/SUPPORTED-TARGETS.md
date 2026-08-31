@@ -10,26 +10,29 @@ This model-agnostic documentation does not weaken the fail-closed compatibility 
 
 ## PIF Inject
 
-OTAST follows a preserve-first compatibility boundary:
+OTAST separates the selected PIF attestation profile from ordinary platform-visible identity:
 
 - `action.sh`, `post-fs-data.sh`, `service.sh`, `common_func.sh`, WebUI files and Zygisk binaries remain upstream-owned and byte-identical.
-- `pif.prop` is merged rather than replaced. Existing PIF identity and boolean options are preserved by default.
-- `otast.pif.identity=ota` is an explicit opt-in that constrains the reviewed Pixel identity fields to `ota.prop`; without that opt-in, AutoPIF selection remains upstream/user-owned.
+- `pif.prop` is merged rather than blindly replaced. Its fingerprint/model/profile `SECURITY_PATCH` and spoof booleans are preserved by default for the process-local attestation profile.
+- `otast.pif.identity=ota` is an explicit opt-in that constrains the reviewed profile identity fields to `ota.prop`; without that opt-in, AutoPIF selection remains upstream/user-owned.
 - individual `otast.pif.spoof*` and `otast.pif.DEBUG` values default to `preserve`; explicit `true` or `false` is required for OTAST to replace a selected boolean.
-- `security_patch.sh` is wrapped as a competing writer so one helper cannot silently rewrite the TrickyStore patch contract.
-- an existing `/data/adb/tricky_store/pif_auto_security_patch` flag is accepted when it is a safe regular file. The flag is user configuration, not the writer itself; on Apply OTAST neutralizes the reviewed `security_patch.sh`, so later AutoPIF runs cannot rewrite the TrickyStore/runtime security-patch contract while OTAST owns the stack. The flag is preserved so Restore returns the exact pre-OTAST user behavior.
+- PIF's global `system.prop` SPL entries are reconciled to the official OTA system/vendor security patch so profile values cannot leak into normal Android runtime identity.
+- `security_patch.sh` is transformed into a managed no-op competing writer.
+- an existing `/data/adb/tricky_store/pif_auto_security_patch` flag is accepted when it is a safe regular file. The flag is user configuration, not the writer itself; OTAST preserves it and neutralizes the reviewed global writer on Apply.
 
-Unknown managed-source hashes, unsafe flag types/links or missing transformation anchors stop preflight. See [PIF compatibility](PIF-COMPATIBILITY.md).
+Unknown managed-source hashes, unsafe flag types/links or missing transformation anchors stop Preflight. See [PIF compatibility](PIF-COMPATIBILITY.md).
 
-## TrickyStore
+## Tricky Store OSS
 
-The TrickyStore module remains upstream-owned. OTAST preserves `/data/adb/tricky_store/security_patch.txt` by default. `otast.trickystore.securityPatch=ota` explicitly aligns it with the official OTA authority.
+The supported implementation is the exact reviewed Tricky Store OSS v3.1.0 build recorded in `compatibility/supported-targets.json`.
 
-Normal Apply does not prune or rebuild `target.txt`. In particular, OTAST prevents Yurikey from deleting the list and repopulating it with every user and system package, but existing targets remain untouched until a separately reviewed reversible migration is performed.
+`/data/adb/tricky_store/security_patch.txt` is OTA-owned for the supported runtime contract and is aligned to the official system/vendor security patch. Normal Apply does not choose or replace `keybox.xml` and does not prune or rebuild `target.txt`.
+
+Runtime health checks validate target/keybox readiness without printing key material. If configured targets depend on an empty, malformed, unreadable or unsafe active keybox, Verify fails rather than reporting a clean state. Deep cryptographic keybox validation remains an explicit local operation.
 
 ## Yurikey
 
-OTAST replaces only reviewed high-risk writer surfaces and leaves keybox/WebUI/unrelated functionality upstream-owned. Missing required writer paths or unknown hashes stop preflight.
+OTAST replaces only reviewed high-risk writer surfaces and leaves unrelated functionality upstream-owned. Missing required writer paths or unknown hashes stop Preflight.
 
 Managed behavior includes:
 
@@ -38,17 +41,30 @@ Managed behavior includes:
 - both reviewed boot-hash entrypoints are redirected through OTAST, eliminating Yurikey's empty-read fallback to a 64-zero VBMeta digest;
 - `Yuri/target_txt.sh` is disabled so Yurikey cannot replace `target.txt` with `all user apps + all system apps`;
 - reviewed Yurikey security-patch/PIF helper writers redirect through OTAST;
-- the broad detection-trace cleanup entrypoint remains disabled by default.
+- the broad detection-trace cleanup entrypoint remains disabled by default;
+- the reviewed unattended remote keybox updater is disabled because it can replace a working keybox with an unusable download/decode result.
+
+Existing Tricky Store targets and the active keybox remain user/upstream data; OTAST does not select replacements for them.
 
 ## TA UTL
 
-The supported installed writer contract is TA UTL v4.4 `prop.sh`. OTAST removes only the block that writes `ro.boot.vbmeta.*`; verified-boot, lock-state and non-vbmeta behavior remains in place. The historical `/data/adb/disable_prop_handler` assumption is not used because v4.4 does not consume it.
+The supported installed writer contract is TA UTL v4.4, including both the reviewed `prop.sh` writer and the generated WebUI Boot Hash save backend.
 
-TA UTL no longer requires Android VBMeta Fixer to be enabled. Other TA UTL versions fail closed until their exact writer surface is reviewed.
+OTAST:
+
+- removes only the reviewed `prop.sh` block that writes `ro.boot.vbmeta.*`; verified-boot, lock-state and other non-vbmeta behavior remains in place;
+- exact-hash manages `webui/assets/boot_hash-C0kIcwCH.js`, generated from the reviewed v4.4 `webui/scripts/boot_hash.js` source;
+- keeps the Boot Hash value readable in the WebUI but makes its direct save shell backend a no-op while OTAST owns `/data/adb/boot_hash` and `ro.boot.vbmeta.digest`;
+- preserves every unrelated TA UTL WebUI/action/service path;
+- records original bytes/mode transactionally so Restore recovers the exact reviewed TA UTL files.
+
+The generated WebUI asset is not patched heuristically: its exact reviewed SHA-256 and transformation anchors must match. Other TA UTL versions or rebuilt assets fail closed until reviewed. The historical `/data/adb/disable_prop_handler` assumption is not used because v4.4 does not consume it.
+
+TA UTL no longer requires Android VBMeta Fixer to be enabled.
 
 ## Android VBMeta Fixer
 
-OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The reviewed upstream service currently derives runtime values that do not match the live Pixel device's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
+OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The reviewed upstream service derives runtime values that do not match the live Pixel device's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
 
 If a recognised VBMeta Fixer module is enabled, OTAST replaces its `service.sh` with a no-op. This preserves bootloader/libavb runtime values and prevents the companion-app writer from overwriting them. VBMeta Fixer does not need to be enabled for OTAST operation.
 
