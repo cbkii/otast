@@ -239,6 +239,10 @@ def parser() -> argparse.ArgumentParser:
     return value
 
 
+def pass_fail(value: object) -> str:
+    return "PASS" if bool(value) else "FAIL"
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.version_info < MIN_PYTHON:
         print(
@@ -277,20 +281,16 @@ def main(argv: list[str] | None = None) -> int:
         passed = bool(result["result"])
         overall &= passed
         print(
-            "KEY[{index}] algorithm={algorithm} certs={certificates} "
-            "private={private} key_match={key_match} cert_parse={cert_parse} "
-            "cert_dates={cert_dates} chain={chain} RESULT={outcome}".format(
-                **result,
-                private="PASS" if result["private"] else "FAIL",
-                key_match="PASS" if result["key_match"] else "FAIL",
-                cert_parse="PASS" if result["cert_parse"] else "FAIL",
-                cert_dates="PASS" if result["cert_dates"] else "FAIL",
-                chain="PASS" if result["chain"] else "FAIL",
-                outcome="PASS" if passed else "FAIL",
-            )
+            f"KEY[{result['index']}] algorithm={result['algorithm']} certs={result['certificates']} "
+            f"private={pass_fail(result['private'])} "
+            f"key_match={pass_fail(result['key_match'])} "
+            f"cert_parse={pass_fail(result['cert_parse'])} "
+            f"cert_dates={pass_fail(result['cert_dates'])} "
+            f"chain={pass_fail(result['chain'])} "
+            f"RESULT={pass_fail(passed)}"
         )
 
-    print(f"RESULT: {'PASS' if overall else 'FAIL'}")
+    print(f"RESULT: {pass_fail(overall)}")
     return 0 if overall else 1
 
 
