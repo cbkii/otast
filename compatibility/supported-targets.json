@@ -110,7 +110,7 @@
           "ref": "inject_s docs/WebUI-only delta reviewed 2026-08-29; managed runtime sources unchanged"
         }
       ],
-      "strategy": "preserve unrelated PIF identity/options by default while forcing SECURITY_PATCH and runtime system.prop SPL to OTA authority; competing automatic security-patch writer remains neutralized"
+      "strategy": "separate attestation profile from platform identity: preserve profile fingerprint/model/SECURITY_PATCH by default, force global PIF system.prop SPL to OTA authority, and neutralize the reviewed security_patch.sh global resetprop writer; explicit OTA identity takeover may also replace profile SECURITY_PATCH"
     },
     "ta-utl": {
       "accepted_hashes": {
@@ -130,9 +130,9 @@
         "expected_head": "cf167849aaa7696972a3c7826ec94294e9e47fce",
         "repository": "KOWX712/Tricky-Addon-Update-Target-List"
       },
-      "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file",
-      "reviewed_ref": "v4.4 prop.sh writer contract unchanged through cf167849aaa7696972a3c7826ec94294e9e47fce; upstream service/action/WebUI lifecycle delta remains preserved and outside OTAST mutation scope",
-      "strategy": "exact v4.4 prop.sh transformation; competing VBMeta block only"
+      "preserved_scope": "all non-vbmeta behaviour in prop.sh plus every other module file; direct WebUI boot-hash writer is tracked separately pending reviewed backend interception",
+      "reviewed_ref": "v4.4 prop.sh writer contract unchanged through cf167849aaa7696972a3c7826ec94294e9e47fce; upstream service/action/WebUI lifecycle delta remains preserved and outside current OTAST mutation scope",
+      "strategy": "exact v4.4 prop.sh transformation for the reviewed competing VBMeta block; fail closed on unknown prop.sh hashes"
     },
     "trickystore": {
       "implementation": "Tricky Store OSS",
@@ -162,7 +162,7 @@
           "ref": "v3.1.0 release"
         }
       ],
-      "strategy": "OTA-derived security-patch authority is mandatory; validate the exact OSS implementation and keybox/target health before relying on its RootOfTrust certificate rewrite"
+      "strategy": "OTA-derived TrickyStore patch metadata is mandatory; validate exact OSS implementation plus target/keybox readiness before relying on its already-proven RootOfTrust leaf rewrite; never embed or publish physical key material"
     },
     "vbmeta-fixer": {
       "managed_templates": {
@@ -184,6 +184,7 @@
         "action.sh": "c4914d13f27802c5df06cb1547d80110cc4747218367f4f55a91476eae4ba0fd",
         "apply.sh": "ce4d6ce0e30af2c606846975d5778a87bbe27615358d49d97d39cab536a97a1d",
         "clear-all.sh": "cd0af4eb16c7c422cdd9210afb5939fcdd638aac5acd3af4387860e91e1f0181",
+        "keybox.sh": "0c340249a2629ba9e1ca372eb18c85491a7ed13d30fd7a1b848b27554f112d13",
         "service.sh": "c5590491b50fb457ac836db1b887059db2f4a1a15e40aff919bcea16f36f4498",
         "target_txt.sh": "5717af2b823f0da631cce93707400a9f11f746d06f951c2e8e668fac15157e61"
       },
@@ -209,7 +210,7 @@
           "ref": "current upstream reviewed 2026-08-29"
         }
       ],
-      "strategy": "replace authority/property writers, zero-digest fallback, root Action and all-packages target regeneration with fail-closed/read-only OTAST-owned entrypoints"
+      "strategy": "replace authority/property writers, zero-digest fallback, root Action, all-packages target regeneration, and unattended remote keybox replacement with fail-closed/read-only OTAST-owned entrypoints"
     }
   }
 }
