@@ -4,14 +4,11 @@ All notable user-visible changes are recorded here.
 
 ## v1.0.3
 
-- Make the official OTA system/vendor security patch authoritative for platform-visible runtime identity while keeping the selected PIF attestation profile isolated in preserve mode.
-- Reconcile OTAST/PIF runtime property writers, enforce the conservative Pixel locked/green/enforcing software boot-state contract, and verify semantic runtime convergence after reboot.
-- Pin and validate Tricky Store OSS v3.1.0 health, preserve the active keybox, and fail Verify when configured targets depend on an unusable keybox.
-- Neutralize Yurikey's unattended keybox updater in addition to its existing boot-hash, target-list, PIF and security-patch writers.
-- Neutralize TA UTL v4.4's exact reviewed WebUI Boot Hash save backend as well as its `prop.sh` VBMeta writer, while preserving unrelated TA UTL behavior and exact Restore.
-- Add a bounded read-only root-exposure doctor for detector attribution without turning OTAST into a general root-hiding module.
-- Preserve bootloader/libavb VBMeta runtime evidence, including the distinct runtime size, while retaining OTA artifact size only as provenance.
-- Make stale unproven draft replacement resumable when `gh release delete --cleanup-tag` removes the draft but reports a tag-cleanup error.
+- Neutralize TA UTL WebUI direct VBMeta writer (#24)
+- Add read-only root exposure doctor (#23)
+- Fix stale release-draft recovery (#22)
+- Make OTA security patch authoritative at runtime (#21)
+- Generalize OTAST for Pixel device family (#15)
 
 ## v1.0.2
 
