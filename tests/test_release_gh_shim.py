@@ -93,7 +93,7 @@ class ReleaseGhShimTests(unittest.TestCase):
 
     def test_stalled_github_command_is_bounded(self) -> None:
         result = self.run_delete("hang", timeout_seconds=1)
-        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn("timed out after 1s", result.stderr)
 
 
