@@ -112,10 +112,10 @@ otast_module_prop_value() {
 }
 
 otast_require_module_version_range() {
-  local dir expected_id version_prefix min_code max_code id version version_code
+  local dir expected_id version_prefixes min_code max_code id version version_code old_ifs prefix matched
   dir=$1
   expected_id=$2
-  version_prefix=$3
+  version_prefixes=$3
   min_code=$4
   max_code=$5
 
@@ -127,13 +127,21 @@ otast_require_module_version_range() {
     otast_stop "unsupported module identity at $dir: id=${id:-missing}; expected $expected_id"
     return 1
   }
-  case "$version" in
-    "$version_prefix"*) ;;
-    *)
-      otast_stop "unsupported $expected_id version at $dir: version=${version:-missing}; expected ${version_prefix}x compatibility line"
-      return 1
-      ;;
-  esac
+
+  matched=0
+  old_ifs=$IFS
+  IFS=,
+  for prefix in $version_prefixes; do
+    IFS=$old_ifs
+    case "$version" in "$prefix"*) matched=1; break ;; esac
+    IFS=,
+  done
+  IFS=$old_ifs
+  [ "$matched" -eq 1 ] || {
+    otast_stop "unsupported $expected_id version at $dir: version=${version:-missing}; expected compatibility line ${version_prefixes}x"
+    return 1
+  }
+
   case "$version_code" in
     ''|*[!0-9]*)
       otast_stop "invalid $expected_id versionCode at $dir: ${version_code:-missing}"
