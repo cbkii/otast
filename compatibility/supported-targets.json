@@ -36,7 +36,12 @@
     ],
     "sdk": 36
   },
-  "schema_version": 4,
+  "compatibility_policy": {
+    "whole_file_neutralizers": "module identity + reviewed version range + safe regular-file/path validation; source hashes are diagnostic provenance, not an installation gate",
+    "structure_sensitive_transforms": "exact reviewed source hashes plus transformation anchors remain mandatory where OTAST preserves or surgically edits upstream logic",
+    "restore": "every managed file still records and restores exact original bytes and mode transactionally"
+  },
+  "schema_version": 5,
   "strict_exclusions": [
     "AshLooper",
     "AshReXcue",
@@ -110,7 +115,7 @@
           "ref": "inject_s docs/WebUI-only delta reviewed 2026-08-29; managed runtime sources unchanged"
         }
       ],
-      "strategy": "separate attestation profile from platform identity: preserve profile fingerprint/model/SECURITY_PATCH by default, force global PIF system.prop SPL to OTA authority, and neutralize the reviewed security_patch.sh global resetprop writer; explicit OTA identity takeover may also replace profile SECURITY_PATCH"
+      "strategy": "separate attestation profile from platform identity: preserve profile fingerprint/model/SECURITY_PATCH by default, force global PIF system.prop SPL to OTA authority, and neutralize the reviewed security_patch.sh global resetprop writer; structure-sensitive PIF transforms remain exact-hash gated"
     },
     "ta-utl": {
       "accepted_hashes": {
@@ -146,7 +151,7 @@
         }
       ],
       "reviewed_ref": "v4.4 source and generated WebUI writer reviewed 2026-08-31; prop.sh and boot_hash-C0kIcwCH.js are both exact-hash managed",
-      "strategy": "exact v4.4 transformations: remove the reviewed prop.sh competing VBMeta block and make the reviewed WebUI Boot Hash save backend a no-op; fail closed on unknown hashes or missing writer anchors"
+      "strategy": "exact v4.4 transformations: remove the reviewed prop.sh competing VBMeta block and make the reviewed WebUI Boot Hash save backend a no-op; exact hashes remain necessary because these are structure-sensitive surgical transforms"
     },
     "trickystore": {
       "implementation": "Tricky Store OSS",
@@ -185,13 +190,21 @@
       "module_ids": [
         "vbmeta-fixer"
       ],
+      "supported_version": {
+        "prefixes": [
+          "1.2.",
+          "v1.2."
+        ],
+        "min_version_code": 120,
+        "max_version_code": 129
+      },
       "monitor": {
         "branch": "main",
         "expected_head": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
         "repository": "Zenlua/Android-VBMeta-Fixer"
       },
       "reviewed_commit": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
-      "strategy": "neutralize upstream runtime writer; preserve bootloader/libavb runtime VBMeta values"
+      "strategy": "whole-file service neutralization uses module id + reviewed 1.2.x version range rather than upstream service byte hash; exact original bytes/mode are still restored transactionally"
     },
     "yurikey": {
       "managed_templates": {
@@ -205,6 +218,14 @@
       "module_ids": [
         "Yurikey"
       ],
+      "supported_version": {
+        "prefixes": [
+          "3.0.",
+          "v3.0."
+        ],
+        "min_version_code": 305,
+        "max_version_code": 399
+      },
       "monitor": {
         "branch": "main",
         "expected_head": "5330b77c0b797e580c582d43e91ceae5b450dce6",
@@ -217,14 +238,14 @@
         },
         {
           "commit": "49d8e04cd256a8ac1df637dd816b112de6de2b36",
-          "ref": "3.0.6"
+          "ref": "3.0.6-era reviewed source"
         },
         {
           "commit": "5330b77c0b797e580c582d43e91ceae5b450dce6",
           "ref": "current upstream reviewed 2026-08-29"
         }
       ],
-      "strategy": "replace authority/property writers, zero-digest fallback, root Action, all-packages target regeneration, and unattended remote keybox replacement with fail-closed/read-only OTAST-owned entrypoints"
+      "strategy": "Yurikey 3.0.x whole-file high-risk writers are neutralized by module identity + reviewed version range + safe path checks, not brittle source-file hashes; root Action, target regeneration, PIF/security-patch helpers, broad trace cleanup and unattended keybox replacement remain OTAST-owned while managed, with exact original bytes/mode preserved for Restore"
     }
   }
 }
