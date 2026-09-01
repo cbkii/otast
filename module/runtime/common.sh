@@ -91,6 +91,70 @@ otast_safe_id() {
   printf '%s\n' "$value"
 }
 
+otast_module_prop_value() {
+  local dir key line value found
+  dir=$1
+  key=$2
+  [ -f "$dir/module.prop" ] && [ ! -L "$dir/module.prop" ] || return 1
+  found=0
+  value=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*)
+        [ "$found" -eq 0 ] || return 1
+        value=${line#*=}
+        found=1
+        ;;
+    esac
+  done <"$dir/module.prop"
+  [ "$found" -eq 1 ] || return 1
+  printf '%s\n' "$value"
+}
+
+otast_require_module_version_range() {
+  local dir expected_id version_prefixes min_code max_code id version version_code old_ifs prefix matched
+  dir=$1
+  expected_id=$2
+  version_prefixes=$3
+  min_code=$4
+  max_code=$5
+
+  id=$(otast_module_prop_value "$dir" id 2>/dev/null) || id=''
+  version=$(otast_module_prop_value "$dir" version 2>/dev/null) || version=''
+  version_code=$(otast_module_prop_value "$dir" versionCode 2>/dev/null) || version_code=''
+
+  [ "$id" = "$expected_id" ] || {
+    otast_stop "unsupported module identity at $dir: id=${id:-missing}; expected $expected_id"
+    return 1
+  }
+
+  matched=0
+  old_ifs=$IFS
+  IFS=,
+  for prefix in $version_prefixes; do
+    IFS=$old_ifs
+    case "$version" in "$prefix"*) matched=1; break ;; esac
+    IFS=,
+  done
+  IFS=$old_ifs
+  [ "$matched" -eq 1 ] || {
+    otast_stop "unsupported $expected_id version at $dir: version=${version:-missing}; expected compatibility line ${version_prefixes}x"
+    return 1
+  }
+
+  case "$version_code" in
+    ''|*[!0-9]*)
+      otast_stop "invalid $expected_id versionCode at $dir: ${version_code:-missing}"
+      return 1
+      ;;
+  esac
+  if [ "$version_code" -lt "$min_code" ] || [ "$version_code" -gt "$max_code" ]; then
+    otast_stop "unsupported $expected_id versionCode at $dir: $version_code; supported range $min_code..$max_code"
+    return 1
+  fi
+  return 0
+}
+
 otast_assert_under_adb_root() {
   local path
   path=$1
