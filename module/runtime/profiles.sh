@@ -2,7 +2,7 @@
 
 # Static reviewed compatibility profiles.
 # Exact hashes are reserved for structure-sensitive transformations. Whole-file
-# neutralizers use module identity/version compatibility plus safe path checks.
+# neutralizers may use module identity/version compatibility plus safe path checks.
 
 _otast_role_for_dir() {
   local dir
@@ -127,11 +127,6 @@ EOF_TRICKY
 otast_plan_pif() {
   local dir role source global_planned
 
-  # An existing pif_auto_security_patch flag is a user-selected PIF state, not
-  # by itself an unsafe writer. The reviewed security_patch.sh below is always
-  # transformed into an OTAST-managed no-op writer on Apply, so automatic PIF
-  # refreshes cannot rewrite TrickyStore/runtime SPL while OTAST owns the stack.
-  # Preserve the flag so Restore returns the exact pre-OTAST user behaviour.
   if [ -e "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] || [ -L "$ADB_ROOT/tricky_store/pif_auto_security_patch" ]; then
     [ -f "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] && [ ! -L "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] || {
       otast_stop 'PIF automatic security-patch flag is not a safe regular file'
@@ -246,8 +241,8 @@ otast_plan_vbmeta_fixer() {
   local dir role
   for dir in $(otast_effective_module_dirs vbmeta-fixer); do
     role=$(_otast_role_for_dir "$dir") || return 1
-    otast_require_module_version_range "$dir" vbmeta-fixer '1.2.,v1.2.' 120 129 || return 1
-    _otast_plan_compatible_file vbmeta-service-$role vbmeta-fixer "$dir/service.sh" 0755 "$MODDIR/templates/vbmeta-fixer/service.sh" || return 1
+    _otast_plan_exact_file vbmeta-service-$role vbmeta-fixer "$dir/service.sh" 0755 "$MODDIR/templates/vbmeta-fixer/service.sh" \
+      '68877fdf5e64fabf3a59ac608097d9ffbf4d770119b7793cf3ddce8951563b42,dbf67cf9d728b8495f843f71c01b51db74845617a3c5e7cbe52591055decc23b' || return 1
   done
 }
 
