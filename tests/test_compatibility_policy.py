@@ -51,23 +51,21 @@ class CompatibilityPolicyTests(unittest.TestCase):
         output = self._run_version_check("v3.0.4", 304, 1)
         self.assertIn("supported range 305..399", output)
 
-    def test_whole_file_neutralizers_do_not_use_exact_hash_gate(self) -> None:
+    def test_yurikey_whole_file_neutralizers_do_not_use_exact_hash_gate(self) -> None:
         profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
         yurikey = profiles.split("otast_plan_yurikey() {", 1)[1].split("otast_plan_vbmeta_fixer() {", 1)[0]
-        vbmeta = profiles.split("otast_plan_vbmeta_fixer() {", 1)[1].split("otast_plan_all() {", 1)[0]
         self.assertIn("otast_require_module_version_range", yurikey)
         self.assertIn("_otast_plan_compatible_file", yurikey)
         self.assertNotIn("_otast_plan_exact_file", yurikey)
         self.assertNotIn("unsupported exact-replacement hash", yurikey)
-        self.assertIn("otast_require_module_version_range", vbmeta)
-        self.assertIn("_otast_plan_compatible_file", vbmeta)
-        self.assertNotIn("_otast_plan_exact_file", vbmeta)
 
-    def test_structure_sensitive_transforms_remain_exact_hash_gated(self) -> None:
+    def test_structure_sensitive_and_unmigrated_targets_remain_exact_hash_gated(self) -> None:
         profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
+        vbmeta = profiles.split("otast_plan_vbmeta_fixer() {", 1)[1].split("otast_plan_all() {", 1)[0]
         self.assertIn("_otast_plan_transformed_file pif-autopif", profiles)
         self.assertIn("_otast_plan_transformed_file ta-prop", profiles)
         self.assertIn("_otast_plan_transformed_file ta-webui-boot-hash", profiles)
+        self.assertIn("_otast_plan_exact_file", vbmeta)
         self.assertIn("bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc", profiles)
 
 
