@@ -37,11 +37,11 @@
     "sdk": 36
   },
   "compatibility_policy": {
-    "whole_file_neutralizers": "module identity + reviewed version range + safe regular-file/path validation; source hashes are diagnostic provenance, not an installation gate",
+    "whole_file_neutralizers": "when a target has a reviewed version-range contract, module identity + compatible version + safe regular-file/path validation replace brittle source-hash gating; exact original bytes/mode are still restored transactionally",
     "structure_sensitive_transforms": "exact reviewed source hashes plus transformation anchors remain mandatory where OTAST preserves or surgically edits upstream logic",
     "restore": "every managed file still records and restores exact original bytes and mode transactionally"
   },
-  "schema_version": 5,
+  "schema_version": 4,
   "strict_exclusions": [
     "AshLooper",
     "AshReXcue",
@@ -190,21 +190,13 @@
       "module_ids": [
         "vbmeta-fixer"
       ],
-      "supported_version": {
-        "prefixes": [
-          "1.2.",
-          "v1.2."
-        ],
-        "min_version_code": 120,
-        "max_version_code": 129
-      },
       "monitor": {
         "branch": "main",
         "expected_head": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
         "repository": "Zenlua/Android-VBMeta-Fixer"
       },
       "reviewed_commit": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
-      "strategy": "whole-file service neutralization uses module id + reviewed 1.2.x version range rather than upstream service byte hash; exact original bytes/mode are still restored transactionally"
+      "strategy": "neutralize the reviewed upstream runtime writer; preserve bootloader/libavb runtime VBMeta values; this target remains exact-hash gated until its version-range migration is separately qualified"
     },
     "yurikey": {
       "managed_templates": {
