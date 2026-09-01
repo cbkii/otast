@@ -6,10 +6,10 @@ The machine-readable source of truth is `compatibility/supported-targets.json`.
 
 OTAST intentionally distinguishes two kinds of managed integration:
 
-1. **Whole-file neutralizers** — OTAST replaces the complete upstream writer with a small OTAST-owned no-op/read-only entrypoint. These are gated by module identity, a reviewed compatible version range, and safe regular-file/path checks. The upstream file's exact SHA-256 is diagnostic provenance only; harmless upstream byte changes must not block installation. OTAST still records the original bytes and mode exactly and Restore must recover them exactly.
-2. **Structure-sensitive transforms** — OTAST preserves substantial upstream logic and edits selected blocks/anchors. These remain exact-hash gated because a changed upstream layout can make a surgical transform unsafe even when the module version string is unchanged.
+1. **Whole-file neutralizers with a reviewed version-range contract** — OTAST replaces the complete upstream writer with a small OTAST-owned no-op/read-only entrypoint. These are gated by module identity, a reviewed compatible version range, and safe regular-file/path checks. The upstream file's exact SHA-256 is diagnostic provenance only; harmless upstream byte changes must not block installation. OTAST still records the original bytes and mode exactly and Restore must recover them exactly.
+2. **Structure-sensitive or not-yet-migrated integrations** — exact reviewed hashes remain required where OTAST preserves/edits upstream logic, or where a version-range migration has not yet been separately qualified.
 
-A hash mismatch by itself is therefore not a failure for a whole-file neutralizer. An unsupported module/version, unsafe path type, missing required file, changed transformation anchors, or unknown structure-sensitive source remains a fail-closed condition.
+A hash mismatch by itself is therefore not a failure for a whole-file neutralizer that explicitly declares a reviewed version range. An unsupported module/version, unsafe path type, missing required file, changed transformation anchors, or unknown structure-sensitive source remains a fail-closed condition.
 
 ## Device scope
 
@@ -75,9 +75,9 @@ TA UTL no longer requires Android VBMeta Fixer to be enabled.
 
 ## Android VBMeta Fixer
 
-OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The upstream service derives runtime values that do not match the live Pixel device's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
+OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The reviewed upstream service derives runtime values that do not match the live Pixel device's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
 
-For the reviewed **1.2.x** compatibility line (`versionCode` 120..129), OTAST replaces `service.sh` wholesale with a no-op. Because the entire writer is replaced, its upstream file hash is not an installation gate; module identity/version and path safety are the compatibility boundary. Restore still recovers exact original bytes/mode.
+If a recognised VBMeta Fixer module is enabled, OTAST replaces its `service.sh` with a no-op. This target remains exact-hash gated in this PR; its whole-file version-range migration should be qualified separately rather than bundled into the Yurikey installation fix.
 
 VBMeta Fixer does not need to be enabled for OTAST operation.
 
@@ -89,4 +89,4 @@ Normal Report, Preflight, Apply and Verify stop while any known `ota-sot` or `ot
 
 ## Version changes
 
-Version strings are compatibility boundaries, not automatic trust signals. A new major/minor line still requires review before its supported range is expanded. Within a reviewed compatibility line, whole-file neutralizers tolerate harmless source-byte variation; structure-sensitive transforms remain pinned to reviewed hashes/anchors until their changed source is reviewed.
+Version strings are compatibility boundaries, not automatic trust signals. A new major/minor line still requires review before its supported range is expanded. Within an explicitly reviewed version-range contract, whole-file neutralizers tolerate harmless source-byte variation; structure-sensitive and not-yet-migrated integrations remain pinned to reviewed hashes/anchors until their changed source is reviewed.
