@@ -4,6 +4,7 @@ All notable user-visible changes are recorded here.
 
 ## v1.0.3
 
+- Bound the physical release helper's GitHub/Git calls, refresh clean local `main` before resolving release identity, and prevent nested wrapper re-entry when the checkout advances.
 - Replace brittle exact-source hash gates for whole-file Yurikey 3.0.x neutralizers with module identity + reviewed version-range compatibility, while keeping exact transactional Restore.
 - Retain exact hashes for structure-sensitive PIF/TA UTL transforms and integrations not yet separately migrated to a reviewed version-range contract.
 - Neutralize TA UTL WebUI direct VBMeta writer (#24)
