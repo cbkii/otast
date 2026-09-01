@@ -129,6 +129,27 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertNotIn("LEGACY_RELEASE_COMMIT", text)
         self.assertNotIn("contents/scripts/release-device.sh?ref=", text)
 
+    def test_release_wizard_refreshes_before_identity_and_prevents_nested_reexec(self) -> None:
+        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        refresh_call = text.index("\nrefresh_local_main_once\n")
+        identity = text.index("[INFO] Release identity:")
+        lifecycle = text.index('bash "$LIFECYCLE_SCRIPT"')
+        self.assertLess(refresh_call, identity)
+        self.assertLess(identity, lifecycle)
+        self.assertIn("OTAST_RELEASE_WRAPPER_REEXECED=1", text)
+        self.assertIn("OTAST_RELEASE_REEXECED=1", text)
+        self.assertIn("Entering bounded, resumable physical-device qualification", text)
+
+    def test_release_wizard_bounds_network_calls_and_avoids_unbounded_watch(self) -> None:
+        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("ensure_command timeout coreutils", text)
+        self.assertIn("run_bounded()", text)
+        self.assertIn('timeout_seconds=${OTAST_GH_TIMEOUT_SECONDS:-90}', text)
+        self.assertIn('OTAST_GIT_TIMEOUT_SECONDS="$GIT_TIMEOUT_SECONDS"', text)
+        self.assertIn("watch_publication_run", text)
+        self.assertNotIn('"$REAL_GH" run watch', text)
+        self.assertNotIn("awk '", text)
+
     def test_release_wizard_preserves_proven_lifecycle_in_current_source(self) -> None:
         wrapper = RELEASE_SCRIPT.read_text(encoding="utf-8")
         lifecycle = LIFECYCLE_SCRIPT.read_text(encoding="utf-8")
@@ -177,6 +198,7 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("versionCode remains automatic", result.stdout)
         self.assertIn("otast release", result.stdout)
         self.assertIn("--no-publish", result.stdout)
+        self.assertIn("stalled request", result.stdout)
 
 
 if __name__ == "__main__":
