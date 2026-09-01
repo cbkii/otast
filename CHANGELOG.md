@@ -4,8 +4,8 @@ All notable user-visible changes are recorded here.
 
 ## v1.0.3
 
-- Replace brittle exact-source hash gates for whole-file Yurikey and VBMeta Fixer neutralizers with module identity + reviewed version-range compatibility, while keeping exact transactional Restore.
-- Retain exact hashes only for structure-sensitive PIF and TA UTL transforms where changed upstream layout can make a surgical edit unsafe.
+- Replace brittle exact-source hash gates for whole-file Yurikey 3.0.x neutralizers with module identity + reviewed version-range compatibility, while keeping exact transactional Restore.
+- Retain exact hashes for structure-sensitive PIF/TA UTL transforms and integrations not yet separately migrated to a reviewed version-range contract.
 - Neutralize TA UTL WebUI direct VBMeta writer (#24)
 - Add read-only root exposure doctor (#23)
 - Fix stale release-draft recovery (#22)
