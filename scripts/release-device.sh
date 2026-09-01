@@ -152,7 +152,7 @@ run_bounded() {
     description=$1
     seconds=$2
     shift 2
-    "$TIMEOUT_CMD" --foreground "${seconds}s" "$@"
+    "$TIMEOUT_CMD" --kill-after=5s "${seconds}s" "$@"
     rc=$?
     case $rc in
         124|137)
@@ -446,7 +446,7 @@ case $timeout_seconds in ''|*[!0-9]*) timeout_seconds=90 ;; esac
 
 run_real() {
     local rc
-    "$timeout_cmd" --foreground "${timeout_seconds}s" "$real" "$@"
+    "$timeout_cmd" --kill-after=5s "${timeout_seconds}s" "$real" "$@"
     rc=$?
     case $rc in
         124|137) printf '[OTAST][WARN] GitHub command timed out after %ss: gh %s\n' "$timeout_seconds" "$*" >&2 ;;
@@ -560,7 +560,7 @@ timeout_seconds=${OTAST_GIT_TIMEOUT_SECONDS:-60}
 if [[ -z $timeout_cmd ]]; then timeout_cmd=$(command -v timeout 2>/dev/null) || timeout_cmd=; fi
 [[ -n $timeout_cmd && -x $timeout_cmd ]] || exit 2
 case $timeout_seconds in ''|*[!0-9]*) timeout_seconds=60 ;; esac
-"$timeout_cmd" --foreground "${timeout_seconds}s" "$real" "$@"
+"$timeout_cmd" --kill-after=5s "${timeout_seconds}s" "$real" "$@"
 rc=$?
 case $rc in
     124|137) printf '[OTAST][WARN] git command timed out after %ss\n' "$timeout_seconds" >&2 ;;
