@@ -1,6 +1,8 @@
 #!/system/bin/sh
 
-# Static reviewed compatibility profiles. Unknown source hashes fail closed.
+# Static reviewed compatibility profiles.
+# Exact hashes are reserved for structure-sensitive transformations. Whole-file
+# neutralizers use module identity/version compatibility plus safe path checks.
 
 _otast_role_for_dir() {
   local dir
@@ -27,6 +29,31 @@ _otast_plan_exact_file() {
   fi
   source=$(otast_plan_source_file "$id" "$template") || return 1
   otast_plan_add "$id" "$target" "$path" "$mode" "$source" exact "$allowed"
+}
+
+_otast_plan_compatible_file() {
+  local id target path mode template required source
+  id=$1
+  target=$2
+  path=$3
+  mode=$4
+  template=$5
+  required=${6:-required}
+  if [ ! -e "$path" ]; then
+    [ "$required" = optional ] && return 0
+    otast_stop "required compatible target path is missing: $path"
+    return 1
+  fi
+  [ -f "$path" ] && [ ! -L "$path" ] || {
+    otast_stop "compatible target is not a safe regular file: $path"
+    return 1
+  }
+  source=$(otast_plan_source_file "$id" "$template") || return 1
+  # Whole-file neutralizers do not depend on the upstream byte layout. The
+  # caller must validate the owning module/version before reaching this helper.
+  # `external` intentionally avoids an irrelevant source-hash gate while the
+  # transaction layer still preserves exact original bytes/mode for Restore.
+  otast_plan_add "$id" "$target" "$path" "$mode" "$source" external ''
 }
 
 _otast_plan_transformed_file() {
@@ -200,26 +227,18 @@ otast_plan_yurikey() {
   local dir role
   for dir in $(otast_effective_module_dirs Yurikey); do
     role=$(_otast_role_for_dir "$dir") || return 1
-    _otast_plan_exact_file yurikey-action-$role yurikey "$dir/action.sh" 0755 "$MODDIR/templates/yurikey/action.sh" \
-      'cf2808d234d10cd627bc49b487a4b7884dd6dc4d80f271e23f40061ebcb83682,bdc1b5ae67c94b26fef19e5a461559b81e9c3f345b3d820fbfc17ea8ab87557e' || return 1
-    _otast_plan_exact_file yurikey-service-$role yurikey "$dir/service.sh" 0755 "$MODDIR/templates/yurikey/service.sh" \
-      '6bc09314d843eb04ba7f682bdb9b03091a061e537dc5acbf80cd5eb339b68756' || return 1
-    _otast_plan_exact_file yurikey-target-$role yurikey "$dir/Yuri/target_txt.sh" 0755 "$MODDIR/templates/yurikey/target_txt.sh" \
-      '12de2efb87a6763d514a35b291ab08022ffa46dda5d4759c505d905651ef19a9' || return 1
-    _otast_plan_exact_file yurikey-keybox-$role yurikey "$dir/Yuri/yuri_keybox.sh" 0755 "$MODDIR/templates/yurikey/keybox.sh" \
-      'c1e24d5b6219f5dc084390e1a28fc420df0c95cd89d9c7b923c5bc28a947f23e' || return 1
-    _otast_plan_exact_file yurikey-boot-hash-$role yurikey "$dir/Yuri/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
-      'ec9ad40fb5f2df51b5c773f93824f366fa2428b20a827ebd70fc648d7f0585fb' || return 1
-    _otast_plan_exact_file yurikey-web-boot-hash-$role yurikey "$dir/webroot/common/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
-      'ec9ad40fb5f2df51b5c773f93824f366fa2428b20a827ebd70fc648d7f0585fb' || return 1
-    _otast_plan_exact_file yurikey-security-patch-$role yurikey "$dir/Yuri/security_patch.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
-      '21c734e42469164382f3a29989a258cf687bc7fb898c60611791952533c50d10,ebb66e9c1765b62732f7352ba1e2350696feb4b6357a07e1b565622af5a1c786' || return 1
-    _otast_plan_exact_file yurikey-pif-$role yurikey "$dir/Yuri/pif.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
-      'ff7d32e1365ad4007b0e05d709acde8390c9c5de616026e14fb4c47fbe69e83d' optional || return 1
-    _otast_plan_exact_file yurikey-clear-$role yurikey "$dir/Yuri/clear_all_detection_traces.sh" 0755 "$MODDIR/templates/yurikey/clear-all.sh" \
-      'e0249324a156f163625d7bb1ea141b6baa0d54f7dd54e7df1cac6493c851f861,efd7ae12259efea5640dc5fdd8d950dfbffaf154f7aa78dba9d782335d4c0893' || return 1
-    _otast_plan_exact_file yurikey-pif2-$role yurikey "$dir/webroot/common/pif2.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" \
-      '8125d05e170e10ac76b20f879fc093fdac576791cf5b058983ea1547d1647677' || return 1
+    otast_require_module_version_range "$dir" Yurikey 'v3.0.,3.0.' 305 399 || return 1
+
+    _otast_plan_compatible_file yurikey-action-$role yurikey "$dir/action.sh" 0755 "$MODDIR/templates/yurikey/action.sh" || return 1
+    _otast_plan_compatible_file yurikey-service-$role yurikey "$dir/service.sh" 0755 "$MODDIR/templates/yurikey/service.sh" || return 1
+    _otast_plan_compatible_file yurikey-target-$role yurikey "$dir/Yuri/target_txt.sh" 0755 "$MODDIR/templates/yurikey/target_txt.sh" || return 1
+    _otast_plan_compatible_file yurikey-keybox-$role yurikey "$dir/Yuri/yuri_keybox.sh" 0755 "$MODDIR/templates/yurikey/keybox.sh" || return 1
+    _otast_plan_compatible_file yurikey-boot-hash-$role yurikey "$dir/Yuri/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" || return 1
+    _otast_plan_compatible_file yurikey-web-boot-hash-$role yurikey "$dir/webroot/common/boot_hash.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" || return 1
+    _otast_plan_compatible_file yurikey-security-patch-$role yurikey "$dir/Yuri/security_patch.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" || return 1
+    _otast_plan_compatible_file yurikey-pif-$role yurikey "$dir/Yuri/pif.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" optional || return 1
+    _otast_plan_compatible_file yurikey-clear-$role yurikey "$dir/Yuri/clear_all_detection_traces.sh" 0755 "$MODDIR/templates/yurikey/clear-all.sh" || return 1
+    _otast_plan_compatible_file yurikey-pif2-$role yurikey "$dir/webroot/common/pif2.sh" 0755 "$MODDIR/templates/yurikey/apply.sh" || return 1
   done
 }
 
@@ -227,8 +246,8 @@ otast_plan_vbmeta_fixer() {
   local dir role
   for dir in $(otast_effective_module_dirs vbmeta-fixer); do
     role=$(_otast_role_for_dir "$dir") || return 1
-    _otast_plan_exact_file vbmeta-service-$role vbmeta-fixer "$dir/service.sh" 0755 "$MODDIR/templates/vbmeta-fixer/service.sh" \
-      '68877fdf5e64fabf3a59ac608097d9ffbf4d770119b7793cf3ddce8951563b42,dbf67cf9d728b8495f843f71c01b51db74845617a3c5e7cbe52591055decc23b' || return 1
+    otast_require_module_version_range "$dir" vbmeta-fixer '1.2.,v1.2.' 120 129 || return 1
+    _otast_plan_compatible_file vbmeta-service-$role vbmeta-fixer "$dir/service.sh" 0755 "$MODDIR/templates/vbmeta-fixer/service.sh" || return 1
   done
 }
 
