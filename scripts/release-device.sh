@@ -209,7 +209,6 @@ TMP_BASE=${TMPDIR:-${HOME:?}/.cache/otast/tmp}
 mkdir -p -- "$TMP_BASE" || exit 1
 WORK=$(mktemp -d "$TMP_BASE/release-wrapper.XXXXXX") || exit 1
 SHIM_DIR=$WORK/shim
-SHIM_STATE=$WORK/last-operation
 mkdir -p -- "$SHIM_DIR" || exit 1
 cleanup() {
     [[ -n ${WORK:-} && -d ${WORK:-} ]] && rm -rf -- "$WORK"
@@ -580,6 +579,7 @@ PATH="$SHIM_DIR:$PATH" \
     OTAST_REAL_GH="$REAL_GH" \
     OTAST_REAL_GIT="$REAL_GIT" \
     OTAST_TIMEOUT_CMD="$TIMEOUT_CMD" \
+    OTAST_SHIM_STATE="$WORK/last-operation" \
     OTAST_GH_TIMEOUT_SECONDS="$NETWORK_TIMEOUT_SECONDS" \
     OTAST_GIT_TIMEOUT_SECONDS="$GIT_TIMEOUT_SECONDS" \
     OTAST_RELEASE_REEXECED=1 \
