@@ -19,7 +19,7 @@ def extract_gh_shim() -> str:
 
 
 class ReleaseGhShimTests(unittest.TestCase):
-    def run_delete(self, mode: str) -> subprocess.CompletedProcess[str]:
+    def run_delete(self, mode: str, *, timeout_seconds: int = 90) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="otast-release-gh-shim-") as raw:
             root = Path(raw)
             shim = root / "gh"
@@ -31,7 +31,6 @@ class ReleaseGhShimTests(unittest.TestCase):
             real = root / "real-gh"
             real.write_text(
                 "#!/usr/bin/env bash\n"
-                "set -u\n"
                 "marker=${FAKE_RELEASE_MARKER:?}\n"
                 "mode=${FAKE_DELETE_MODE:?}\n"
                 "if [[ ${1:-} == release && ${2:-} == delete ]]; then\n"
@@ -39,6 +38,7 @@ class ReleaseGhShimTests(unittest.TestCase):
                 "    success) rm -f -- \"$marker\"; exit 0 ;;\n"
                 "    partial) rm -f -- \"$marker\"; exit 1 ;;\n"
                 "    failure) exit 1 ;;\n"
+                "    hang) sleep 30; exit 0 ;;\n"
                 "  esac\n"
                 "fi\n"
                 "if [[ ${1:-} == release && ${2:-} == view ]]; then\n"
@@ -55,6 +55,7 @@ class ReleaseGhShimTests(unittest.TestCase):
                 {
                     "OTAST_REAL_GH": str(real),
                     "OTAST_SHIM_STATE": str(root / "operation"),
+                    "OTAST_GH_TIMEOUT_SECONDS": str(timeout_seconds),
                     "FAKE_RELEASE_MARKER": str(marker),
                     "FAKE_DELETE_MODE": mode,
                 }
@@ -89,6 +90,11 @@ class ReleaseGhShimTests(unittest.TestCase):
     def test_normal_delete_success_remains_success(self) -> None:
         result = self.run_delete("success")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_stalled_github_command_is_bounded(self) -> None:
+        result = self.run_delete("hang", timeout_seconds=1)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn("timed out after 1s", result.stderr)
 
 
 if __name__ == "__main__":
