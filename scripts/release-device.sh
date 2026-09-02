@@ -162,10 +162,36 @@ run_bounded() {
     return "$rc"
 }
 
-if ! run_bounded 'GitHub authentication check' 20 "$REAL_GH" auth status --hostname github.com >/dev/null 2>&1; then
-    fatal 'GitHub CLI is not authenticated or the authentication check timed out. Run: gh auth login --hostname github.com'
-    exit 1
-fi
+ensure_github_credentials() {
+    local token rc
+
+    # Explicit environment credentials are already authoritative for gh.
+    if [[ -n ${GH_TOKEN:-} || -n ${GITHUB_TOKEN:-} ]]; then
+        return 0
+    fi
+
+    # `gh auth token` reads the locally stored credential and does not need a
+    # successful GitHub API round trip. This is the correct startup gate after a
+    # reboot; actual API/network availability is checked by each bounded
+    # operation below instead of being conflated with authentication state.
+    token=$(run_bounded 'read GitHub CLI credential' 10 \
+        "$REAL_GH" auth token --hostname github.com 2>/dev/null)
+    rc=$?
+    if ((rc == 0)) && [[ -n $token ]]; then
+        token=
+        return 0
+    fi
+    token=
+
+    # Keep auth status only as best-effort diagnostics. It may contact GitHub
+    # and has produced transient false failures immediately after Android boot.
+    run_bounded 'GitHub authentication diagnostic' 10 \
+        "$REAL_GH" auth status --hostname github.com >/dev/null 2>&1 || true
+    fatal 'GitHub CLI has no usable local credential. Run: gh auth login --hostname github.com'
+    return 1
+}
+
+ensure_github_credentials || exit 1
 
 refresh_local_main_once() {
     local before after branch
