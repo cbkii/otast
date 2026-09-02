@@ -150,6 +150,15 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertNotIn('"$REAL_GH" run watch', text)
         self.assertNotIn("awk '", text)
 
+    def test_release_auth_uses_local_token_not_network_sensitive_status_gate(self) -> None:
+        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("ensure_github_credentials()", text)
+        self.assertIn('auth token --hostname github.com', text)
+        self.assertIn("GitHub authentication diagnostic", text)
+        self.assertIn("actual API/network availability is checked by each bounded", text)
+        self.assertNotIn("if ! run_bounded 'GitHub authentication check'", text)
+        self.assertNotIn("GitHub CLI is not authenticated or the authentication check timed out", text)
+
     def test_release_wizard_preserves_proven_lifecycle_in_current_source(self) -> None:
         wrapper = RELEASE_SCRIPT.read_text(encoding="utf-8")
         lifecycle = LIFECYCLE_SCRIPT.read_text(encoding="utf-8")
