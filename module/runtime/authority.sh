@@ -120,7 +120,10 @@ otast_validate_authority_file() {
   OTAST_BUILD_ID=$(otast_authority_value ro.build.id) || return 1
   OTAST_SDK=$(otast_authority_value ro.build.version.sdk) || return 1
   OTAST_SYSTEM_PATCH=$(otast_authority_value ro.build.version.security_patch) || return 1
-  OTAST_VENDOR_PATCH=$(otast_authority_optional ro.vendor.build.security_patch "$OTAST_SYSTEM_PATCH") || return 1
+  OTAST_VENDOR_PATCH=$(otast_authority_value ro.vendor.build.security_patch) || {
+    otast_stop 'authority is missing required independent vendor security patch: ro.vendor.build.security_patch'
+    return 1
+  }
   OTAST_FINGERPRINT=$(otast_authority_value ro.build.fingerprint) || return 1
   OTAST_MANUFACTURER=$(otast_authority_value ro.product.manufacturer) || return 1
   OTAST_MODEL=$(otast_authority_value ro.product.model) || return 1
@@ -130,20 +133,11 @@ otast_validate_authority_file() {
   OTAST_VBMETA_AVB_VERSION=$(otast_authority_value ro.boot.vbmeta.avb_version) || return 1
   OTAST_BOOT_AVB_VERSION=$(otast_authority_value ro.boot.avb_version) || return 1
 
-  case "$OTAST_DEVICE" in
-    ''|*[!a-z0-9_]*) otast_stop "malformed Pixel authority device identity: ${OTAST_DEVICE:-MISSING}"; return 1 ;;
-  esac
-  [ "$OTAST_SDK" = 36 ] || { otast_stop "unsupported authority SDK: $OTAST_SDK"; return 1; }
-  [ "$OTAST_MANUFACTURER" = Google ] || { otast_stop "authority manufacturer is not Google: $OTAST_MANUFACTURER"; return 1; }
-  case "$OTAST_MODEL" in
-    'Pixel '*) ;;
-    *) otast_stop "authority model is not a Google Pixel device: $OTAST_MODEL"; return 1 ;;
-  esac
-  fingerprint_prefix="google/$OTAST_DEVICE/$OTAST_DEVICE:16/"
-  case "$OTAST_FINGERPRINT" in
-    "$fingerprint_prefix"*:user/release-keys) ;;
-    *) otast_stop 'authority fingerprint is not a matching Google Pixel Android 16 release fingerprint'; return 1 ;;
-  esac
+  otast_platform_validate_product "$OTAST_DEVICE" "$OTAST_MANUFACTURER" "$OTAST_MODEL" "$OTAST_SDK" "$OTAST_FINGERPRINT" || {
+    fingerprint_prefix="$OTAST_PLATFORM_FINGERPRINT_VENDOR/$OTAST_DEVICE/$OTAST_DEVICE:$OTAST_PLATFORM_ANDROID_RELEASE/"
+    otast_stop "authority product identity does not match supported platform $OTAST_PLATFORM_ID: device=${OTAST_DEVICE:-MISSING}, manufacturer=${OTAST_MANUFACTURER:-MISSING}, model=${OTAST_MODEL:-MISSING}, sdk=${OTAST_SDK:-MISSING}, fingerprint_prefix=$fingerprint_prefix"
+    return 1
+  }
 
   otast_valid_date "$OTAST_SYSTEM_PATCH" || { otast_stop "invalid system patch date: $OTAST_SYSTEM_PATCH"; return 1; }
   otast_valid_date "$OTAST_VENDOR_PATCH" || { otast_stop "invalid vendor patch date: $OTAST_VENDOR_PATCH"; return 1; }
