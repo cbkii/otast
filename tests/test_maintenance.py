@@ -113,6 +113,10 @@ class MaintenanceTests(unittest.TestCase):
                       printf '{"sha":"%s"}\n' "${FAKE_GH_HEAD:-628d9d8ee9810b97516574475c0e28cdd6d4c026}"
                       exit 0
                     fi
+                    if [[ $endpoint == repos/Yurii0307/yurikey/compare/628d9d8ee9810b97516574475c0e28cdd6d4c026...5330b77c0b797e580c582d43e91ceae5b450dce6 ]]; then
+                      printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0,"total_commits":1,"files":[{"filename":".github/workflows/test.yml"}]}'
+                      exit 0
+                    fi
                     printf 'unknown endpoint: %s\n' "$endpoint" >&2
                     exit 1
                     ;;
@@ -156,9 +160,6 @@ class MaintenanceTests(unittest.TestCase):
         test_env = self.env(**env)
         os.environ.clear()
         os.environ.update(test_env)
-        # Use the real unprivileged test-process UID. ``module.os`` is the
-        # interpreter-wide ``os`` module, so assigning module.os.geteuid here
-        # would leak into subsequently imported test modules.
         try:
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 rc = module.main(list(args))
@@ -184,9 +185,7 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_monitor_review_required_has_distinct_exit_and_next_command(self) -> None:
         output = self.repo / "reports/target-monitor-change"
-        result = self.run_tool(
-            "monitor", "--output", str(output), "--no-cleanup", FAKE_GH_HEAD=NEW
-        )
+        result = self.run_tool("monitor", "--output", str(output), "--no-cleanup", FAKE_GH_HEAD=NEW)
         self.assertEqual(result.returncode, 10, result.stderr)
         report = json.loads((output / "target-monitor.json").read_text())
         self.assertEqual(report["result"], "REVIEW_REQUIRED")
@@ -208,26 +207,59 @@ class MaintenanceTests(unittest.TestCase):
         calls = log.read_text()
         self.assertNotIn("commits/main", calls)
 
-    def test_accept_updates_only_monitor_expected_head(self) -> None:
+    def test_source_compare_records_exact_changed_paths(self) -> None:
+        module = self._load_classifier_module()
+        original = os.environ.copy()
+        os.environ.clear()
+        os.environ.update(self.env())
+        try:
+            result = module.compare_source_paths("Yurii0307/yurikey", OLD, NEW, module.gh_environment())
+        finally:
+            os.environ.clear()
+            os.environ.update(original)
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["changed_paths"], [".github/workflows/test.yml"])
+
+    def test_accept_updates_only_monitor_expected_head_after_docs_only_review(self) -> None:
         review_dir = self.repo / f"reports/target-review-yurikey-{NEW[:12]}-fixture"
         review_dir.mkdir()
         review = {
-            "result": "NO_PACKAGE_IMPACT",
+            "schema_version": 2,
+            "result": "DOCS_OR_CI_ONLY",
             "acceptance_ready": True,
             "target": "yurikey",
             "expected_head": OLD,
             "observed_head": NEW,
         }
         (review_dir / "review.json").write_text(json.dumps(review), encoding="utf-8")
-        result = self.run_tool(
-            "accept", "yurikey", "--review", str(review_dir), FAKE_GH_HEAD=NEW
-        )
+        result = self.run_tool("accept", "yurikey", "--review", str(review_dir), FAKE_GH_HEAD=NEW)
         self.assertEqual(result.returncode, 0, result.stderr)
         registry = json.loads((self.repo / "compatibility/supported-targets.json").read_text())
         record = registry["targets"]["yurikey"]
         self.assertEqual(record["monitor"]["expected_head"], NEW)
         self.assertEqual(record["reviewed_sources"][0]["commit"], OLD)
-        self.assertTrue((review_dir / "acceptance.json").is_file())
+        acceptance = json.loads((review_dir / "acceptance.json").read_text())
+        self.assertEqual(acceptance["accepted_impact"], "DOCS_OR_CI_ONLY")
+
+    def test_accept_rejects_native_dependency_review(self) -> None:
+        review_dir = self.repo / f"reports/target-review-yurikey-{NEW[:12]}-native"
+        review_dir.mkdir()
+        (review_dir / "review.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "result": "NATIVE_DEPENDENCY_CHANGED",
+                    "acceptance_ready": False,
+                    "target": "yurikey",
+                    "expected_head": OLD,
+                    "observed_head": NEW,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_tool("accept", "yurikey", "--review", str(review_dir), FAKE_GH_HEAD=NEW)
+        self.assertEqual(result.returncode, 20)
+        self.assertIn("not acceptance-ready", result.stderr)
 
     def test_bare_fake_root_name_is_resolved_under_private_root(self) -> None:
         module_path = self.repo / "scripts/otast-maintenance.py"
@@ -291,6 +323,7 @@ class MaintenanceTests(unittest.TestCase):
         body = body_log.read_text(encoding="utf-8")
         self.assertIn("Closes #1", body)
         self.assertNotIn("<issue-number>", body)
+        self.assertIn("DOCS_OR_CI_ONLY", body)
 
     def test_successful_monitor_prunes_old_failed_reports_only_after_success(self) -> None:
         oldest_failed = self.repo / "reports/target-monitor-001-failed"
@@ -322,47 +355,55 @@ class MaintenanceTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
-    def test_review_classifier_treats_identical_package_preflight_as_diagnostic(self) -> None:
+    def test_review_classifier_accepts_only_docs_only_identical_package(self) -> None:
         module = self._load_classifier_module()
         identical = {"identical": True}
         changed = {"identical": False}
 
         ready, result, rc, policy = module.classify_review_result(
             identical,
+            source_impact="DOCS_OR_CI_ONLY",
+            source_complete=True,
             active_candidate_compare_rc=0,
             report_rc=0,
             preflight_rc=1,
         )
         self.assertTrue(ready)
-        self.assertEqual(result, "NO_PACKAGE_IMPACT")
+        self.assertEqual(result, "DOCS_OR_CI_ONLY")
         self.assertEqual(rc, module.EXIT_OK)
-        self.assertEqual(policy, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE")
-
-        ready, result, rc, _ = module.classify_review_result(
-            identical,
-            active_candidate_compare_rc=1,
-            report_rc=0,
-            preflight_rc=1,
-        )
-        self.assertFalse(ready)
-        self.assertEqual(result, "VALIDATION_FAILED")
-        self.assertEqual(rc, module.EXIT_ERROR)
+        self.assertEqual(policy, "DIAGNOSTIC_SOURCE_PREFLIGHT")
 
         ready, result, rc, policy = module.classify_review_result(
             changed,
+            source_impact="DOCS_OR_CI_ONLY",
+            source_complete=True,
             active_candidate_compare_rc=0,
             report_rc=0,
             preflight_rc=0,
         )
         self.assertFalse(ready)
-        self.assertEqual(result, "PACKAGE_CHANGED")
+        self.assertEqual(result, "UNKNOWN_PACKAGE_CHANGE")
         self.assertEqual(rc, module.EXIT_REVIEW)
-        self.assertEqual(policy, "REQUIRED_FOR_CHANGED_PACKAGE")
+        self.assertEqual(policy, "REVIEW_REQUIRED")
 
-    def test_review_classifier_fails_closed_when_report_fails(self) -> None:
+        ready, result, rc, _ = module.classify_review_result(
+            identical,
+            source_impact="NATIVE_DEPENDENCY_CHANGED",
+            source_complete=True,
+            active_candidate_compare_rc=0,
+            report_rc=0,
+            preflight_rc=0,
+        )
+        self.assertFalse(ready)
+        self.assertEqual(result, "NATIVE_DEPENDENCY_CHANGED")
+        self.assertEqual(rc, module.EXIT_REVIEW)
+
+    def test_review_classifier_fails_closed_when_evidence_fails_or_compare_is_incomplete(self) -> None:
         module = self._load_classifier_module()
         ready, result, rc, policy = module.classify_review_result(
             {"identical": True},
+            source_impact="DOCS_OR_CI_ONLY",
+            source_complete=True,
             active_candidate_compare_rc=0,
             report_rc=1,
             preflight_rc=0,
@@ -370,7 +411,19 @@ class MaintenanceTests(unittest.TestCase):
         self.assertFalse(ready)
         self.assertEqual(result, "VALIDATION_FAILED")
         self.assertEqual(rc, module.EXIT_ERROR)
-        self.assertEqual(policy, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE")
+        self.assertEqual(policy, "DIAGNOSTIC_SOURCE_PREFLIGHT")
+
+        ready, result, rc, _ = module.classify_review_result(
+            {"identical": True},
+            source_impact="DOCS_OR_CI_ONLY",
+            source_complete=False,
+            active_candidate_compare_rc=0,
+            report_rc=0,
+            preflight_rc=0,
+        )
+        self.assertFalse(ready)
+        self.assertEqual(result, "UNKNOWN_PACKAGE_CHANGE")
+        self.assertEqual(rc, module.EXIT_REVIEW)
 
 
 if __name__ == "__main__":

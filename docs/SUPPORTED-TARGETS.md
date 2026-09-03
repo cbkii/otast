@@ -1,92 +1,97 @@
 # Supported targets
 
-The machine-readable source of truth is `compatibility/supported-targets.json`.
+The machine-readable source of truth is `compatibility/supported-targets.json`; Android-version assumptions are in the referenced files under `compatibility/platforms/`. The generated [Compatibility status](COMPATIBILITY-STATUS.md) is validated in CI and must match the registry exactly.
 
-## Compatibility policy
+## Device/platform scope
 
-OTAST intentionally distinguishes two kinds of managed integration:
+OTAST currently supports only the reviewed `android-16` profile (Android 16 / SDK 36) for the Google Pixel family. Family architectural compatibility and device/build qualification are deliberately separate:
 
-1. **Whole-file neutralizers with a reviewed version-range contract** — OTAST replaces the complete upstream writer with a small OTAST-owned no-op/read-only entrypoint. These are gated by module identity, a reviewed compatible version range, and safe regular-file/path checks. The upstream file's exact SHA-256 is diagnostic provenance only; harmless upstream byte changes must not block installation. OTAST still records the original bytes and mode exactly and Restore must recover them exactly.
-2. **Structure-sensitive or not-yet-migrated integrations** — exact reviewed hashes remain required where OTAST preserves/edits upstream logic, or where a version-range migration has not yet been separately qualified.
+- Pixel 9a / `tegu` / `CP1A.260305.018` is `DEVICE_VALIDATED` in current repository evidence;
+- Pixel 8 / `shiba` is `DESIGN_COMPATIBLE` only; no exact fixture/build or physical qualification is recorded;
+- undeclared Pixel models/builds are `UNQUALIFIED` until explicit evidence is added;
+- `RELEASE_QUALIFIED` is reserved for an exact release artefact that completes the physical release acceptance gate.
 
-A hash mismatch by itself is therefore not a failure for a whole-file neutralizer that explicitly declares a reviewed version range. An unsupported module/version, unsafe path type, missing required file, changed transformation anchors, or unknown structure-sensitive source remains a fail-closed condition.
+A model-independent runtime does not make every Pixel physically supported. Unknown Android SDK/platform versions fail closed rather than inheriting Android 16 assumptions.
 
-## Device scope
+## Ownership model
 
-OTAST is documented for Google Pixel devices rather than a single Pixel model. Physical-device testing to date is limited to **Pixel 9a** and **Pixel 8**. Other Pixel models remain untested until their exact device/build path and managed-module combination have been qualified.
+The registry distinguishes:
 
-This model-agnostic documentation does not weaken the fail-closed compatibility boundary: authority identity, live-device identity, supported module/version contracts and structure-sensitive transformation anchors must still match what the running release accepts.
+- **managed targets** — reviewed surfaces OTAST may transactionally modify;
+- **observed dependencies** — read-only environment evidence such as Magisk, Zygisk Next, Vector, Inline Hook Invalidate and PIF native/Zygisk surfaces;
+- **conflicts/exclusions** — explicit integrations that overlap authority ownership, with reason/severity.
+
+Observed dependencies are not managed by OTAST. Runtime target discovery remains explicit and does not infer support from arbitrary installed modules.
+
+## Compatibility bases
+
+Three compatibility bases are currently used by managed targets:
+
+1. **`WHOLE_FILE_VERSION_RANGE`** — complete upstream writers are replaced by OTAST-owned no-op/read-only implementations. Compatibility is based on module identity, reviewed version/versionCode range and safe regular-file/path checks. Harmless upstream source-byte changes do not matter to the replacement boundary; original bytes/mode are still stored and restored exactly.
+2. **`STRUCTURE_SENSITIVE_TRANSFORM`** — OTAST preserves or surgically edits upstream logic. Exact reviewed SHA-256 values and transformation anchors remain mandatory.
+3. **`EXACT_REVIEWED_ARTIFACT`** — compatibility is tied to a specific reviewed installed/distribution artefact. It remains exact until a broader semantic boundary is separately proven.
+
+No global fuzzy matching replaces exact gates.
 
 ## PIF Inject
 
-OTAST separates the selected PIF attestation profile from ordinary platform-visible identity:
+PIF Inject (`playintegrityfix`) remains `STRUCTURE_SENSITIVE_TRANSFORM` because `autopif.sh`, `autopif_ota.sh` and `security_patch.sh` handling preserves/edits upstream logic.
 
-- `action.sh`, `post-fs-data.sh`, `service.sh`, `common_func.sh`, WebUI files and Zygisk binaries remain upstream-owned and byte-identical.
-- `pif.prop` is merged rather than blindly replaced. Its fingerprint/model/profile `SECURITY_PATCH` and spoof booleans are preserved by default for the process-local attestation profile.
-- `otast.pif.identity=ota` is an explicit opt-in that constrains the reviewed profile identity fields to `ota.prop`; without that opt-in, AutoPIF selection remains upstream/user-owned.
-- individual `otast.pif.spoof*` and `otast.pif.DEBUG` values default to `preserve`; explicit `true` or `false` is required for OTAST to replace a selected boolean.
-- PIF's global `system.prop` SPL entries are reconciled to the official OTA system/vendor security patch so profile values cannot leak into normal Android runtime identity.
-- `security_patch.sh` is transformed into a managed no-op competing writer.
-- an existing `/data/adb/tricky_store/pif_auto_security_patch` flag is accepted when it is a safe regular file. The flag is user configuration, not the writer itself; OTAST preserves it and neutralizes the reviewed global writer on Apply.
+OTAST separates the selected PIF attestation profile from normal platform-visible identity:
 
-PIF's `autopif.sh`, `autopif_ota.sh` and `security_patch.sh` handling preserves portions of upstream code, so those structure-sensitive transforms remain exact-hash/anchor gated. Unsafe flag types/links or missing transformation anchors stop Preflight. See [PIF compatibility](PIF-COMPATIBILITY.md).
+- `pif.prop` is merged rather than blindly replaced; profile fingerprint/model/profile `SECURITY_PATCH` and spoof booleans are preserve-first unless explicit authority policy says otherwise;
+- PIF global `system.prop` system/vendor SPL entries follow OTA authority;
+- the reviewed `security_patch.sh` global writer is neutralized;
+- action/post-fs-data/service/common/WebUI/Zygisk surfaces remain upstream-owned and are classified as preserved or native dependency surfaces, not managed shell writers.
+
+The monitored source baseline remains `b994391970b51a2dfefed0e1d420dd6b017756e8`. The known upstream `inject_s` movement to `2f8199a90a150ad98921438608e1e0e951ba2d5f` changes Gradle/Zygisk build surfaces and is therefore classified `NATIVE_DEPENDENCY_CHANGED`, not auto-accepted as an ordinary package-neutral change.
 
 ## Tricky Store OSS
 
-The supported implementation is the exact reviewed Tricky Store OSS v3.1.0 build recorded in `compatibility/supported-targets.json`.
+Tricky Store OSS (`tricky_store`) is `EXACT_REVIEWED_ARTIFACT`. The registry records the exact v3.1.0 release identity, module ID, author, versionCode, release-asset filename and SHA-256.
 
-`/data/adb/tricky_store/security_patch.txt` is OTA-owned for the supported runtime contract and is aligned to the official system/vendor security patch. Normal Apply does not choose or replace `keybox.xml` and does not prune or rebuild `target.txt`.
-
-Runtime health checks validate target/keybox readiness without printing key material. If configured targets depend on an empty, malformed, unreadable or unsafe active keybox, Verify fails rather than reporting a clean state. Deep cryptographic keybox validation remains an explicit local operation.
+`/data/adb/tricky_store/security_patch.txt` is the managed OTA patch contract. `keybox.xml`, `target.txt` and TEE status remain observed/user/upstream data. OTAST does not choose or publish private key material.
 
 ## Yurikey
 
-OTAST replaces only the high-risk whole-file writer surfaces and leaves unrelated functionality upstream-owned. Yurikey compatibility is now based on module identity plus the reviewed **3.0.x** line (`versionCode` 305..399), rather than requiring every managed source file to match one historical SHA-256.
+Yurikey (`Yurikey`) uses `WHOLE_FILE_VERSION_RANGE` for the reviewed 3.0.x line (`versionCode` 305..399). This is the intentional semantic model introduced for whole-file neutralisers: comments, logging changes or other irrelevant historical bytes do not block a replacement whose actual compatibility boundary is module identity + version range + path safety.
 
-This is deliberate: OTAST replaces these files completely, so comments, logging changes, download URLs or other harmless upstream byte differences do not affect the safety of the managed replacement. Unsafe paths, missing required writers, the wrong module ID, or a Yurikey version outside the reviewed compatibility line still stop Preflight.
+Managed high-risk entrypoints include the root Action, generic service property writer, boot/PIF/security-patch helpers, target regeneration, broad cleanup and unattended keybox updater. Their original bytes/mode remain transactionally restorable.
 
-Managed behavior includes:
-
-- root `action.sh` becomes a read-only OTAST Report entrypoint by default, preventing one click from simultaneously killing Google processes, rebuilding targets, rewriting PIF/security-patch state or changing Zygisk Next loader settings;
-- `service.sh` generic runtime property rewriting is disabled;
-- both boot-hash entrypoints are redirected through OTAST, eliminating Yurikey's empty-read fallback to a 64-zero VBMeta digest;
-- `Yuri/target_txt.sh` is disabled so Yurikey cannot replace `target.txt` with `all user apps + all system apps`;
-- Yurikey security-patch/PIF helper writers redirect through OTAST;
-- the broad detection-trace cleanup entrypoint remains disabled by default;
-- the unattended remote keybox updater is disabled because it can replace a working keybox with an unusable download/decode result.
-
-Existing Tricky Store targets and the active keybox remain user/upstream data; OTAST does not select replacements for them. Every managed Yurikey file still has its original bytes and mode stored transactionally for exact Restore.
+A new major/minor version line still requires review before the version-range contract may expand.
 
 ## TA UTL
 
-The supported installed writer contract is TA UTL v4.4, including both the reviewed `prop.sh` writer and the generated WebUI Boot Hash save backend.
+TA UTL (`TA_utl` / `.TA_utl`) remains `STRUCTURE_SENSITIVE_TRANSFORM`. Its reviewed `prop.sh` VBMeta block and generated WebUI Boot Hash save backend are exact-hash/anchor managed while unrelated behavior is preserved.
 
-OTAST:
-
-- removes only the reviewed `prop.sh` block that writes `ro.boot.vbmeta.*`; verified-boot, lock-state and other non-vbmeta behavior remains in place;
-- exact-hash manages `webui/assets/boot_hash-C0kIcwCH.js`, generated from the reviewed v4.4 `webui/scripts/boot_hash.js` source;
-- keeps the Boot Hash value readable in the WebUI but makes its direct save shell backend a no-op while OTAST owns `/data/adb/boot_hash` and `ro.boot.vbmeta.digest`;
-- preserves every unrelated TA UTL WebUI/action/service path;
-- records original bytes/mode transactionally so Restore recovers the exact reviewed TA UTL files.
-
-The generated WebUI asset is not patched heuristically: its exact reviewed SHA-256 and transformation anchors must match. Other TA UTL versions or rebuilt assets fail closed until reviewed. The historical `/data/adb/disable_prop_handler` assumption is not used because v4.4 does not consume it.
-
-TA UTL no longer requires Android VBMeta Fixer to be enabled.
+A specific Boot Hash writer path is structure-sensitive even though it also matches broad WebUI preserved-surface globs; semantic classification resolves overlapping rules to the higher-risk/specific class.
 
 ## Android VBMeta Fixer
 
-OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The reviewed upstream service derives runtime values that do not match the live Pixel device's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
+Android VBMeta Fixer (`vbmeta-fixer`) remains `EXACT_REVIEWED_ARTIFACT`. OTAST neutralizes the reviewed upstream `service.sh` runtime property writer and preserves bootloader/libavb evidence.
 
-If a recognised VBMeta Fixer module is enabled, OTAST replaces its `service.sh` with a no-op. This target remains exact-hash gated in this PR; its whole-file version-range migration should be qualified separately rather than bundled into the Yurikey installation fix.
+It is a whole-file replacement in implementation, but the repository does not yet hold evidence sufficient to claim a reviewed version-range boundary. It therefore remains exact-gated rather than being migrated merely for convenience.
 
-VBMeta Fixer does not need to be enabled for OTAST operation.
+## Distribution identity
 
-`ota.prop`'s `ro.boot.vbmeta.size` remains required as OTA/factory artifact provenance, but it is not a managed runtime property. OTAST validates runtime/source agreement using the VBMeta digest and AVB version; runtime size is reported separately and never corrected with `resetprop`.
+Each managed target records the installable/distribution model appropriate to that upstream: branch build, branch source, release asset, release/workflow artefact, or branch source plus reviewed version range. Source commit/ref is provenance; release asset/module identity and hashes are recorded where available.
+
+This allows a source-only docs/CI change to be distinguished from a changed installable package or native dependency.
+
+## Semantic upstream impact
+
+`otast review TARGET` classifies changed paths deterministically as:
+
+- `DOCS_OR_CI_ONLY`;
+- `PRESERVED_SURFACE_CHANGED`;
+- `NATIVE_DEPENDENCY_CHANGED`;
+- `MANAGED_WHOLE_FILE_CHANGED`;
+- `STRUCTURE_SENSITIVE_CHANGED`;
+- `MODULE_IDENTITY_CHANGED`;
+- `UNKNOWN_PACKAGE_CHANGE`.
+
+Only a complete `DOCS_OR_CI_ONLY` source delta with a byte/mode-identical immutable module tree may be accepted automatically. Every other class remains review-required; a native dependency change is never accepted simply because managed shell writer hashes did not move.
 
 ## Legacy governors
 
-Normal Report, Preflight, Apply and Verify stop while any known `ota-sot` or `otasst` module, state root or dispatcher remains. Restore stays available so a failed transition can still recover OTAST-managed originals.
-
-## Version changes
-
-Version strings are compatibility boundaries, not automatic trust signals. A new major/minor line still requires review before its supported range is expanded. Within an explicitly reviewed version-range contract, whole-file neutralizers tolerate harmless source-byte variation; structure-sensitive and not-yet-migrated integrations remain pinned to reviewed hashes/anchors until their changed source is reviewed.
+Known legacy authority governors remain explicit hard-stop conflicts. Normal Report, Preflight, Apply and Verify stop on their established traces while Restore remains available for safe recovery. Runtime discovery does not scan or mutate arbitrary excluded modules.

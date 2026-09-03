@@ -15,16 +15,30 @@ class RuntimeContractTests(unittest.TestCase):
         for forbidden in ("AshLooper", "AshReXcue", "BetterKnownInstalled", "BKI"):
             self.assertNotIn(forbidden, text)
 
-    def test_compatibility_manifest_templates_match(self) -> None:
+    def test_compatibility_manifest_and_platform_profile_match(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
-        authority = manifest["authority"]
-        self.assertEqual(manifest["schema_version"], 4)
-        self.assertEqual(authority["device_family"], "Google Pixel")
-        self.assertEqual(authority["reference_device"], "tegu")
-        self.assertEqual(set(authority["tested_models"]), {"Pixel 9a", "Pixel 8"})
-        self.assertNotIn("device", authority)
-        self.assertEqual(authority["sdk"], 36)
+        profile = json.loads((ROOT / "compatibility/platforms/android-16.json").read_text(encoding="utf-8"))
+        support = manifest["support_model"]
+
+        self.assertEqual(manifest["schema_version"], 5)
+        self.assertEqual(support["device_family"], "Google Pixel")
+        self.assertEqual(support["family_architecture"]["tier"], "DESIGN_COMPATIBLE")
+        self.assertEqual(support["undeclared_device_tier"], "UNQUALIFIED")
+        self.assertEqual(support["supported_platform_profiles"], ["android-16"])
+        self.assertEqual(support["release_reference"]["device"], "tegu")
+        self.assertEqual(support["release_reference"]["build"], "CP1A.260305.018")
+        self.assertEqual(support["release_reference"]["tier"], "DEVICE_VALIDATED")
+        self.assertEqual(support["devices"]["tegu"]["tier"], "DEVICE_VALIDATED")
+        self.assertEqual(support["devices"]["shiba"]["tier"], "DESIGN_COMPATIBLE")
+        self.assertEqual(support["devices"]["shiba"]["qualified_builds"], [])
         self.assertEqual(set(manifest["strict_exclusions"]), {"AshLooper", "AshReXcue", "BetterKnownInstalled", "BKI"})
+
+        self.assertEqual(profile["id"], "android-16")
+        self.assertEqual(profile["android_release"], "16")
+        self.assertEqual(profile["sdk"], 36)
+        authority = profile["authority"]
+        self.assertIn("ro.build.version.security_patch", authority["required_keys"])
+        self.assertIn("ro.vendor.build.security_patch", authority["required_keys"])
         self.assertEqual(
             set(authority["required_vbmeta_keys"]),
             {"ro.boot.vbmeta.digest", "ro.boot.vbmeta.size", "ro.boot.vbmeta.avb_version", "ro.boot.avb_version"},
@@ -33,24 +47,32 @@ class RuntimeContractTests(unittest.TestCase):
             set(authority["runtime_vbmeta_keys"]),
             {"ro.boot.vbmeta.digest", "ro.boot.vbmeta.avb_version", "ro.boot.avb_version"},
         )
-        self.assertEqual(
-            set(authority["provenance_only_vbmeta_keys"]),
-            {"ro.boot.vbmeta.size"},
-        )
-        self.assertEqual(
-            set(authority["runtime_security_patch_keys"]),
-            {"ro.build.version.security_patch", "ro.vendor.build.security_patch"},
-        )
-        self.assertIn("ro.boot.flash.locked", authority["software_boot_state_keys"])
-        self.assertIn("ro.boot.verifiedbootstate", authority["software_boot_state_keys"])
+        self.assertEqual(set(authority["provenance_only_vbmeta_keys"]), {"ro.boot.vbmeta.size"})
+        self.assertIn("ro.boot.flash.locked", profile["software_boot_state_keys"])
+        self.assertIn("ro.boot.verifiedbootstate", profile["software_boot_state_keys"])
 
     def test_runtime_authority_is_pixel_family_not_model_pinned(self) -> None:
         authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
+        platform = (ROOT / "module/runtime/platform.sh").read_text(encoding="utf-8")
+        entry = (ROOT / "module/runtime/entry.sh").read_text(encoding="utf-8")
+
         self.assertNotIn("Pixel 9a", authority)
         self.assertNotIn('[ "$OTAST_DEVICE" = tegu ]', authority)
-        self.assertIn('fingerprint_prefix="google/$OTAST_DEVICE/$OTAST_DEVICE:16/"', authority)
-        self.assertIn("authority model is not a Google Pixel device", authority)
-        self.assertIn("authority manufacturer is not Google", authority)
+        self.assertIn("otast_platform_validate_product", authority)
+        self.assertIn("OTAST_PLATFORM_ANDROID_RELEASE='16'", platform)
+        self.assertIn("OTAST_PLATFORM_SDK='36'", platform)
+        self.assertIn("OTAST_PLATFORM_MANUFACTURER='Google'", platform)
+        self.assertIn("OTAST_PLATFORM_MODEL_PREFIX='Pixel '", platform)
+        self.assertIn("OTAST_PLATFORM_FINGERPRINT_VENDOR='google'", platform)
+        self.assertIn("OTAST_PLATFORM_FINGERPRINT_SUFFIX=':user/release-keys'", platform)
+        self.assertIn('. "$MODDIR/platform.sh"', entry)
+        self.assertLess(entry.index('platform.sh"'), entry.index('authority.sh"'))
+
+    def test_runtime_requires_independent_vendor_security_patch(self) -> None:
+        authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
+        self.assertIn("OTAST_VENDOR_PATCH=$(otast_authority_value ro.vendor.build.security_patch)", authority)
+        self.assertNotIn("otast_authority_optional ro.vendor.build.security_patch", authority)
+        self.assertIn("missing required vendor security patch", authority)
 
     def test_id_validation_uses_predicate_not_printing_helper(self) -> None:
         common = ROOT / "module/runtime/common.sh"
@@ -139,15 +161,10 @@ class RuntimeContractTests(unittest.TestCase):
 
     def test_pif_manifest_and_runtime_autopif_allowlists_match(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
-        manifest_hashes = set(
-            manifest["targets"]["playintegrityfix"]["accepted_hashes"]["autopif.sh"]
-        )
+        manifest_hashes = set(manifest["targets"]["playintegrityfix"]["accepted_hashes"]["autopif.sh"])
         profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
         pif_block = profiles.split("otast_plan_pif()", 1)[1].split("otast_plan_ta_utl()", 1)[0]
-        match = re.search(
-            r"otast_transform_pif_autopif \\\n\s+'([0-9a-f,]+)'",
-            pif_block,
-        )
+        match = re.search(r"otast_transform_pif_autopif \\\n\s+'([0-9a-f,]+)'", pif_block)
         self.assertIsNotNone(match)
         runtime_hashes = set(match.group(1).split(","))
         self.assertEqual(runtime_hashes, manifest_hashes)
@@ -161,10 +178,6 @@ class RuntimeContractTests(unittest.TestCase):
 
         self.assertIn("otast_require_no_legacy_governors()", common)
         self.assertGreaterEqual(entry.count("otast_require_no_legacy_governors"), 4)
-
-        # PIF's flag only requests the reviewed writer when AutoPIF runs. OTAST
-        # therefore accepts a safe existing marker and neutralizes that writer on
-        # Apply instead of making installation impossible for an enabled option.
         self.assertIn("pif_auto_security_patch", upstream_autopif)
         self.assertIn('sh "$MODDIR/security_patch.sh"', upstream_autopif)
         self.assertIn("pif_auto_security_patch", profiles)
