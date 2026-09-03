@@ -3,13 +3,18 @@
   "support_model": {
     "device_family": "Google Pixel",
     "supported_platform_profiles": ["android-16"],
-    "family_default_tier": "DESIGN_COMPATIBLE",
+    "family_architecture": {
+      "tier": "DESIGN_COMPATIBLE",
+      "platform_profiles": ["android-16"],
+      "meaning": "The authority/runtime architecture is designed for Google Pixel devices on the reviewed platform profile; this is not physical qualification of an undeclared model or build."
+    },
+    "undeclared_device_tier": "UNQUALIFIED",
     "qualification_tiers": {
-      "DESIGN_COMPATIBLE": "Architecture and fail-closed identity contract are designed for the device family/platform, without exact fixture or physical proof.",
+      "DESIGN_COMPATIBLE": "Architecture and fail-closed identity contract are designed for the declared device/platform, without exact fixture or physical proof.",
       "FIXTURE_QUALIFIED": "An exact device/build authority fixture and synthetic lifecycle are qualified.",
       "DEVICE_VALIDATED": "The exact device/build has completed physical OTAST lifecycle validation, but the current release artefact is not yet release-qualified.",
       "RELEASE_QUALIFIED": "The exact release artefact and device/build have completed the release acceptance lifecycle.",
-      "UNQUALIFIED": "No compatibility claim is made."
+      "UNQUALIFIED": "No device/build compatibility claim is made."
     },
     "release_reference": {
       "device": "tegu",
@@ -33,7 +38,7 @@
         "platform_profile": "android-16",
         "tier": "DESIGN_COMPATIBLE",
         "qualified_builds": [],
-        "evidence": "Generic Pixel authority/parser/runtime contract tests only; no exact repository physical qualification proof is recorded."
+        "evidence": "Generic Pixel authority/parser/runtime contract tests only; no exact repository fixture or physical qualification proof is recorded."
       }
     }
   },
@@ -47,7 +52,7 @@
     "whole_file_neutralizers": "when a target has a reviewed version-range contract, module identity + compatible version + safe regular-file/path validation replace brittle source-hash gating; exact original bytes/mode are still restored transactionally",
     "structure_sensitive_transforms": "exact reviewed source hashes plus transformation anchors remain mandatory where OTAST preserves or surgically edits upstream logic",
     "restore": "every managed file still records and restores exact original bytes and mode transactionally",
-    "impact_classification": "upstream movement is classified by changed source surface; only an exact no-package-impact review may advance the monitor baseline automatically"
+    "impact_classification": "upstream movement is classified by changed source surface; only a docs/CI-only source delta with byte/mode-identical installable module evidence may advance the monitor baseline automatically"
   },
   "conflicts": {
     "legacy-identity-governors": {
@@ -66,7 +71,7 @@
     "zygisk-next": {
       "mode": "READ_ONLY",
       "kind": "zygisk_implementation",
-      "module_ids": ["rezygisk"],
+      "module_ids": ["rezygisk", "zygisksu"],
       "evidence": ["module.prop", "bounded zygiskd diagnostics where available"],
       "native_constraints": ["runtime page size", "ELF LOAD alignment", "ABI"]
     },
@@ -192,6 +197,7 @@
         "repository": "beakthoven/TrickyStoreOSS",
         "release": "v3.1.0",
         "reviewed_commit": "41383f5d4e0d13d86422b49f813c1f106b9e0f3a",
+        "asset_name": "Tricky-Store-OSS-v3.1.0-172-41383f5-Release.zip",
         "asset_sha256": "f1df8a04d2d020b9c4dda304d22c69ac62be8bdd6187a7bf0a3b94ec2152c9c3",
         "module_id": "tricky_store",
         "version": "v3.1.0 (172-41383f5-release)",
