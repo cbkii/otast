@@ -20,6 +20,7 @@ OTAST_AUTHORITY=${OTAST_AUTHORITY:-$ADB_ROOT/ota.prop}
 OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 
 . "$MODDIR/common.sh" || exit 70
+. "$MODDIR/platform.sh" || exit 70
 . "$MODDIR/authority.sh" || exit 70
 . "$MODDIR/transaction.sh" || exit 70
 . "$MODDIR/pif.sh" || exit 70
