@@ -1,0 +1,12 @@
+{
+  "target": "playintegrityfix",
+  "base": "b994391970b51a2dfefed0e1d420dd6b017756e8",
+  "head": "2f8199a90a150ad98921438608e1e0e951ba2d5f",
+  "changed_paths": [
+    ".github/workflows/android.yml",
+    "gradle/libs.versions.toml",
+    "gradle/wrapper/gradle-wrapper.properties",
+    "zygisk/build.gradle.kts"
+  ],
+  "expected_impact": "NATIVE_DEPENDENCY_CHANGED"
+}
