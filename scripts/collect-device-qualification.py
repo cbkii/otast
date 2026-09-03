@@ -29,7 +29,7 @@ class CollectError(RuntimeError):
 
 def run(argv: list[str], *, timeout: int = 10, max_output: int = MAX_OUTPUT) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
+        completed = subprocess.run(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -41,6 +41,9 @@ def run(argv: list[str], *, timeout: int = 10, max_output: int = MAX_OUTPUT) -> 
         )
     except subprocess.TimeoutExpired as exc:
         raise CollectError(f"command timed out after {timeout}s: {' '.join(argv)}") from exc
+    completed.stdout = completed.stdout[:max_output]
+    completed.stderr = completed.stderr[:max_output]
+    return completed
 
 
 def root_read(path: str, *, timeout: int = 8, max_bytes: int = 512_000) -> str:
@@ -199,6 +202,23 @@ def load_optional_report(path_text: str | None, label: str) -> dict[str, Any] | 
     return load_json(Path(path_text).expanduser().resolve(), label)
 
 
+def validate_native_evidence(value: dict[str, Any], *, page_size: str, sdk: str) -> list[str]:
+    failures: list[str] = []
+    if value.get("schema_version") != 1 or value.get("collector") != "runtime-compatibility-evidence" or value.get("read_only") is not True:
+        return ["native/runtime evidence schema/read-only contract is invalid"]
+    platform = value.get("platform")
+    if not isinstance(platform, dict):
+        return ["native/runtime evidence platform section is missing"]
+    if str(platform.get("runtime_page_size", "")) != page_size:
+        failures.append("native/runtime evidence page size disagrees with device capture")
+    if str(platform.get("android_sdk", "")) != sdk:
+        failures.append("native/runtime evidence SDK disagrees with device capture")
+    modules = value.get("modules")
+    if not isinstance(modules, list):
+        failures.append("native/runtime evidence module inventory is missing")
+    return failures
+
+
 def collect(args: argparse.Namespace) -> dict[str, object]:
     registry = load_json(ROOT / "compatibility/supported-targets.json", "compatibility registry")
     ref = registry_reference(registry)
@@ -235,14 +255,13 @@ def collect(args: argparse.Namespace) -> dict[str, object]:
         "runtime_page_size": root_command("getconf PAGE_SIZE", timeout=5, max_output=4096) or run(["getconf", "PAGE_SIZE"], timeout=5).stdout.strip(),
         "primary_abi": getprop("ro.product.cpu.abi"),
         "abi_list": getprop("ro.product.cpu.abilist"),
-        "platform_16k_capability": profile.get("native_environment_evidence", {}).get("device_16k_capability", "UNSPECIFIED")
-        if isinstance(profile.get("native_environment_evidence"), dict)
-        else "UNSPECIFIED",
+        "page_size_qualification_required": True,
     }
 
     expected = {
         "codename": reference.get("device"),
         "model": reference.get("model"),
+        "manufacturer": profile.get("device_family", {}).get("manufacturer", "") if isinstance(profile.get("device_family"), dict) else "",
         "build_id": reference.get("build"),
         "platform_profile": reference.get("platform_profile"),
         "sdk": str(profile.get("sdk", "")),
@@ -274,6 +293,10 @@ def collect(args: argparse.Namespace) -> dict[str, object]:
         if authority.get(key, "") != str(identity.get(live_key, "")):
             failures.append(f"authority/live mismatch: {key}")
 
+    page_size = str(identity["runtime_page_size"])
+    if not page_size.isdigit() or int(page_size) <= 0:
+        failures.append("runtime page size is unavailable or invalid")
+
     managed_ids, observed_ids = declared_module_ids(registry)
     managed = {name: first_installed(ids) for name, ids in managed_ids.items()}
     observed: dict[str, object] = {}
@@ -294,6 +317,12 @@ def collect(args: argparse.Namespace) -> dict[str, object]:
     acceptance = load_optional_report(args.acceptance_json, "external acceptance evidence") or {
         "status": "NOT_SUPPLIED"
     }
+    native_evidence = load_optional_report(args.runtime_evidence_json, "native/runtime compatibility evidence")
+    if native_evidence is None:
+        failures.append("native/runtime compatibility evidence was not supplied")
+        native_evidence = {"status": "NOT_SUPPLIED"}
+    else:
+        failures.extend(validate_native_evidence(native_evidence, page_size=page_size, sdk=str(identity["sdk"])))
 
     return {
         "schema_version": 1,
@@ -303,6 +332,7 @@ def collect(args: argparse.Namespace) -> dict[str, object]:
         "magisk": magisk,
         "managed_targets": managed,
         "observed_dependencies": observed,
+        "native_runtime_evidence": native_evidence,
         "root_exposure_attribution": root_attribution,
         "external_acceptance": acceptance,
         "validation_failures": failures,
@@ -318,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only OTAST physical qualification evidence collector")
     parser.add_argument("--root-doctor-json", help="optional sanitized root-exposure-doctor JSON")
     parser.add_argument("--acceptance-json", help="optional sanitized external verdict/attestation JSON")
+    parser.add_argument("--runtime-evidence-json", help="read-only native/runtime compatibility evidence JSON")
     parser.add_argument("--output", required=True, help="private JSON output path")
     args = parser.parse_args(argv)
     output = Path(args.output).expanduser().resolve()
