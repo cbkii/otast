@@ -8,7 +8,9 @@ from pathlib import Path
 from .build import ENTRYPOINTS, build_module, module_metadata
 from .compatibility import validate_registry
 from .privacy import require_public_safe
+from .qualification import validate_qualification_registry
 from .release import UPDATE_JSON_URL, load_update_metadata, version_core
+from .runtime_digest import runtime_digest_from_zip
 from .util import OtastError, sha256_file
 
 
@@ -24,6 +26,7 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
         raise OtastError(f"repository root is missing or unsafe: {root}")
 
     compatibility = validate_registry(root)
+    qualification = validate_qualification_registry(root)
     metadata = module_metadata(root / "module/module.prop")
     update = load_update_metadata(root / "update.json")
     current_version = metadata["version"]
@@ -61,15 +64,20 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
     first_hash = sha256_file(first)
     if first_hash != sha256_file(second):
         raise OtastError("module build is not deterministic")
+    first_runtime = runtime_digest_from_zip(first)
+    if first_runtime != runtime_digest_from_zip(second):
+        raise OtastError("runtime payload digest is not deterministic")
     result: dict[str, object] = {
         "version": current_version,
         "version_code": current_code,
         "stable_version": stable_version,
         "stable_version_code": stable_code,
         "module_sha256": first_hash,
+        "runtime_digest": first_runtime,
         "privacy": "PASS",
         "deterministic": True,
         "compatibility": compatibility,
+        "qualification": qualification,
     }
     if full:
         _run(["python3", "-m", "unittest", "discover", "-s", "tests", "-v"], root, timeout=600)
