@@ -3,6 +3,17 @@
 
 The machine-readable sources of truth are `compatibility/supported-targets.json` and the referenced platform profiles under `compatibility/platforms/`.
 
+## Family/platform contract
+
+- Device family: `Google Pixel`.
+- Family architecture tier: `DESIGN_COMPATIBLE`.
+- Undeclared device/build tier: `UNQUALIFIED`.
+- Family architectural compatibility does not make an undeclared Pixel physically qualified.
+
+| Platform profile | Status | Android | SDK |
+|---|---|---|---|
+| `android-16` | `SUPPORTED` | `16` | `36` |
+
 ## Device/build qualification
 
 | Device | Model | Platform | Tier | Exact qualified builds |
