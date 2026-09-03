@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "runtime_digest_algorithm": "otast-runtime-v1",
+  "release_reference": {
+    "device": "tegu",
+    "build_id": "CP1A.260305.018",
+    "platform_profile": "android-16"
+  },
+  "records": {
+    "tegu-CP1A.260305.018-v1.0.3-legacy-proof": {
+      "device": "tegu",
+      "model": "Pixel 9a",
+      "manufacturer": "Google",
+      "build_id": "CP1A.260305.018",
+      "fingerprint": "google/tegu/tegu:16/CP1A.260305.018/14887507:user/release-keys",
+      "platform_profile": "android-16",
+      "qualification_tier": "DEVICE_VALIDATED",
+      "authority_fixture": "authority/reference-tegu-CP1A.260305.018.ota.prop",
+      "authority_sha256": "8becbe2ed79010d4f78f7a1a6c91d7a6fe8f9e2021267570cd0bb78bafce6684",
+      "qualified_source_commit": "017f45e54ea2e9287cd1edbbcfd151202a32a67f",
+      "otast_version": "v1.0.3",
+      "version_code": 100007,
+      "zip_sha256": "bdf15d46e706f6896092d617575dcb039dc1b8c90f7c2bd979ac0bb4bd61ea69",
+      "runtime_digest": null,
+      "proof_sha256": "ab38846b5f3cca3f0a64d8904f50e356243b5f21916d51e1f065c06422ad0e6b",
+      "qualification_date": "2026-09-01",
+      "current_state": "STALE_RUNTIME_DIGEST_UNBOUND",
+      "stale_reason": "Legacy physical proof predates canonical runtime-digest binding. Batch 1 also changes the shipping module runtime, so this proof cannot qualify a later candidate without new physical evidence.",
+      "page_size_qualification": {
+        "4096": "UNQUALIFIED",
+        "16384": "UNQUALIFIED"
+      },
+      "external_acceptance": "PARTIAL",
+      "notes": "Sanitized provenance only. No keybox/private-key material is stored. Pixel 8 has no physical qualification record because no exact repository proof exists."
+    }
+  }
+}
