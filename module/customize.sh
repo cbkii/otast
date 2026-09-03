@@ -4,40 +4,31 @@
 
 _otast_version=$(sed -n 's/^version=//p' "$MODPATH/module.prop" 2>/dev/null | sed -n '1p')
 ui_print "- OTAST ${_otast_version:-unknown}"
-ui_print '- Validating Google Pixel Android 16 authority and runtime package'
+
+if [ ! -f "$MODPATH/runtime/platform.sh" ] || [ -L "$MODPATH/runtime/platform.sh" ]; then
+  abort 'OTAST installer validation failed: missing or unsafe runtime/platform.sh.'
+fi
+# shellcheck source=/dev/null
+. "$MODPATH/runtime/platform.sh" || abort 'OTAST installer validation failed: cannot load platform profile.'
+ui_print "- Validating Google Pixel $OTAST_PLATFORM_ID authority and runtime package"
 
 _otast_install_failed=0
 _otast_device=$(getprop ro.product.device 2>/dev/null)
 _otast_manufacturer=$(getprop ro.product.manufacturer 2>/dev/null)
 _otast_model=$(getprop ro.product.model 2>/dev/null)
 _otast_sdk=$(getprop ro.build.version.sdk 2>/dev/null)
+_otast_fingerprint=$(getprop ro.build.fingerprint 2>/dev/null)
 
-case "$_otast_device" in
-  ''|*[!a-z0-9_]*)
-    ui_print "! Unsupported or malformed Pixel device identity: ${_otast_device:-unknown}"
-    _otast_install_failed=1
-    ;;
-esac
-if [ "$_otast_manufacturer" != Google ]; then
-  ui_print "! Unsupported manufacturer: ${_otast_manufacturer:-unknown}; expected Google"
-  _otast_install_failed=1
-fi
-case "$_otast_model" in
-  'Pixel '*) ;;
-  *)
-    ui_print "! Unsupported model: ${_otast_model:-unknown}; expected Google Pixel"
-    _otast_install_failed=1
-    ;;
-esac
-if [ "$_otast_sdk" != 36 ]; then
-  ui_print "! Unsupported SDK: ${_otast_sdk:-unknown}; expected 36"
+if ! otast_platform_validate_product "$_otast_device" "$_otast_manufacturer" "$_otast_model" "$_otast_sdk" "$_otast_fingerprint"; then
+  ui_print "! Unsupported platform identity for $OTAST_PLATFORM_ID"
+  ui_print "! device=${_otast_device:-unknown} model=${_otast_model:-unknown} sdk=${_otast_sdk:-unknown}"
   _otast_install_failed=1
 fi
 if [ ! -f /data/adb/ota.prop ] || [ -L /data/adb/ota.prop ]; then
   ui_print '! Missing or unsafe authority: /data/adb/ota.prop'
   _otast_install_failed=1
 fi
-for _otast_required in action.sh post-fs-data.sh service.sh uninstall.sh runtime/entry.sh runtime/common.sh runtime/authority.sh runtime/transaction.sh runtime/profiles.sh runtime/pif.sh runtime/ta.sh runtime/report.sh; do
+for _otast_required in action.sh post-fs-data.sh service.sh uninstall.sh runtime/entry.sh runtime/common.sh runtime/platform.sh runtime/authority.sh runtime/transaction.sh runtime/profiles.sh runtime/pif.sh runtime/ta.sh runtime/report.sh; do
   if [ ! -f "$MODPATH/$_otast_required" ] || [ -L "$MODPATH/$_otast_required" ]; then
     ui_print "! Missing or unsafe package file: $_otast_required"
     _otast_install_failed=1
