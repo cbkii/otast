@@ -24,6 +24,13 @@ COMPATIBILITY_BASES = {
     "PRESERVED_OBSERVED_SURFACE",
     "UNSUPPORTED_UNKNOWN",
 }
+DISTRIBUTION_TYPES = {
+    "BRANCH_BUILD",
+    "BRANCH_SOURCE",
+    "BRANCH_SOURCE_WITH_VERSION_RANGE",
+    "RELEASE_ASSET",
+    "RELEASE_AND_WORKFLOW_ARTIFACT",
+}
 IMPACT_CLASSES = (
     "DOCS_OR_CI_ONLY",
     "PRESERVED_SURFACE_CHANGED",
@@ -50,7 +57,9 @@ IMPACT_PRIORITY = {
     "UNKNOWN_PACKAGE_CHANGE": 75,
     "MODULE_IDENTITY_CHANGED": 80,
 }
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def _read_json(path: Path, label: str) -> dict[str, Any]:
@@ -101,6 +110,64 @@ def _require_string_list(value: object, label: str, *, allow_empty: bool = False
     return result
 
 
+def _validate_distribution(target_id: str, record: dict[str, Any], monitor: dict[str, Any]) -> None:
+    distribution = record.get("distribution_identity")
+    if not isinstance(distribution, dict):
+        raise OtastError(f"target distribution identity is incomplete: {target_id}")
+    source_type = distribution.get("source_type")
+    repository = distribution.get("repository")
+    if source_type not in DISTRIBUTION_TYPES:
+        raise OtastError(f"target distribution type is unsupported: {target_id}")
+    if not isinstance(repository, str) or not REPOSITORY_RE.fullmatch(repository):
+        raise OtastError(f"target distribution repository is invalid: {target_id}")
+    if repository != monitor.get("repository"):
+        raise OtastError(f"target distribution repository disagrees with monitor: {target_id}")
+
+    module_ids = set(_require_string_list(record.get("module_ids"), f"target {target_id} module_ids"))
+    declared_distribution_ids: set[str] = set()
+    module_id = distribution.get("module_id")
+    if isinstance(module_id, str) and module_id:
+        declared_distribution_ids.add(module_id)
+    raw_module_ids = distribution.get("module_ids")
+    if raw_module_ids is not None:
+        declared_distribution_ids.update(
+            _require_string_list(raw_module_ids, f"target {target_id} distribution module_ids")
+        )
+    if declared_distribution_ids and not declared_distribution_ids.issubset(module_ids):
+        raise OtastError(f"target distribution module identity is outside explicit module_ids: {target_id}")
+
+    for key, value in distribution.items():
+        if key.endswith("commit") and value is not None:
+            if not isinstance(value, str) or not SHA1_RE.fullmatch(value):
+                raise OtastError(f"target distribution commit is invalid: {target_id}.{key}")
+        if key.endswith("sha256") and value is not None:
+            if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+                raise OtastError(f"target distribution SHA-256 is invalid: {target_id}.{key}")
+
+    if source_type == "RELEASE_ASSET":
+        for key in ("release", "asset_name", "asset_sha256", "module_id", "version", "version_code", "author"):
+            if key not in distribution or distribution[key] in (None, ""):
+                raise OtastError(f"release-asset identity is missing {key}: {target_id}")
+        if not isinstance(distribution["version_code"], int) or isinstance(distribution["version_code"], bool):
+            raise OtastError(f"release-asset version_code is invalid: {target_id}")
+    elif source_type == "BRANCH_SOURCE_WITH_VERSION_RANGE":
+        prefixes = _require_string_list(distribution.get("version_prefixes"), f"target {target_id} version prefixes")
+        code_range = distribution.get("version_code_range")
+        if not prefixes or not isinstance(code_range, list) or len(code_range) != 2:
+            raise OtastError(f"version-range distribution identity is incomplete: {target_id}")
+        if not all(isinstance(item, int) and not isinstance(item, bool) for item in code_range):
+            raise OtastError(f"version-range distribution codes are invalid: {target_id}")
+        if code_range[0] > code_range[1]:
+            raise OtastError(f"version-range distribution codes are reversed: {target_id}")
+    elif source_type in {"BRANCH_BUILD", "BRANCH_SOURCE"}:
+        ref = distribution.get("ref")
+        if not isinstance(ref, str) or not ref:
+            raise OtastError(f"branch distribution ref is missing: {target_id}")
+    elif source_type == "RELEASE_AND_WORKFLOW_ARTIFACT":
+        if not isinstance(distribution.get("release_ref"), str) or not distribution["release_ref"]:
+            raise OtastError(f"release/workflow distribution release_ref is missing: {target_id}")
+
+
 def validate_registry(root: Path) -> dict[str, object]:
     registry = load_registry(root)
     if registry.get("schema_version") != REGISTRY_SCHEMA_VERSION:
@@ -112,16 +179,33 @@ def validate_registry(root: Path) -> dict[str, object]:
     tiers = support.get("qualification_tiers")
     if not isinstance(tiers, dict) or set(tiers) != QUALIFICATION_TIERS:
         raise OtastError("qualification tier set is incomplete or ambiguous")
-    default_tier = support.get("family_default_tier")
-    if default_tier not in QUALIFICATION_TIERS:
-        raise OtastError("family_default_tier is invalid")
+    architecture = support.get("family_architecture")
+    if not isinstance(architecture, dict) or architecture.get("tier") != "DESIGN_COMPATIBLE":
+        raise OtastError("family_architecture must explicitly declare DESIGN_COMPATIBLE")
+    if support.get("undeclared_device_tier") != "UNQUALIFIED":
+        raise OtastError("undeclared Pixel devices must remain UNQUALIFIED")
 
     profile_ids = _require_string_list(support.get("supported_platform_profiles"), "supported platform profiles")
+    architecture_profiles = _require_string_list(
+        architecture.get("platform_profiles"), "family architecture platform profiles"
+    )
+    if set(architecture_profiles) != set(profile_ids):
+        raise OtastError("family architecture platform profiles disagree with supported profiles")
+
     platform_summaries: dict[str, dict[str, object]] = {}
+    runtime_platform = root / "module/runtime/platform.sh"
+    if runtime_platform.is_symlink() or not runtime_platform.is_file():
+        raise OtastError("runtime platform mirror is missing or unsafe")
+    runtime_text = runtime_platform.read_text(encoding="utf-8")
+
     for profile_id in profile_ids:
         profile = load_platform(root, profile_id)
-        if profile.get("android_release") != "16" or profile.get("sdk") != 36:
-            raise OtastError("only the reviewed Android 16 / SDK 36 profile is supported")
+        android_release = profile.get("android_release")
+        sdk = profile.get("sdk")
+        if not isinstance(android_release, str) or not android_release.isdigit():
+            raise OtastError(f"platform android_release is invalid: {profile_id}")
+        if not isinstance(sdk, int) or isinstance(sdk, bool) or sdk <= 0:
+            raise OtastError(f"platform SDK is invalid: {profile_id}")
         authority = profile.get("authority")
         if not isinstance(authority, dict):
             raise OtastError(f"platform profile has no authority contract: {profile_id}")
@@ -129,22 +213,35 @@ def validate_registry(root: Path) -> dict[str, object]:
         for key in ("ro.build.version.security_patch", "ro.vendor.build.security_patch"):
             if key not in required:
                 raise OtastError(f"platform profile must require independent system/vendor SPL: missing {key}")
-        platform_summaries[profile_id] = {
-            "android_release": profile["android_release"],
-            "sdk": profile["sdk"],
-        }
+        static_sources = profile.get("static_property_sources")
+        if not isinstance(static_sources, dict):
+            raise OtastError(f"platform static property sources are missing: {profile_id}")
+        for key in ("ro.build.version.security_patch", "ro.vendor.build.security_patch"):
+            _require_string_list(static_sources.get(key), f"{profile_id} static sources for {key}")
+        bootconfig = profile.get("bootconfig_evidence")
+        if not isinstance(bootconfig, dict) or not bootconfig:
+            raise OtastError(f"platform bootconfig evidence is missing: {profile_id}")
+        native = profile.get("native_environment_evidence")
+        if not isinstance(native, dict):
+            raise OtastError(f"platform native environment evidence is missing: {profile_id}")
+        for key in (
+            "runtime_page_size",
+            "primary_abi",
+            "abi_list",
+            "native_library_inventory",
+            "elf_load_alignment",
+            "zygisk_identity",
+        ):
+            if not isinstance(native.get(key), str) or not native[key]:
+                raise OtastError(f"platform native evidence field is missing: {profile_id}.{key}")
 
-        runtime_platform = root / "module/runtime/platform.sh"
-        if runtime_platform.is_symlink() or not runtime_platform.is_file():
-            raise OtastError("runtime platform mirror is missing or unsafe")
-        runtime_text = runtime_platform.read_text(encoding="utf-8")
         contract = profile.get("device_family")
         if not isinstance(contract, dict):
             raise OtastError(f"platform device-family contract is invalid: {profile_id}")
         expected_runtime = {
             "OTAST_PLATFORM_ID": profile_id,
-            "OTAST_PLATFORM_ANDROID_RELEASE": str(profile["android_release"]),
-            "OTAST_PLATFORM_SDK": str(profile["sdk"]),
+            "OTAST_PLATFORM_ANDROID_RELEASE": android_release,
+            "OTAST_PLATFORM_SDK": str(sdk),
             "OTAST_PLATFORM_MANUFACTURER": str(contract.get("manufacturer", "")),
             "OTAST_PLATFORM_MODEL_PREFIX": str(contract.get("model_prefix", "")),
             "OTAST_PLATFORM_FINGERPRINT_VENDOR": str(contract.get("fingerprint_vendor", "")),
@@ -154,22 +251,32 @@ def validate_registry(root: Path) -> dict[str, object]:
             assignment = f"{name}='{expected}'"
             if assignment not in runtime_text:
                 raise OtastError(f"runtime platform mirror disagrees with {profile_id}: {name}")
+        platform_summaries[profile_id] = {"android_release": android_release, "sdk": sdk}
 
     devices = support.get("devices")
     if not isinstance(devices, dict) or not devices:
         raise OtastError("support_model.devices must be a non-empty object")
     for device, record in devices.items():
-        if not isinstance(device, str) or not isinstance(record, dict):
+        if not isinstance(device, str) or not re.fullmatch(r"[a-z0-9_]+", device) or not isinstance(record, dict):
             raise OtastError("device qualification record is malformed")
-        if record.get("tier") not in QUALIFICATION_TIERS:
+        tier = record.get("tier")
+        if tier not in QUALIFICATION_TIERS:
             raise OtastError(f"device qualification tier is invalid: {device}")
         if record.get("platform_profile") not in profile_ids:
             raise OtastError(f"device references unsupported platform profile: {device}")
         builds = record.get("qualified_builds")
-        if not isinstance(builds, list):
-            raise OtastError(f"device qualified_builds must be a list: {device}")
-        if record.get("tier") in {"FIXTURE_QUALIFIED", "DEVICE_VALIDATED", "RELEASE_QUALIFIED"} and not builds:
+        if not isinstance(builds, list) or not all(isinstance(item, str) and item for item in builds):
+            raise OtastError(f"device qualified_builds must be a string list: {device}")
+        if len(builds) != len(set(builds)):
+            raise OtastError(f"device qualified_builds contains duplicates: {device}")
+        if tier in {"FIXTURE_QUALIFIED", "DEVICE_VALIDATED", "RELEASE_QUALIFIED"} and not builds:
             raise OtastError(f"qualified device tier requires an exact build: {device}")
+        if tier in {"UNQUALIFIED", "DESIGN_COMPATIBLE"} and builds:
+            raise OtastError(f"unproven device tier may not claim qualified builds: {device}")
+        fixture = record.get("authority_fixture")
+        if tier in {"FIXTURE_QUALIFIED", "DEVICE_VALIDATED", "RELEASE_QUALIFIED"}:
+            if not isinstance(fixture, str) or not (root / fixture).is_file():
+                raise OtastError(f"qualified device authority fixture is missing: {device}")
 
     reference = support.get("release_reference")
     if not isinstance(reference, dict):
@@ -182,6 +289,8 @@ def validate_registry(root: Path) -> dict[str, object]:
         raise OtastError("release_reference tier disagrees with device qualification")
     if reference.get("build") not in reference_record.get("qualified_builds", []):
         raise OtastError("release_reference build is not an exact qualified build")
+    if reference.get("platform_profile") != reference_record.get("platform_profile"):
+        raise OtastError("release_reference platform disagrees with device qualification")
     fixture = reference.get("authority_fixture")
     if not isinstance(fixture, str) or not (root / fixture).is_file():
         raise OtastError("release_reference authority fixture is missing")
@@ -212,9 +321,13 @@ def validate_registry(root: Path) -> dict[str, object]:
             raise OtastError(f"observed dependency must be READ_ONLY: {dep_id}")
         if "managed_paths" in record:
             raise OtastError(f"observed dependency may not declare managed_paths: {dep_id}")
-        for module_id in _require_string_list(record.get("module_ids", []), f"observed dependency {dep_id} module_ids", allow_empty=True):
+        for module_id in _require_string_list(
+            record.get("module_ids", []), f"observed dependency {dep_id} module_ids", allow_empty=True
+        ):
             if module_id in observed_module_ids:
                 raise OtastError(f"observed module ID declared twice: {module_id}")
+            if module_id in conflict_ids:
+                raise OtastError(f"observed dependency overlaps explicit conflict: {module_id}")
             observed_module_ids.add(module_id)
 
     targets = registry.get("targets")
@@ -224,22 +337,29 @@ def validate_registry(root: Path) -> dict[str, object]:
     for target_id, record in targets.items():
         if not isinstance(record, dict) or record.get("target_role") != "MANAGED":
             raise OtastError(f"target must explicitly declare MANAGED ownership: {target_id}")
-        if record.get("compatibility_basis") not in COMPATIBILITY_BASES:
+        basis = record.get("compatibility_basis")
+        if basis not in COMPATIBILITY_BASES:
             raise OtastError(f"target compatibility basis is invalid: {target_id}")
-        for module_id in _require_string_list(record.get("module_ids"), f"target {target_id} module_ids"):
+        target_module_ids = _require_string_list(record.get("module_ids"), f"target {target_id} module_ids")
+        for module_id in target_module_ids:
             if module_id in managed_module_ids:
                 raise OtastError(f"managed module ID declared by multiple targets: {module_id}")
             if module_id in conflict_ids:
                 raise OtastError(f"managed target overlaps explicit conflict: {module_id}")
+            if module_id in observed_module_ids:
+                raise OtastError(f"managed target is also declared as an observed module: {module_id}")
             managed_module_ids.add(module_id)
+
         monitor = record.get("monitor")
-        if not isinstance(monitor, dict) or not isinstance(monitor.get("repository"), str):
+        if not isinstance(monitor, dict):
             raise OtastError(f"target monitor is invalid: {target_id}")
-        if not SHA_RE.fullmatch(str(monitor.get("expected_head", ""))):
+        repository = monitor.get("repository")
+        if not isinstance(repository, str) or not REPOSITORY_RE.fullmatch(repository):
+            raise OtastError(f"target monitor repository is invalid: {target_id}")
+        if not SHA1_RE.fullmatch(str(monitor.get("expected_head", ""))):
             raise OtastError(f"target monitor expected_head is invalid: {target_id}")
-        distribution = record.get("distribution_identity")
-        if not isinstance(distribution, dict) or not distribution.get("source_type") or not distribution.get("repository"):
-            raise OtastError(f"target distribution identity is incomplete: {target_id}")
+        _validate_distribution(target_id, record, monitor)
+
         policy = record.get("impact_policy")
         if not isinstance(policy, dict):
             raise OtastError(f"target impact policy is missing: {target_id}")
@@ -248,6 +368,36 @@ def validate_registry(root: Path) -> dict[str, object]:
             raise OtastError(f"target impact policy has unknown categories: {target_id}: {sorted(unknown_policy)}")
         for category in IMPACT_POLICY_KEYS:
             _require_string_list(policy.get(category, []), f"{target_id} impact_policy.{category}", allow_empty=True)
+
+        if basis == "WHOLE_FILE_VERSION_RANGE":
+            supported = record.get("supported_version")
+            if not isinstance(supported, dict):
+                raise OtastError(f"whole-file version-range target lacks supported_version: {target_id}")
+            _require_string_list(supported.get("prefixes"), f"{target_id} supported version prefixes")
+            minimum = supported.get("min_version_code")
+            maximum = supported.get("max_version_code")
+            if not all(isinstance(item, int) and not isinstance(item, bool) for item in (minimum, maximum)):
+                raise OtastError(f"whole-file version codes are invalid: {target_id}")
+            if minimum > maximum:
+                raise OtastError(f"whole-file version-code range is reversed: {target_id}")
+        elif basis == "STRUCTURE_SENSITIVE_TRANSFORM":
+            hashes = record.get("accepted_hashes")
+            if not isinstance(hashes, dict) or not hashes:
+                raise OtastError(f"structure-sensitive target lacks accepted hashes: {target_id}")
+            for path, values in hashes.items():
+                for digest in _require_string_list(values, f"{target_id} accepted hashes for {path}"):
+                    if not SHA256_RE.fullmatch(digest):
+                        raise OtastError(f"structure-sensitive accepted hash is invalid: {target_id}:{path}")
+        elif basis == "EXACT_REVIEWED_ARTIFACT":
+            distribution = record["distribution_identity"]
+            commit = distribution.get("reviewed_commit") or record.get("reviewed_commit")
+            if commit is not None and (not isinstance(commit, str) or not SHA1_RE.fullmatch(commit)):
+                raise OtastError(f"exact reviewed artefact commit is invalid: {target_id}")
+
+    for dep_id, record in dependencies.items():
+        managed_target = record.get("managed_target") if isinstance(record, dict) else None
+        if managed_target is not None and managed_target not in targets:
+            raise OtastError(f"observed dependency references unknown managed target: {dep_id}")
 
     generated_status = root / "docs/COMPATIBILITY-STATUS.md"
     if generated_status.is_symlink() or not generated_status.is_file():
@@ -277,18 +427,18 @@ def classify_changed_paths(target_record: dict[str, Any], changed_paths: Iterabl
     paths = sorted(set(changed_paths))
     if not paths:
         raise OtastError("changed path set is empty")
-    per_path: list[dict[str, str]] = []
+    per_path: list[dict[str, object]] = []
     for path in paths:
         if not path or path.startswith("/") or ".." in Path(path).parts or any(ch in path for ch in "\r\n\0"):
             raise OtastError(f"unsafe changed path: {path!r}")
-        impact = "UNKNOWN_PACKAGE_CHANGE"
+        matches: set[str] = set()
         for policy_key, candidate in IMPACT_POLICY_KEYS.items():
             patterns = policy.get(policy_key, [])
             if isinstance(patterns, list) and _matches(path, (str(item) for item in patterns)):
-                impact = candidate
-                break
-        per_path.append({"path": path, "impact": impact})
-    primary = max((item["impact"] for item in per_path), key=lambda item: IMPACT_PRIORITY[item])
+                matches.add(candidate)
+        impact = max(matches, key=lambda item: IMPACT_PRIORITY[item]) if matches else "UNKNOWN_PACKAGE_CHANGE"
+        per_path.append({"path": path, "impact": impact, "matched_impacts": sorted(matches)})
+    primary = max((str(item["impact"]) for item in per_path), key=lambda item: IMPACT_PRIORITY[item])
     return {
         "impact": primary,
         "requires_review": primary != "DOCS_OR_CI_ONLY",
@@ -310,20 +460,46 @@ def render_compatibility_status(root: Path) -> str:
     registry = load_registry(root)
     support = registry.get("support_model", {})
     devices = support.get("devices", {}) if isinstance(support, dict) else {}
+    architecture = support.get("family_architecture", {}) if isinstance(support, dict) else {}
     reference = support.get("release_reference", {}) if isinstance(support, dict) else {}
     targets = registry.get("targets", {})
     dependencies = registry.get("observed_dependencies", {})
+    platforms = registry.get("platforms", {})
     lines = [
         "<!-- GENERATED by tools.otastctl.compatibility.render_compatibility_status; do not hand-edit. -->",
         "# Compatibility status",
         "",
         "The machine-readable sources of truth are `compatibility/supported-targets.json` and the referenced platform profiles under `compatibility/platforms/`.",
         "",
+        "## Family/platform contract",
+        "",
+        f"- Device family: `{support.get('device_family', '')}`.",
+        f"- Family architecture tier: `{architecture.get('tier', '')}`.",
+        f"- Undeclared device/build tier: `{support.get('undeclared_device_tier', '')}`.",
+        "- Family architectural compatibility does not make an undeclared Pixel physically qualified.",
+        "",
+        "| Platform profile | Status | Android | SDK |",
+        "|---|---|---|---|",
+    ]
+    if isinstance(platforms, dict):
+        for profile_id, record in sorted(platforms.items()):
+            if not isinstance(record, dict):
+                continue
+            try:
+                profile = load_platform(root, profile_id)
+                release = profile.get("android_release", "")
+                sdk = profile.get("sdk", "")
+            except OtastError:
+                release = "invalid"
+                sdk = "invalid"
+            lines.append(f"| `{profile_id}` | `{record.get('status', '')}` | `{release}` | `{sdk}` |")
+    lines.extend([
+        "",
         "## Device/build qualification",
         "",
         "| Device | Model | Platform | Tier | Exact qualified builds |",
         "|---|---|---|---|---|",
-    ]
+    ])
     if isinstance(devices, dict):
         for device, record in sorted(devices.items()):
             if not isinstance(record, dict):
