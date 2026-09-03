@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .build import ENTRYPOINTS, build_module, module_metadata
+from .compatibility import validate_registry
 from .privacy import require_public_safe
 from .release import UPDATE_JSON_URL, load_update_metadata, version_core
 from .util import OtastError, sha256_file
@@ -21,6 +22,8 @@ def _run(command: list[str], cwd: Path, timeout: int = 120) -> None:
 def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
     if root.is_symlink() or not root.is_dir():
         raise OtastError(f"repository root is missing or unsafe: {root}")
+
+    compatibility = validate_registry(root)
     metadata = module_metadata(root / "module/module.prop")
     update = load_update_metadata(root / "update.json")
     current_version = metadata["version"]
@@ -66,6 +69,7 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
         "module_sha256": first_hash,
         "privacy": "PASS",
         "deterministic": True,
+        "compatibility": compatibility,
     }
     if full:
         _run(["python3", "-m", "unittest", "discover", "-s", "tests", "-v"], root, timeout=600)
