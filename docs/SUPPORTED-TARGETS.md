@@ -1,6 +1,6 @@
 # Supported targets
 
-The machine-readable source of truth is `compatibility/supported-targets.json`; Android-version assumptions are in `compatibility/platforms/`. Generated compatibility status is validated in CI and must match the registry.
+The machine-readable source of truth is `compatibility/supported-targets.json`; Android-version assumptions are in `compatibility/platforms/`. Generated [Compatibility status](COMPATIBILITY-STATUS.md) is validated in CI and must match the registry.
 
 ## Device/platform scope
 
