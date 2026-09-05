@@ -193,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             validate_source_zip(_root(args.zip))
             print("source ZIP validation passed")
         elif args.command == "authority-validate":
-            authority = parse_authority(_root(args.path))
+            authority = parse_authority(_root(args.path), root=repo)
             print(stable_json({"result": "PASS", "sha256": authority.sha256, "values": authority.values}), end="")
         elif args.command == "fake-root":
             output = _root(args.output) if Path(args.output).is_absolute() else (repo / args.output).resolve()
