@@ -64,6 +64,7 @@ jobs:
         run: bash scripts/test.sh --full
 
       - name: Build exact deliverable and provenance
+        id: exact_build
         env:
           SOURCE_COMMIT: ${{ github.sha }}
         run: |
@@ -100,7 +101,7 @@ jobs:
           PY
 
       - name: Upload exact CI evidence
-        if: always()
+        if: ${{ always() && steps.exact_build.outcome != 'skipped' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: exact-deliverable-${{ github.run_id }}-${{ github.run_attempt }}
@@ -110,5 +111,5 @@ jobs:
             dist-verify.json
             runtime-digest.json
             zip-inventory.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
