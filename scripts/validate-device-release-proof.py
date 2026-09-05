@@ -14,8 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.otastctl.qualification import registry_provenance  # noqa: E402
+from tools.otastctl.authority import parse_authority  # noqa: E402
+from tools.otastctl.compatibility import load_platform  # noqa: E402
+from tools.otastctl.qualification import find_current_qualification, registry_provenance  # noqa: E402
 from tools.otastctl.runtime_digest import RUNTIME_DIGEST_ALGORITHM, runtime_digest_from_zip  # noqa: E402
+from tools.otastctl.util import OtastError  # noqa: E402
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -63,10 +66,10 @@ def _load_json(path: Path, label: str) -> dict[str, Any]:
 
 
 def release_reference(repo_root: Path = ROOT) -> dict[str, object]:
+    repo_root = repo_root.resolve()
     registry = _load_json(repo_root / "compatibility/supported-targets.json", "compatibility registry")
     support = registry.get("support_model")
-    platforms = registry.get("platforms")
-    if not isinstance(support, dict) or not isinstance(platforms, dict):
+    if not isinstance(support, dict):
         raise ProofError("compatibility support model is incomplete")
     reference = support.get("release_reference")
     devices = support.get("devices")
@@ -83,40 +86,52 @@ def release_reference(repo_root: Path = ROOT) -> dict[str, object]:
     device_record = devices.get(device)
     if not isinstance(device_record, dict):
         raise ProofError("release reference device is not declared")
-    if device_record.get("tier") != tier or build not in device_record.get("qualified_builds", []):
+    qualified_builds = device_record.get("qualified_builds")
+    if (
+        device_record.get("tier") != tier
+        or not isinstance(qualified_builds, list)
+        or not all(isinstance(item, str) and item for item in qualified_builds)
+        or build not in qualified_builds
+    ):
         raise ProofError("release reference disagrees with device qualification")
-    platform_record = platforms.get(profile_id)
-    if not isinstance(platform_record, dict) or platform_record.get("status") != "SUPPORTED":
-        raise ProofError("release reference platform is not supported")
-    profile_path = platform_record.get("profile")
-    if not isinstance(profile_path, str) or not profile_path.startswith("compatibility/platforms/"):
-        raise ProofError("release reference platform path is invalid")
-    profile = _load_json(repo_root / profile_path, "release-reference platform profile")
+    try:
+        profile = load_platform(repo_root, profile_id)
+    except OtastError as exc:
+        raise ProofError(f"release-reference platform is invalid: {exc}") from exc
+
     fixture_path = reference.get("authority_fixture")
     if not isinstance(fixture_path, str) or not fixture_path.startswith("authority/"):
         raise ProofError("release-reference authority fixture is invalid")
-    authority_path = repo_root / fixture_path
-    authority_raw = authority_path.read_bytes()
-    authority_values: dict[str, str] = {}
-    for line in authority_raw.decode("utf-8").splitlines():
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        authority_values[key] = value
+    authority_root = (repo_root / "authority").resolve()
+    authority_path = (repo_root / fixture_path).resolve()
+    try:
+        authority_path.relative_to(authority_root)
+    except ValueError as exc:
+        raise ProofError("release-reference authority fixture escapes authority directory") from exc
+    try:
+        authority = parse_authority(authority_path, platform_profile=profile_id, root=repo_root)
+    except OtastError as exc:
+        raise ProofError(f"release-reference authority fixture is invalid: {exc}") from exc
+
+    values = authority.values
+    system_spl = values.get("ro.build.version.security_patch", "")
+    vendor_spl = values.get("ro.vendor.build.security_patch", "")
+    if not system_spl or not vendor_spl:
+        raise ProofError("release-reference authority must provide non-empty system and vendor SPL")
     return {
         "device": device,
         "model": reference.get("model", device_record.get("model", "")),
-        "manufacturer": authority_values.get("ro.product.manufacturer", ""),
+        "manufacturer": values["ro.product.manufacturer"],
         "build": build,
-        "fingerprint": authority_values.get("ro.build.fingerprint", ""),
+        "fingerprint": values["ro.build.fingerprint"],
         "platform_profile": profile_id,
         "android_release": profile.get("android_release"),
         "sdk": profile.get("sdk"),
-        "system_spl": authority_values.get("ro.build.version.security_patch", ""),
-        "vendor_spl": authority_values.get("ro.vendor.build.security_patch", ""),
-        "authority_sha256": hashlib.sha256(authority_raw).hexdigest(),
+        "system_spl": system_spl,
+        "vendor_spl": vendor_spl,
+        "authority_sha256": authority.sha256,
         "authority_boot": {
-            key: authority_values.get(key, "")
+            key: values.get(key, "")
             for key in (
                 "boot.img.sha256",
                 "ro.boot.vbmeta.digest",
@@ -174,6 +189,9 @@ def _validate_device_evidence(evidence: object, reference: dict[str, object]) ->
     managed = evidence.get("managed_targets")
     if not isinstance(managed, dict) or not managed:
         raise ProofError("device evidence managed-target identities are missing")
+    native = evidence.get("native_runtime_evidence")
+    if not isinstance(native, dict) or not isinstance(native.get("modules"), list) or not native["modules"]:
+        raise ProofError("native/runtime evidence inventory is missing")
     root = evidence.get("root_exposure_attribution")
     if not isinstance(root, dict) or root.get("result") not in ROOT_RESULTS:
         raise ProofError("root-exposure attribution is not an accepted release result")
@@ -190,6 +208,13 @@ def _validate_device_evidence(evidence: object, reference: dict[str, object]) ->
     if external.get("play_store_certification") != "CERTIFIED":
         raise ProofError("Play Store certification is not CERTIFIED")
     return evidence
+
+
+def _runtime_digest(module_zip: Path) -> str:
+    try:
+        return runtime_digest_from_zip(module_zip)
+    except OtastError as exc:
+        raise ProofError(f"cannot validate module ZIP runtime digest: {exc}") from exc
 
 
 def validate_proof(
@@ -216,7 +241,7 @@ def validate_proof(
         with zipfile.ZipFile(module_zip) as archive:
             module_prop = parse_properties(archive.read("module.prop").decode("utf-8"))
             release_props = parse_properties(archive.read("release.properties").decode("utf-8"))
-    except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+    except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile, RuntimeError) as exc:
         raise ProofError(f"cannot inspect module ZIP metadata: {exc}") from exc
     if module_prop.get("id") != "otast" or module_prop.get("version") != version:
         raise ProofError("draft ZIP module identity/version does not match release")
@@ -225,6 +250,8 @@ def validate_proof(
     version_code = module_prop.get("versionCode")
     if not isinstance(version_code, str) or not version_code.isdigit():
         raise ProofError("draft ZIP versionCode is invalid")
+    if release_props.get("version_code") != version_code:
+        raise ProofError("draft ZIP release.properties versionCode does not match module.prop")
     if value.get("version_code") != int(version_code):
         raise ProofError("proof versionCode does not match module ZIP")
 
@@ -232,7 +259,7 @@ def validate_proof(
     if SHA40_RE.fullmatch(current_source) is None:
         raise ProofError("draft ZIP source commit is not a full Git SHA")
     current_zip_sha = sha256_file(module_zip)
-    current_runtime = runtime_digest_from_zip(module_zip)
+    current_runtime = _runtime_digest(module_zip)
     if value.get("current_source_commit") != current_source:
         raise ProofError("proof current source commit does not match module ZIP")
     if value.get("current_zip_sha256") != current_zip_sha:
@@ -256,6 +283,8 @@ def validate_proof(
         raise ProofError("qualified source commit is invalid")
     if not isinstance(qualified_zip, str) or SHA256_RE.fullmatch(qualified_zip) is None:
         raise ProofError("qualified ZIP SHA-256 is invalid")
+
+    reference = release_reference(repo_root)
     if evidence_kind == "DIRECT_PHYSICAL":
         if qualified_source != current_source or qualified_zip != current_zip_sha:
             raise ProofError("direct physical proof must qualify the exact current source and ZIP")
@@ -266,8 +295,26 @@ def validate_proof(
         if equivalence.get("qualified_runtime_digest") != current_runtime or equivalence.get("current_runtime_digest") != current_runtime:
             raise ProofError("runtime-equivalent proof digest mismatch")
         _require_pass(equivalence.get("ci_equivalence"), "runtime-equivalence CI")
+        try:
+            current_record = find_current_qualification(
+                repo_root,
+                device=str(reference["device"]),
+                build_id=str(reference["build"]),
+                runtime_digest=current_runtime,
+            )
+        except OtastError as exc:
+            raise ProofError(f"cannot resolve CURRENT qualification record: {exc}") from exc
+        if current_record is None:
+            raise ProofError("runtime-equivalent reuse requires a matching CURRENT qualification record")
+        record_id, record = current_record
+        if record.get("qualified_source_commit") != qualified_source:
+            raise ProofError("runtime-equivalent proof qualified source does not match CURRENT qualification")
+        if record.get("zip_sha256") != qualified_zip:
+            raise ProofError("runtime-equivalent proof qualified ZIP does not match CURRENT qualification")
+        proof_record = equivalence.get("qualification_record_id")
+        if proof_record is not None and proof_record != record_id:
+            raise ProofError("runtime-equivalent proof references the wrong CURRENT qualification record")
 
-    reference = release_reference(repo_root)
     _validate_device_evidence(value.get("device_evidence"), reference)
 
     phases = value.get("phases")
