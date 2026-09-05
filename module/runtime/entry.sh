@@ -66,27 +66,41 @@ _otast_preflight() {
 }
 
 _otast_apply() {
-  local result plan_count retired_count
+  local result plan_count retired_count retirement_failed
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
   _otast_validate_source || return 1
   otast_validate_pif_profiles_current || return 1
   otast_acquire_lock || return 1
   result=0
+  retirement_failed=0
   otast_recover_transactions || result=1
   [ "$result" -ne 0 ] || otast_pif_inspect_legacy_profile_state || result=1
   [ "$result" -ne 0 ] || otast_plan_all || result=1
   [ "$result" -ne 0 ] || otast_plan_strict_runtime_identity || result=1
   plan_count=${OTAST_PLAN_COUNT:-0}
   [ "$result" -ne 0 ] || otast_apply_plan || result=1
-  # Retire legacy profile ownership only after all candidate-managed changes
-  # commit successfully. A planning/apply failure must leave the predecessor's
-  # profile ownership records intact rather than partially migrating state.
-  [ "$result" -ne 0 ] || otast_pif_retire_legacy_profile_state || result=1
+
+  # The managed-file transaction is already committed when otast_apply_plan
+  # returns success. Legacy PIF ownership retirement is a separate, idempotent
+  # metadata migration. If that later step fails, never report the managed-file
+  # transaction itself as rolled back/atomic-failed: leave the validated legacy
+  # record in place, return a distinct retryable status, and let the next Apply
+  # finish only the pending retirement.
+  if [ "$result" -eq 0 ]; then
+    if ! otast_pif_retire_legacy_profile_state; then
+      retirement_failed=1
+      otast_log ERROR 'managed-file Apply committed, but legacy PIF ownership retirement remains pending'
+    fi
+  fi
   retired_count=${OTAST_PIF_RETIRED_COUNT:-0}
   otast_release_lock || result=1
   [ "$result" -eq 0 ] || return 1
   otast_verify_managed || return 1
+  if [ "$retirement_failed" -ne 0 ]; then
+    printf 'MANAGED_COMMIT_COMPLETE_STATE_MIGRATION_PENDING\tretry explicit Apply; managed files are committed\n' >&2
+    return 75
+  fi
   if [ "$plan_count" -gt 0 ]; then
     printf 'REBOOT_REQUIRED\tmanaged files changed; reboot before Verify\n'
   elif [ "$retired_count" -gt 0 ]; then
