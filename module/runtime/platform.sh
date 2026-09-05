@@ -28,13 +28,12 @@ otast_platform_validate_product() {
     *) return 1 ;;
   esac
   [ "$sdk" = "$OTAST_PLATFORM_SDK" ] || return 1
+  [ -n "$fingerprint" ] || return 1
 
-  if [ -n "$fingerprint" ]; then
-    prefix="$OTAST_PLATFORM_FINGERPRINT_VENDOR/$device/$device:$OTAST_PLATFORM_ANDROID_RELEASE/"
-    case "$fingerprint" in
-      "$prefix"*"$OTAST_PLATFORM_FINGERPRINT_SUFFIX") ;;
-      *) return 1 ;;
-    esac
-  fi
+  prefix="$OTAST_PLATFORM_FINGERPRINT_VENDOR/$device/$device:$OTAST_PLATFORM_ANDROID_RELEASE/"
+  case "$fingerprint" in
+    "$prefix"*"$OTAST_PLATFORM_FINGERPRINT_SUFFIX") ;;
+    *) return 1 ;;
+  esac
   return 0
 }
