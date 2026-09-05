@@ -28,8 +28,27 @@ def state_mode_snapshot(adb_root: Path) -> dict[str, int]:
     return result
 
 
+def original_mode_contract(adb_root: Path) -> dict[Path, tuple[bool, int]]:
+    records = adb_root / "otast/records"
+    result: dict[Path, tuple[bool, int]] = {}
+    for state in sorted(records.glob("*.state")):
+        values = dict(
+            line.split("=", 1)
+            for line in state.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+        path = Path(values["path"])
+        exists = values["original_exists"] == "1"
+        mode_text = values["original_mode"]
+        mode = int(mode_text, 8) if mode_text else 0
+        result[path] = (exists, mode)
+    if not result:
+        raise AssertionError("fixture produced no original-mode contract")
+    return result
+
+
 class UpgradeModePreservationTests(unittest.TestCase):
-    def test_upgrade_and_reinstall_preserve_state_and_backup_modes(self) -> None:
+    def test_upgrade_reinstall_and_restore_preserve_state_backup_and_original_modes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="otast-upgrade-mode-") as raw:
             base = Path(raw)
             module_zip = build_module(ROOT, base / "dist")
@@ -41,6 +60,7 @@ class UpgradeModePreservationTests(unittest.TestCase):
             _simulate_managed_boot(adb_root)
             _run(predecessor_entry, adb_root, "verify")
             predecessor_modes = state_mode_snapshot(adb_root)
+            originals = original_mode_contract(adb_root)
 
             candidate_entry = _install_candidate(module_zip, adb_root)
             _run(candidate_entry, adb_root, "preflight")
@@ -51,6 +71,16 @@ class UpgradeModePreservationTests(unittest.TestCase):
             _run(reinstalled_entry, adb_root, "preflight")
             _run(reinstalled_entry, adb_root, "apply")
             self.assertEqual(state_mode_snapshot(adb_root), predecessor_modes)
+
+            _run(reinstalled_entry, adb_root, "restore")
+            for path, (should_exist, expected_mode) in originals.items():
+                with self.subTest(path=str(path)):
+                    if should_exist:
+                        self.assertTrue(path.is_file())
+                        self.assertFalse(path.is_symlink())
+                        self.assertEqual(stat.S_IMODE(path.stat().st_mode), expected_mode)
+                    else:
+                        self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":
