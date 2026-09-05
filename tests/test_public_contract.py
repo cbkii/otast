@@ -111,7 +111,8 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("type: boolean", full_block)
         self.assertIn("default: false", full_block)
         self.assertIn("type: boolean", proof_block)
-        self.assertIn("default: false", proof_block)
+        self.assertIn("default: true", proof_block)
+        self.assertIn("always required for stable", proof_block)
 
     def test_production_release_workflow_is_single_authoritative_job(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -125,11 +126,12 @@ class PublicRepositoryContractTests(unittest.TestCase):
 
         for token in (
             "resolve-release-version",
+            "Fresh compatibility target monitor",
             "stamp-release",
             "NEW CANDIDATE SOURCE INTEGRITY: PASS",
             "HOSTED RELEASE INTEGRITY: PASS",
             "scripts/test.sh --full",
-            "FULL VALIDATION: SKIPPED (default)",
+            "FULL VALIDATION: SKIPPED (explicit prerelease fast path)",
             "build-release.sh",
             "verify-release",
             "release-manifest.json",
@@ -177,14 +179,16 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("Hosted draft target does not match manifest source", hosted_block)
         self.assertIn("HOSTED RELEASE INTEGRITY: PASS", hosted_block)
 
-    def test_manual_publish_proof_is_opt_in_but_hosted_integrity_is_not(self) -> None:
+    def test_stable_publish_proof_is_mandatory_and_hosted_integrity_is_always_on(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         input_block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
         proof_block = input_block.split("      physical_proof:\n", 1)[1]
-        self.assertIn("default: false", proof_block)
+        self.assertIn("default: true", proof_block)
         self.assertIn("REQUIRE_PROOF: ${{ inputs.physical_proof }}", workflow)
-        self.assertIn("if [[ $REQUIRE_PROOF == true && $has_proof != true ]]; then", workflow)
+        self.assertIn("PRERELEASE: ${{ steps.version.outputs.prerelease }}", workflow)
+        self.assertIn("$has_proof != true && ($PRERELEASE != true || $REQUIRE_PROOF == true)", workflow)
         self.assertIn("DRAFT READY — PHYSICAL PROOF REQUIRED", workflow)
+        self.assertIn("Stable releases always require the exact Pixel proof", workflow)
         self.assertIn("validate-device-release-proof.py", workflow)
         self.assertIn("printf 'publish=true", workflow)
 
@@ -198,7 +202,10 @@ class PublicRepositoryContractTests(unittest.TestCase):
         self.assertIn("git ls-remote --exit-code --heads", workflow)
         self.assertIn('tools.otastctl --repo-root "$GITHUB_WORKSPACE" build', workflow)
         self.assertIn("validate-zip", workflow)
-        self.assertIn("actions/upload-artifact@v4", workflow)
+        self.assertRegex(
+            workflow,
+            r"uses: actions/upload-artifact@[0-9a-f]{40} # v4",
+        )
         self.assertIn("name: otast-branch-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
         for forbidden in ("gh release", "update.json", "device-proof", "build-release", "verify-release"):
             self.assertNotIn(forbidden, workflow)
