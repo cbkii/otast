@@ -4,6 +4,7 @@ import hashlib
 import re
 import stat
 import zipfile
+import zlib
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
@@ -34,8 +35,15 @@ def digest_entries(entries: Iterable[tuple[str, bytes, int]]) -> str:
         if name in PROVENANCE_ONLY_ZIP_PATHS:
             continue
         posix = PurePosixPath(name)
-        if not name or posix.is_absolute() or ".." in posix.parts or "\\" in name:
-            raise OtastError(f"unsafe runtime-digest path: {name}")
+        canonical = posix.as_posix()
+        if (
+            not name
+            or posix.is_absolute()
+            or ".." in posix.parts
+            or "\\" in name
+            or canonical != name
+        ):
+            raise OtastError(f"unsafe or non-canonical runtime-digest path: {name}")
         if name in seen:
             raise OtastError(f"duplicate runtime-digest path: {name}")
         seen.add(name)
@@ -70,7 +78,9 @@ def runtime_digest_from_zip(path: Path) -> str:
                 seen.add(info.filename)
                 mode = (info.external_attr >> 16) & 0o7777
                 entries.append((info.filename, archive.read(info.filename), mode))
-    except (OSError, zipfile.BadZipFile, KeyError) as exc:
+    except OtastError:
+        raise
+    except (OSError, zipfile.BadZipFile, KeyError, RuntimeError, zlib.error) as exc:
         raise OtastError(f"cannot compute runtime digest from module ZIP: {path}") from exc
     return digest_entries(entries)
 
