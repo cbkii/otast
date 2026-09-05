@@ -177,6 +177,7 @@ See [Public initialization](docs/PUBLIC-INITIALIZATION.md).
 - [Device fixtures](docs/DEVICE-FIXTURES.md)
 - [Restore and recovery](docs/RESTORE-AND-RECOVERY.md)
 - [Development](docs/DEVELOPMENT.md)
+- [Repository governance](docs/REPOSITORY-GOVERNANCE.md)
 - [Release workflow](docs/RELEASE.md)
 - [Security](SECURITY.md)
 
