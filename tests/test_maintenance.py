@@ -38,7 +38,9 @@ class MaintenanceTests(unittest.TestCase):
         self.home.mkdir()
         self.bin.mkdir()
         (self.repo / "pyproject.toml").write_text("[project]\nname='otast-test'\n", encoding="utf-8")
-        (self.repo / "module/module.prop").write_text("version=v1.0.0-rc.3\nversionCode=100003\n", encoding="utf-8")
+        (self.repo / "module/module.prop").write_text(
+            "version=v1.0.0-rc.3\nversionCode=100003\n", encoding="utf-8"
+        )
         shutil.copy2(MAINTENANCE, self.repo / "scripts/otast-maintenance.py")
         shutil.copy2(PLAYBOOK, self.repo / "scripts/otast-playbook.sh")
         shutil.copy2(SAFETY, self.repo / "scripts/otast_safety_guard.py")
@@ -114,7 +116,7 @@ class MaintenanceTests(unittest.TestCase):
                       exit 0
                     fi
                     if [[ $endpoint == repos/Yurii0307/yurikey/compare/* ]]; then
-                      printf '{"status":"ahead","files":[{"filename":".github/workflows/test.yml","status":"modified"}]}\n'
+                      printf '%s\n' '{"status":"ahead","ahead_by":1,"behind_by":0,"total_commits":1,"files":[{"filename":".github/workflows/test.yml","status":"modified"}]}'
                       exit 0
                     fi
                     printf 'unknown endpoint: %s\n' "$endpoint" >&2
@@ -166,7 +168,20 @@ class MaintenanceTests(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(original)
-        return type("Result", (), {"returncode": rc, "stdout": stdout.getvalue(), "stderr": stderr.getvalue()})()
+        return type(
+            "Result",
+            (),
+            {"returncode": rc, "stdout": stdout.getvalue(), "stderr": stderr.getvalue()},
+        )()
+
+    @staticmethod
+    def _load_classifier_module():
+        spec = importlib.util.spec_from_file_location("otast_maintenance_classifier", MAINTENANCE)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
 
     def test_run_tool_preserves_process_geteuid(self) -> None:
         original_geteuid = os.geteuid
@@ -206,14 +221,14 @@ class MaintenanceTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 20)
         self.assertIn("allowance is too low", result.stderr)
-        calls = log.read_text()
-        self.assertNotIn("commits/main", calls)
+        self.assertNotIn("commits/main", log.read_text())
 
-    def test_source_compare_records_exact_changed_paths(self) -> None:
+    def test_source_compare_records_exact_changed_paths_without_local_auth_dependency(self) -> None:
         module = self._load_classifier_module()
         original = os.environ.copy()
+        test_env = self.env(GH_TOKEN="test-token")
         os.environ.clear()
-        os.environ.update(self.env(GH_TOKEN="test-token"))
+        os.environ.update(test_env)
         try:
             result = module.compare_source_paths(
                 "Yurii0307/yurikey", OLD, NEW, {"GH_TOKEN": "test-token"}
@@ -264,7 +279,9 @@ class MaintenanceTests(unittest.TestCase):
             "module_comparison": {"identical": True},
         }
         (review_dir / "review.json").write_text(json.dumps(review), encoding="utf-8")
-        result = self.run_tool("accept", "yurikey", "--review", str(review_dir), FAKE_GH_HEAD=NEW)
+        result = self.run_tool(
+            "accept", "yurikey", "--review", str(review_dir), FAKE_GH_HEAD=NEW
+        )
         self.assertEqual(result.returncode, 20)
         self.assertIn("not acceptance-ready", result.stderr)
 
@@ -352,20 +369,11 @@ class MaintenanceTests(unittest.TestCase):
         self.assertFalse(old_success.exists())
         self.assertTrue(output.exists())
 
-    @staticmethod
-    def _load_classifier_module():
-        spec = importlib.util.spec_from_file_location("otast_maintenance_classifier", MAINTENANCE)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-        return module
-
     def test_review_classifier_accepts_only_docs_only_identical_package(self) -> None:
         module = self._load_classifier_module()
         ready, result, rc, policy = module.classify_review_result(
             {"identical": True},
-            impact_class="DOCS_OR_CI_ONLY",
+            source_impact="DOCS_OR_CI_ONLY",
             source_complete=True,
             active_candidate_compare_rc=0,
             report_rc=0,
@@ -374,7 +382,7 @@ class MaintenanceTests(unittest.TestCase):
         self.assertTrue(ready)
         self.assertEqual(result, "DOCS_OR_CI_ONLY")
         self.assertEqual(rc, module.EXIT_OK)
-        self.assertEqual(policy, "AUTO_ACCEPT_DOCS_ONLY_IDENTICAL_PACKAGE")
+        self.assertEqual(policy, "DIAGNOSTIC_SOURCE_PREFLIGHT")
 
         for impact in (
             "PRESERVED_SURFACE_CHANGED",
@@ -387,7 +395,7 @@ class MaintenanceTests(unittest.TestCase):
             with self.subTest(impact=impact):
                 ready, result, rc, policy = module.classify_review_result(
                     {"identical": True},
-                    impact_class=impact,
+                    source_impact=impact,
                     source_complete=True,
                     active_candidate_compare_rc=0,
                     report_rc=0,
@@ -396,21 +404,31 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertFalse(ready)
                 self.assertEqual(result, impact)
                 self.assertEqual(rc, module.EXIT_REVIEW)
-                self.assertEqual(policy, "REVIEW_REQUIRED_FOR_SEMANTIC_IMPACT")
+                self.assertEqual(policy, "REVIEW_REQUIRED")
 
-    def test_review_classifier_fails_closed_when_evidence_fails_or_compare_is_incomplete(self) -> None:
+    def test_review_classifier_fails_closed_for_incomplete_or_failed_evidence(self) -> None:
         module = self._load_classifier_module()
-        for kwargs in (
-            {"source_complete": False, "active_candidate_compare_rc": 0, "report_rc": 0},
-            {"source_complete": True, "active_candidate_compare_rc": 1, "report_rc": 0},
-            {"source_complete": True, "active_candidate_compare_rc": 0, "report_rc": 1},
-        ):
-            with self.subTest(kwargs=kwargs):
+        ready, result, rc, _ = module.classify_review_result(
+            {"identical": True},
+            source_impact="DOCS_OR_CI_ONLY",
+            source_complete=False,
+            active_candidate_compare_rc=0,
+            report_rc=0,
+            preflight_rc=0,
+        )
+        self.assertFalse(ready)
+        self.assertEqual(result, "UNKNOWN_PACKAGE_CHANGE")
+        self.assertEqual(rc, module.EXIT_REVIEW)
+
+        for compare_rc, report_rc in ((1, 0), (0, 1)):
+            with self.subTest(compare_rc=compare_rc, report_rc=report_rc):
                 ready, result, rc, _ = module.classify_review_result(
                     {"identical": True},
-                    impact_class="DOCS_OR_CI_ONLY",
+                    source_impact="DOCS_OR_CI_ONLY",
+                    source_complete=True,
+                    active_candidate_compare_rc=compare_rc,
+                    report_rc=report_rc,
                     preflight_rc=0,
-                    **kwargs,
                 )
                 self.assertFalse(ready)
                 self.assertEqual(result, "VALIDATION_FAILED")
