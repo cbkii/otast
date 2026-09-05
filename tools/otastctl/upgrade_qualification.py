@@ -61,6 +61,18 @@ def _backup_snapshot(adb_root: Path) -> dict[str, str]:
     return {key: value for key, value in _state_snapshot(adb_root).items() if key.startswith("backup:")}
 
 
+def _assert_predecessor_backups_preserved(
+    predecessor: dict[str, str],
+    current: dict[str, str],
+) -> None:
+    for key, digest in predecessor.items():
+        observed = current.get(key)
+        if observed is None:
+            raise OtastError(f"candidate removed predecessor original backup: {key}")
+        if observed != digest:
+            raise OtastError(f"candidate changed predecessor original backup bytes: {key}")
+
+
 def _transaction_count(adb_root: Path) -> int:
     root = adb_root / "otast/transactions"
     return len([path for path in root.glob("*") if path.is_dir() and not path.is_symlink()])
@@ -172,9 +184,6 @@ def _materialize_git_module(repo_root: Path, ref: str, destination_root: Path) -
     except (tarfile.TarError, OSError) as exc:
         raise OtastError(f"cannot materialize published predecessor {ref}: {exc}") from exc
 
-    # build_module needs current provenance registries only to generate its
-    # synthetic release.properties wrapper. They do not alter predecessor
-    # runtime bytes and are excluded from the installed module tree.
     source_compatibility = repo_root / "compatibility"
     if source_compatibility.is_symlink() or not source_compatibility.is_dir():
         raise OtastError("current compatibility registry directory is missing or unsafe")
@@ -230,8 +239,8 @@ def qualify_published_predecessor(
         _simulate_managed_boot(adb_root)
         _run(candidate_entry, adb_root, "verify")
 
-        if _backup_snapshot(adb_root) != predecessor_backups:
-            raise OtastError("candidate replaced original backups created by the published predecessor")
+        candidate_backups = _backup_snapshot(adb_root)
+        _assert_predecessor_backups_preserved(predecessor_backups, candidate_backups)
 
         before_noop = _transaction_count(adb_root)
         second_apply = _run(candidate_entry, adb_root, "apply")
@@ -254,7 +263,8 @@ def qualify_published_predecessor(
         "scenarios": {
             "published_predecessor_preflight_apply_verify": True,
             "candidate_preflight_apply_verify": True,
-            "original_backups_preserved": True,
+            "predecessor_original_backups_preserved": True,
+            "candidate_may_add_new_first_time_backups": len(candidate_backups) >= len(predecessor_backups),
             "second_apply_noop": second_apply.returncode == 0 and after_noop == before_noop,
             "candidate_restore_recovers_pre_otast_bytes": True,
             "managed_state_removed_after_restore": True,
@@ -289,10 +299,6 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
             raise OtastError("predecessor did not create managed state for modules_update")
         before_upgrade = _state_snapshot(adb_root)
 
-        # Replacing a Magisk module removes the generated system.prop from the
-        # old module directory while persistent OTAST records survive. Candidate
-        # Apply must rehydrate that one self-owned file transactionally without
-        # replacing original backups or weakening drift handling for other paths.
         candidate_entry = _install_candidate(module_zip, adb_root)
         _run(candidate_entry, adb_root, "preflight")
         transactions_before = _transaction_count(adb_root)
