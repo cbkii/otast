@@ -3,7 +3,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .util import OtastError
@@ -79,6 +79,7 @@ def load_registry(root: Path) -> dict[str, Any]:
 
 
 def load_platform(root: Path, profile_id: str) -> dict[str, Any]:
+    root = root.resolve()
     registry = load_registry(root)
     platforms = registry.get("platforms")
     if not isinstance(platforms, dict) or profile_id not in platforms:
@@ -89,7 +90,16 @@ def load_platform(root: Path, profile_id: str) -> dict[str, Any]:
     relative = record.get("profile")
     if not isinstance(relative, str) or not relative.startswith("compatibility/platforms/"):
         raise OtastError(f"platform profile path is invalid: {profile_id}")
-    profile = _read_json(root / relative, f"platform profile {profile_id}")
+    candidate = root / relative
+    platform_root = (root / "compatibility/platforms").resolve()
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(platform_root)
+    except (OSError, ValueError) as exc:
+        raise OtastError(f"platform profile path escapes compatibility/platforms: {profile_id}") from exc
+    if candidate.is_symlink() or resolved.is_symlink() or not resolved.is_file():
+        raise OtastError(f"platform profile path is unsafe: {profile_id}")
+    profile = _read_json(resolved, f"platform profile {profile_id}")
     if profile.get("schema_version") != PLATFORM_SCHEMA_VERSION or profile.get("id") != profile_id:
         raise OtastError(f"platform profile metadata mismatch: {profile_id}")
     if profile.get("status") != "SUPPORTED":
@@ -108,6 +118,13 @@ def _require_string_list(value: object, label: str, *, allow_empty: bool = False
     if len(result) != len(set(result)):
         raise OtastError(f"{label} contains duplicates")
     return result
+
+
+def _require_distribution_string(distribution: dict[str, Any], key: str, target_id: str) -> str:
+    value = distribution.get(key)
+    if not isinstance(value, str) or not value or any(ch in value for ch in "\r\n\0"):
+        raise OtastError(f"target distribution field is missing or invalid: {target_id}.{key}")
+    return value
 
 
 def _validate_distribution(target_id: str, record: dict[str, Any], monitor: dict[str, Any]) -> None:
@@ -164,8 +181,17 @@ def _validate_distribution(target_id: str, record: dict[str, Any], monitor: dict
         if not isinstance(ref, str) or not ref:
             raise OtastError(f"branch distribution ref is missing: {target_id}")
     elif source_type == "RELEASE_AND_WORKFLOW_ARTIFACT":
-        if not isinstance(distribution.get("release_ref"), str) or not distribution["release_ref"]:
-            raise OtastError(f"release/workflow distribution release_ref is missing: {target_id}")
+        _require_distribution_string(distribution, "release_ref", target_id)
+        for key in ("reviewed_source_commit", "reviewed_generated_commit"):
+            value = _require_distribution_string(distribution, key, target_id)
+            if SHA1_RE.fullmatch(value) is None:
+                raise OtastError(f"release/workflow distribution commit is invalid: {target_id}.{key}")
+        asset_name = _require_distribution_string(distribution, "release_asset_name", target_id)
+        if PurePosixPath(asset_name).name != asset_name or "/" in asset_name or "\\" in asset_name:
+            raise OtastError(f"release/workflow asset name is unsafe: {target_id}")
+        asset_sha = _require_distribution_string(distribution, "release_asset_sha256", target_id)
+        if SHA256_RE.fullmatch(asset_sha) is None:
+            raise OtastError(f"release/workflow asset SHA-256 is invalid: {target_id}")
 
 
 def validate_registry(root: Path) -> dict[str, object]:
