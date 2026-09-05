@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from tools.otastctl.authority import parse_authority  # noqa: E402
 from tools.otastctl.compatibility import load_platform  # noqa: E402
-from tools.otastctl.qualification import find_current_qualification, registry_provenance  # noqa: E402
+from tools.otastctl.qualification import find_current_qualification  # noqa: E402
 from tools.otastctl.runtime_digest import RUNTIME_DIGEST_ALGORITHM, runtime_digest_from_zip  # noqa: E402
 from tools.otastctl.util import OtastError  # noqa: E402
 
@@ -217,6 +217,26 @@ def _runtime_digest(module_zip: Path) -> str:
         raise ProofError(f"cannot validate module ZIP runtime digest: {exc}") from exc
 
 
+def _embedded_registry_provenance(release_props: dict[str, str]) -> dict[str, object]:
+    try:
+        compatibility_schema = int(release_props["compatibility_registry_schema"])
+        qualification_schema = int(release_props["qualification_registry_schema"])
+    except (KeyError, ValueError) as exc:
+        raise ProofError("embedded registry schema provenance is invalid") from exc
+    if compatibility_schema <= 0 or qualification_schema <= 0:
+        raise ProofError("embedded registry schema provenance must be positive")
+    compatibility_sha = release_props.get("compatibility_registry_sha256", "")
+    qualification_sha = release_props.get("qualification_registry_sha256", "")
+    if SHA256_RE.fullmatch(compatibility_sha) is None or SHA256_RE.fullmatch(qualification_sha) is None:
+        raise ProofError("embedded registry SHA-256 provenance is invalid")
+    return {
+        "compatibility_registry_schema": compatibility_schema,
+        "compatibility_registry_sha256": compatibility_sha,
+        "qualification_registry_schema": qualification_schema,
+        "qualification_registry_sha256": qualification_sha,
+    }
+
+
 def validate_proof(
     proof_path: Path,
     module_zip: Path,
@@ -269,13 +289,15 @@ def validate_proof(
     if release_props.get("runtime_digest_algorithm") != RUNTIME_DIGEST_ALGORITHM or release_props.get("runtime_digest") != current_runtime:
         raise ProofError("embedded runtime digest does not match module ZIP")
 
-    provenance = registry_provenance(repo_root)
+    # The exact candidate ZIP is the provenance authority for the proof. This
+    # prevents a dirty/stale local checkout from stamping or validating unrelated
+    # registry hashes for a bundle built by authoritative GitHub main. The hosted
+    # release workflow independently validates the same embedded provenance against
+    # its checked-out main source before publication.
+    provenance = _embedded_registry_provenance(release_props)
     proof_provenance = value.get("registry_provenance")
     if proof_provenance != provenance:
-        raise ProofError("proof registry provenance does not match current release source")
-    for key, expected in provenance.items():
-        if release_props.get(key) != str(expected):
-            raise ProofError(f"embedded {key} does not match current repository")
+        raise ProofError("proof registry provenance does not match exact candidate ZIP")
 
     qualified_source = value.get("qualified_source_commit")
     qualified_zip = value.get("qualified_zip_sha256")
