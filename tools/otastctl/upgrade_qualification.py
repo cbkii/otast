@@ -56,13 +56,35 @@ def _install_candidate(module_zip: Path, adb_root: Path) -> Path:
     return module_dir / "runtime/entry.sh"
 
 
+def _stamp_synthetic_predecessor(module_prop: Path) -> None:
+    lines: list[str] = []
+    saw_version = False
+    saw_code = False
+    for line in module_prop.read_text(encoding="utf-8").splitlines():
+        if line.startswith("version="):
+            lines.append("version=v0.0.0-upgrade-fixture")
+            saw_version = True
+        elif line.startswith("versionCode="):
+            raw = line.split("=", 1)[1]
+            if not raw.isdigit() or int(raw) <= 1:
+                raise OtastError("candidate versionCode cannot produce a predecessor fixture")
+            lines.append(f"versionCode={int(raw) - 1}")
+            saw_code = True
+        else:
+            lines.append(line)
+    if not saw_version or not saw_code:
+        raise OtastError("candidate module.prop lacks version identity")
+    module_prop.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    module_prop.chmod(0o644)
+
+
 def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]:
     """Exercise managed-state upgrade/reinstall boundaries against a fake Magisk root.
 
-    The predecessor uses the candidate runtime with an older module identity. This
-    intentionally isolates the upgrade contract itself: records/backups, active and
-    staged targets, no-op adoption, reinstall, and fail-closed contradictory state.
-    Runtime-byte changes are qualified separately by the canonical runtime digest.
+    The predecessor uses the candidate runtime with an older synthetic module
+    identity. This isolates the upgrade contract itself: records/backups, active
+    and staged targets, no-op adoption, reinstall, and fail-closed contradictory
+    state. Runtime-byte changes are separately guarded by the canonical digest.
     """
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -71,13 +93,7 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
     with tempfile.TemporaryDirectory(prefix="otast-upgrade-") as raw:
         base = Path(raw)
         adb_root, predecessor_entry, _ = _new_root(base / "managed", module_zip)
-
-        module_prop = adb_root / "modules/otast/module.prop"
-        text = module_prop.read_text(encoding="utf-8")
-        text = text.replace("version=v1.0.3", "version=v1.0.2")
-        text = text.replace("versionCode=10003", "versionCode=10002")
-        module_prop.write_text(text, encoding="utf-8")
-        module_prop.chmod(0o644)
+        _stamp_synthetic_predecessor(adb_root / "modules/otast/module.prop")
 
         _run(predecessor_entry, adb_root, "preflight")
         _run(predecessor_entry, adb_root, "apply")
