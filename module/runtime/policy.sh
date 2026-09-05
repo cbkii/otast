@@ -55,6 +55,40 @@ otast_transform_pif_prop() {
   chmod 0600 "$output" || return 1
 }
 
+_otast_plan_self_runtime_system_prop() {
+  local source path state live original target source_hash
+  source=$1
+  path=$2
+  state=$(_otast_state_path otast-runtime-system-prop) || return 1
+
+  otast_assert_no_symlink_path "$path" || return 1
+  live=$(otast_live_hash "$path") || return 1
+
+  # A Magisk module replacement removes files generated inside the old module
+  # directory. The persistent OTAST transaction records live outside that
+  # directory, so a previously managed system.prop can legitimately be MISSING
+  # immediately after upgrade/reinstall. This narrowly repairs only OTAST's own
+  # generated file when its original state also proves the path did not exist
+  # before OTAST first managed it. Any non-missing byte/mode drift still reaches
+  # the normal transaction classifier and remains a hard stop.
+  if [ "$live" = MISSING ] && [ -f "$state" ] && [ ! -L "$state" ]; then
+    if _otast_validate_record "$state" otast-runtime-system-prop "$path"; then
+      original=$(_otast_state_get "$state" original_exists) || return 1
+      target=$(_otast_state_get "$state" target) || return 1
+      if [ "$original" = 0 ] && [ "$target" = otast ]; then
+        source_hash=$(otast_sha256 "$source") || return 1
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          otast-runtime-system-prop otast "$path" 0644 "$source" "$source_hash" external UPDATE >>"$OTAST_PLAN" || return 1
+        OTAST_PLAN_COUNT=$((OTAST_PLAN_COUNT + 1))
+        otast_log INFO 'OTAST module replacement detected; self-managed system.prop will be transactionally rehydrated'
+        return 0
+      fi
+    fi
+  fi
+
+  otast_plan_add otast-runtime-system-prop otast "$path" 0644 "$source" external ''
+}
+
 otast_plan_runtime_system_prop() {
   local source path
   case "$MODDIR" in
@@ -76,7 +110,7 @@ vendor.boot.vbmeta.device_state=$OTAST_EXPECT_VENDOR_VBMETA_DEVICE_STATE
 vendor.boot.verifiedbootstate=$OTAST_EXPECT_VENDOR_VERIFIED_BOOT_STATE
 EOF_PROP
 ) || return 1
-  otast_plan_add otast-runtime-system-prop otast "$path" 0644 "$source" external ''
+  _otast_plan_self_runtime_system_prop "$source" "$path"
 }
 
 otast_plan_pif_runtime_system_props() {
