@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 from tools.otastctl.build import build_module
 from tools.otastctl.qualification import registry_provenance
@@ -74,6 +76,19 @@ class ReleaseDeviceTests(unittest.TestCase):
                 "vector": {"module": {"id": "vector", "version": "test"}},
                 "inline-hook-invalidate": {"module": {"id": "inline_hook_invalidate", "version": "test"}},
             },
+            "native_runtime_evidence": {
+                "schema_version": 1,
+                "collector": "runtime-compatibility-evidence",
+                "read_only": True,
+                "platform": {
+                    "runtime_page_size": "4096",
+                    "android_sdk": str(reference["sdk"]),
+                },
+                "modules": [
+                    {"module_id": "rezygisk", "status": "AVAILABLE"},
+                    {"module_id": "vector", "status": "AVAILABLE"},
+                ],
+            },
             "root_exposure_attribution": {"result": root_result, "reason": "fixture"},
             "external_acceptance": {
                 "tricky_store_health": "PASS",
@@ -121,6 +136,10 @@ class ReleaseDeviceTests(unittest.TestCase):
         proof.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return proof, module_zip, value
 
+    @staticmethod
+    def write_proof(proof: Path, value: dict[str, object]) -> None:
+        proof.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     def test_device_proof_accepts_exact_runtime_bound_contract(self) -> None:
         module = load_validator()
         with tempfile.TemporaryDirectory() as raw:
@@ -135,7 +154,7 @@ class ReleaseDeviceTests(unittest.TestCase):
             proof, module_zip, expected = self.make_proof(Path(raw))
             value = json.loads(proof.read_text(encoding="utf-8"))
             value["schema_version"] = 2
-            proof.write_text(json.dumps(value) + "\n", encoding="utf-8")
+            self.write_proof(proof, value)
             with self.assertRaises(module.ProofError):
                 module.validate_proof(proof, module_zip, version=str(expected["version"]))
 
@@ -145,9 +164,90 @@ class ReleaseDeviceTests(unittest.TestCase):
             proof, module_zip, expected = self.make_proof(Path(raw))
             value = json.loads(proof.read_text(encoding="utf-8"))
             value["runtime_digest"] = "0" * 64
-            proof.write_text(json.dumps(value) + "\n", encoding="utf-8")
+            self.write_proof(proof, value)
             with self.assertRaises(module.ProofError):
                 module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_device_proof_rejects_wrong_device_identity(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw))
+            value = json.loads(proof.read_text(encoding="utf-8"))
+            value["device_evidence"]["device"]["codename"] = "shiba"
+            self.write_proof(proof, value)
+            with self.assertRaisesRegex(module.ProofError, "codename"):
+                module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_device_proof_rejects_wrong_registry_provenance(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw))
+            value = json.loads(proof.read_text(encoding="utf-8"))
+            value["registry_provenance"]["compatibility_registry_sha256"] = "0" * 64
+            self.write_proof(proof, value)
+            with self.assertRaisesRegex(module.ProofError, "registry provenance"):
+                module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_device_proof_rejects_tampered_zip(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw))
+            with zipfile.ZipFile(module_zip, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("tampered.txt", b"tampered")
+            with self.assertRaises(module.ProofError):
+                module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_runtime_reuse_requires_current_qualification_record(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw))
+            value = json.loads(proof.read_text(encoding="utf-8"))
+            value["evidence_kind"] = "RUNTIME_EQUIVALENT_REUSE"
+            value["runtime_equivalence"] = {
+                "result": "PASS",
+                "qualified_runtime_digest": value["runtime_digest"],
+                "current_runtime_digest": value["runtime_digest"],
+                "ci_equivalence": "PASS",
+            }
+            self.write_proof(proof, value)
+            with mock.patch.object(module, "find_current_qualification", return_value=None):
+                with self.assertRaisesRegex(module.ProofError, "CURRENT qualification"):
+                    module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_runtime_reuse_rejects_wrong_qualified_source_and_zip(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw))
+            value = json.loads(proof.read_text(encoding="utf-8"))
+            value["evidence_kind"] = "RUNTIME_EQUIVALENT_REUSE"
+            value["runtime_equivalence"] = {
+                "result": "PASS",
+                "qualified_runtime_digest": value["runtime_digest"],
+                "current_runtime_digest": value["runtime_digest"],
+                "ci_equivalence": "PASS",
+                "qualification_record_id": "fixture",
+            }
+            self.write_proof(proof, value)
+            record = {
+                "qualified_source_commit": "2" * 40,
+                "zip_sha256": "3" * 64,
+            }
+            with mock.patch.object(module, "find_current_qualification", return_value=("fixture", record)):
+                with self.assertRaisesRegex(module.ProofError, "qualified source"):
+                    module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_release_reference_rejects_empty_security_patch_authority(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            shutil.copytree(ROOT / "compatibility", repo / "compatibility")
+            shutil.copytree(ROOT / "authority", repo / "authority")
+            registry = json.loads((repo / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
+            fixture = repo / str(registry["support_model"]["release_reference"]["authority_fixture"])
+            text = fixture.read_text(encoding="utf-8")
+            fixture.write_text(text.replace("ro.build.version.security_patch=2026-03-05", "ro.build.version.security_patch="), encoding="utf-8")
+            with self.assertRaises(module.ProofError):
+                module.release_reference(repo)
 
     def test_device_proof_accepts_attributed_external_root_findings(self) -> None:
         module = load_validator()
@@ -169,7 +269,7 @@ class ReleaseDeviceTests(unittest.TestCase):
             proof, module_zip, expected = self.make_proof(Path(raw))
             value = json.loads(proof.read_text(encoding="utf-8"))
             value["device_evidence"]["external_acceptance"]["play_integrity"]["strong"] = "FAIL"
-            proof.write_text(json.dumps(value) + "\n", encoding="utf-8")
+            self.write_proof(proof, value)
             with self.assertRaises(module.ProofError):
                 module.validate_proof(proof, module_zip, version=str(expected["version"]))
 
