@@ -15,11 +15,11 @@ import os
 import re
 import selectors
 import shutil
-import time
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -31,6 +31,17 @@ EXIT_ERROR = 20
 SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+SEMANTIC_IMPACTS = {
+    "DOCS_OR_CI_ONLY",
+    "PRESERVED_SURFACE_CHANGED",
+    "NATIVE_DEPENDENCY_CHANGED",
+    "MANAGED_WHOLE_FILE_CHANGED",
+    "STRUCTURE_SENSITIVE_CHANGED",
+    "MODULE_IDENTITY_CHANGED",
+    "UNKNOWN_PACKAGE_CHANGE",
+}
+LEGACY_REVIEW_RESULTS = {"NO_PACKAGE_IMPACT", "PACKAGE_CHANGED"}
+sys.dont_write_bytecode = True
 
 
 class ControlledError(RuntimeError):
@@ -118,9 +129,7 @@ def canonical_target(registry: dict[str, Any], supplied: str) -> tuple[str, dict
                 aliases[str(module_id).lower()] = str(key)
     canonical = aliases.get(supplied.lower())
     if canonical is None:
-        raise ControlledError(
-            f"unknown target {supplied!r}; available: {', '.join(sorted(targets))}"
-        )
+        raise ControlledError(f"unknown target {supplied!r}; available: {', '.join(sorted(targets))}")
     record = targets[canonical]
     if not isinstance(record, dict):
         raise ControlledError(f"target record is invalid: {canonical}")
@@ -265,13 +274,12 @@ def rate_limit(env: dict[str, str]) -> dict[str, Any]:
     core = value.get("resources", {}).get("core") if isinstance(value, dict) else None
     if not isinstance(core, dict):
         raise ControlledError("GitHub rate-limit response has no core resource")
-    result = {
+    return {
         "limit": int(core.get("limit", 0)),
         "remaining": int(core.get("remaining", 0)),
         "used": int(core.get("used", 0)),
         "reset": int(core.get("reset", 0)),
     }
-    return result
 
 
 def local_time_from_epoch(epoch: int) -> str:
@@ -298,6 +306,70 @@ def resolve_commit(repository: str, ref: str, env: dict[str, str]) -> str:
     if not isinstance(sha, str) or SHA_RE.fullmatch(sha) is None:
         raise ControlledError(f"GitHub returned no valid commit SHA for {repository}@{ref}")
     return sha
+
+
+def compare_source_paths(repository: str, base: str, head: str, env: dict[str, str]) -> dict[str, Any]:
+    if SHA_RE.fullmatch(base) is None or SHA_RE.fullmatch(head) is None:
+        raise ControlledError("source comparison requires exact commit SHAs")
+    value = gh_api(f"repos/{repository}/compare/{base}...{head}", env=env, timeout=60)
+    files = value.get("files") if isinstance(value, dict) else None
+    if not isinstance(files, list):
+        raise ControlledError("GitHub compare returned no changed-file list")
+    paths: list[str] = []
+    for item in files:
+        filename = item.get("filename") if isinstance(item, dict) else None
+        if not isinstance(filename, str) or not filename or filename.startswith("/") or ".." in Path(filename).parts:
+            raise ControlledError("GitHub compare returned an unsafe changed path")
+        paths.append(filename)
+    status = str(value.get("status", "unknown")) if isinstance(value, dict) else "unknown"
+    ahead_by = int(value.get("ahead_by", 0)) if isinstance(value, dict) else 0
+    behind_by = int(value.get("behind_by", 0)) if isinstance(value, dict) else 0
+    # The compare endpoint limits its file list. Semantic auto-classification is
+    # only safe when the observed commit is a strict descendant of the reviewed
+    # baseline and the file list is below that boundary. Diverged/behind histories
+    # remain review-required even when the returned first page happens to be small.
+    complete = status == "ahead" and ahead_by > 0 and behind_by == 0 and 0 < len(files) < 300
+    return {
+        "schema_version": 1,
+        "repository": repository,
+        "base": base,
+        "head": head,
+        "status": status,
+        "ahead_by": ahead_by,
+        "behind_by": behind_by,
+        "total_commits": int(value.get("total_commits", 0)) if isinstance(value, dict) else 0,
+        "complete": complete,
+        "changed_paths": sorted(set(paths)),
+    }
+
+
+def classify_source_impact(root: Path, record: dict[str, Any], paths: list[str], complete: bool) -> dict[str, Any]:
+    if not complete or not paths:
+        return {
+            "impact": "UNKNOWN_PACKAGE_CHANGE",
+            "requires_review": True,
+            "paths": [{"path": path, "impact": "UNKNOWN_PACKAGE_CHANGE"} for path in paths],
+            "complete": False,
+        }
+    root_text = str(root)
+    inserted = False
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+        inserted = True
+    try:
+        from tools.otastctl.compatibility import classify_changed_paths
+
+        result = classify_changed_paths(record, paths)
+    except Exception as exc:
+        raise ControlledError(f"semantic target classification failed: {exc}") from exc
+    finally:
+        if inserted:
+            try:
+                sys.path.remove(root_text)
+            except ValueError:
+                pass
+    result["complete"] = True
+    return result
 
 
 def report_dir(root: Path, prefix: str, explicit: str | None = None) -> Path:
@@ -476,7 +548,7 @@ def run_monitor(root: Path, *, output: Path, cleanup: bool, keep: int) -> tuple[
 def report_classification(path: Path) -> tuple[str, bool]:
     candidates = [
         (path / "target-monitor.json", {"SUPPORTED"}),
-        (path / "review.json", {"NO_PACKAGE_IMPACT", "PACKAGE_CHANGED"}),
+        (path / "review.json", SEMANTIC_IMPACTS | LEGACY_REVIEW_RESULTS),
         (path / "maintenance.json", {"PASS"}),
     ]
     for file_path, success_values in candidates:
@@ -534,7 +606,6 @@ def cleanup_reports(
         ordered = sorted(candidates, key=lambda item: item.stat().st_mtime_ns, reverse=True)
         successful = [item for item in ordered if report_classification(item)[1]]
         unsuccessful = [item for item in ordered if not report_classification(item)[1]]
-        # Keep the requested successful history plus the newest failed/unknown run for diagnosis.
         keep_set = set(successful[: max(keep, 0)]) | set(unsuccessful[:1])
         if current_resolved:
             keep_set.add(current_resolved)
@@ -642,37 +713,48 @@ def compare_maps(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]])
             same += 1
         else:
             changed.append({"path": relative, "old": left, "new": right})
-    return {"identical": not added and not removed and not changed, "same": same, "added": added, "removed": removed, "changed": changed}
+    return {
+        "identical": not added and not removed and not changed,
+        "same": same,
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+    }
 
 
 def classify_review_result(
     comparison: dict[str, Any],
     *,
+    source_impact: str,
+    source_complete: bool,
     active_candidate_compare_rc: int,
     report_rc: int,
     preflight_rc: int,
 ) -> tuple[bool, str, int, str]:
-    """Classify immutable upstream-package review evidence.
+    """Combine semantic source impact with immutable module-package evidence.
 
-    An old/new module tree that is byte/mode identical is package-neutral. The
-    staged source tree may not model installer-derived runtime topology (notably
-    TA-UTL's visible ``TA_utl`` source versus hidden ``.TA_utl`` install form),
-    so staged Preflight remains diagnostic in that case rather than a gate.
-
-    Changed package trees always require compatibility review. Comparison/report
-    execution failures remain fail-closed validation errors.
+    Source classification decides *what* changed. Package comparison proves whether
+    a source-only/docs delta actually changed the installable module tree. Only a
+    complete DOCS_OR_CI_ONLY delta with a byte/mode-identical module tree may be
+    accepted automatically. Native and every other runtime-relevant class remain
+    review-required even when current packaging happens to be identical.
     """
-    identical = comparison.get("identical") is True
+    del preflight_rc
     evidence_ok = active_candidate_compare_rc == 0 and report_rc == 0
-
-    if not identical:
-        return False, "PACKAGE_CHANGED", EXIT_REVIEW, "REQUIRED_FOR_CHANGED_PACKAGE"
     if not evidence_ok:
-        return False, "VALIDATION_FAILED", EXIT_ERROR, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE"
-    return True, "NO_PACKAGE_IMPACT", EXIT_OK, "DIAGNOSTIC_ONLY_FOR_IDENTICAL_PACKAGE"
+        return False, "VALIDATION_FAILED", EXIT_ERROR, "DIAGNOSTIC_SOURCE_PREFLIGHT"
+    if not source_complete or source_impact not in SEMANTIC_IMPACTS:
+        return False, "UNKNOWN_PACKAGE_CHANGE", EXIT_REVIEW, "REVIEW_REQUIRED"
+    if source_impact == "DOCS_OR_CI_ONLY":
+        if comparison.get("identical") is True:
+            return True, "DOCS_OR_CI_ONLY", EXIT_OK, "DIAGNOSTIC_SOURCE_PREFLIGHT"
+        return False, "UNKNOWN_PACKAGE_CHANGE", EXIT_REVIEW, "REVIEW_REQUIRED"
+    return False, source_impact, EXIT_REVIEW, "REVIEW_REQUIRED"
 
 
 def review_markdown(value: dict[str, Any]) -> str:
+    impact = value.get("impact_classification", {})
+    source = value.get("source_comparison", {})
     lines = [
         f"# OTAST target review: {value['target']}",
         "",
@@ -681,6 +763,8 @@ def review_markdown(value: dict[str, Any]) -> str:
         f"- Upstream: `{value['repository']}@{value['ref']}`",
         f"- Previously reviewed head: `{value['expected_head']}`",
         f"- Observed head: `{value['observed_head']}`",
+        f"- Semantic impact: `{impact.get('impact', 'UNKNOWN_PACKAGE_CHANGE')}`",
+        f"- Source comparison complete: `{str(source.get('complete', False)).lower()}`",
         f"- Fake root: `{value['fake_root']}`",
         f"- Installer execution: `NEVER_EXECUTED`",
         f"- Module trees identical: `{str(value['module_comparison']['identical']).lower()}`",
@@ -688,6 +772,11 @@ def review_markdown(value: dict[str, Any]) -> str:
         f"- Report status: `{value['report_rc']}`",
         f"- Preflight status: `{value['preflight_rc']}`",
         f"- Preflight policy: `{value['preflight_policy']}`",
+        "",
+        "## Source impact",
+        "",
+        f"- Changed source paths: {len(source.get('changed_paths', []))}",
+        f"- Impact requires review: `{str(impact.get('requires_review', True)).lower()}`",
         "",
         "## Module comparison",
         "",
@@ -699,27 +788,52 @@ def review_markdown(value: dict[str, Any]) -> str:
     if value["acceptance_ready"]:
         lines.extend(["", "## Next", "", f"```bash\notast accept {value['target']}\n```"])
     else:
-        lines.extend(["", "## Next", "", "Do not advance the monitor baseline. Update and validate the compatibility profile/runtime first."])
+        lines.extend(
+            [
+                "",
+                "## Next",
+                "",
+                "Do not advance the monitor baseline. Review the classified surface and update compatibility/runtime qualification as required.",
+            ]
+        )
     return "\n".join(lines) + "\n"
 
 
-def run_review(root: Path, target_arg: str, observed_arg: str | None, fixture_arg: str | None, name_arg: str | None, keep: int) -> tuple[int, dict[str, Any], Path]:
+def run_review(
+    root: Path,
+    target_arg: str,
+    observed_arg: str | None,
+    fixture_arg: str | None,
+    name_arg: str | None,
+    keep: int,
+) -> tuple[int, dict[str, Any], Path]:
     registry = load_registry(root)
     target, record = canonical_target(registry, target_arg)
     repository, ref, expected = monitor_metadata(target, record)
     env = child_token_env()
-    ensure_rate_budget(env, 8)
+    ensure_rate_budget(env, 10)
     observed = observed_arg or resolve_commit(repository, ref, env)
     if SHA_RE.fullmatch(observed) is None:
         raise ControlledError(f"observed SHA is invalid: {observed!r}")
     if observed == expected:
         raise ControlledError(f"{target} is already current at {observed[:12]}; no review is required")
+
     output = report_dir(root, f"target-review-{target}-{observed[:12]}")
     log = output / "review.log"
     print(f"Review output: {output}")
     print(f"Target:        {target}")
     print(f"Expected:      {expected}")
     print(f"Observed:      {observed}")
+
+    source_comparison = compare_source_paths(repository, expected, observed, env)
+    impact = classify_source_impact(
+        root,
+        record,
+        list(source_comparison["changed_paths"]),
+        bool(source_comparison["complete"]),
+    )
+    write_json(output / "source-comparison.json", source_comparison)
+    write_json(output / "impact-classification.json", impact)
 
     old_evidence = fetch_ref_evidence(root, target, expected, env)
     new_evidence = fetch_ref_evidence(root, target, observed, env)
@@ -742,7 +856,16 @@ def run_review(root: Path, target_arg: str, observed_arg: str | None, fixture_ar
         raise ControlledError(f"fake-root reset failed with status {reset.returncode}; log: {log}")
     package = str(new_evidence.get("package", ""))
     materialize = run_command(
-        [sys.executable, str(root / "scripts/upstream-target-package.py"), "materialize", target, package, str(fake_root), "--tree", "modules_update"],
+        [
+            sys.executable,
+            str(root / "scripts/upstream-target-package.py"),
+            "materialize",
+            target,
+            package,
+            str(fake_root),
+            "--tree",
+            "modules_update",
+        ],
         cwd=root,
         env=env,
         timeout=300,
@@ -760,7 +883,6 @@ def run_review(root: Path, target_arg: str, observed_arg: str | None, fixture_ar
         stream=True,
         log_path=log,
     )
-
     report = run_command(
         ["bash", str(root / "scripts/validate-fake-magisk-root.sh"), str(fake_root), "report"],
         cwd=root,
@@ -778,12 +900,14 @@ def run_review(root: Path, target_arg: str, observed_arg: str | None, fixture_ar
 
     acceptance_ready, result_name, rc, preflight_policy = classify_review_result(
         comparison,
+        source_impact=str(impact.get("impact", "UNKNOWN_PACKAGE_CHANGE")),
+        source_complete=bool(source_comparison.get("complete")),
         active_candidate_compare_rc=active_compare.returncode,
         report_rc=report.returncode,
         preflight_rc=preflight.returncode,
     )
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_utc": utc_now(),
         "result": result_name,
         "acceptance_ready": acceptance_ready,
@@ -792,6 +916,8 @@ def run_review(root: Path, target_arg: str, observed_arg: str | None, fixture_ar
         "ref": ref,
         "expected_head": expected,
         "observed_head": observed,
+        "source_comparison": source_comparison,
+        "impact_classification": impact,
         "fixture": str(fixture),
         "fake_root": str(fake_root),
         "old_evidence": str(old_evidence.get("evidence_dir", "")),
@@ -904,7 +1030,7 @@ def run_accept(root: Path, target_arg: str, review_arg: str | None, keep: int) -
         raise ControlledError(f"cannot read target review: {review_path}: {exc}") from exc
     if review.get("target") != target:
         raise ControlledError("review target does not match requested target")
-    if review.get("acceptance_ready") is not True or review.get("result") != "NO_PACKAGE_IMPACT":
+    if review.get("acceptance_ready") is not True or review.get("result") != "DOCS_OR_CI_ONLY":
         raise ControlledError("review is not acceptance-ready; do not advance the baseline")
     if review.get("expected_head") != expected:
         raise ControlledError("registry baseline changed after this review; run a new review")
@@ -934,13 +1060,14 @@ def run_accept(root: Path, target_arg: str, review_arg: str | None, keep: int) -
         raise ControlledError("git diff --check failed after acceptance; registry was restored")
 
     acceptance = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_utc": utc_now(),
         "result": "ACCEPTED",
         "target": target,
         "from": expected,
         "to": observed,
         "review": str(review_path),
+        "accepted_impact": "DOCS_OR_CI_ONLY",
         "changed_path": f"targets.{target}.monitor.expected_head",
         "post_monitor_result": monitor_result["result"],
         "post_monitor_report": str(monitor_output / "target-monitor.md"),
@@ -951,12 +1078,10 @@ def run_accept(root: Path, target_arg: str, review_arg: str | None, keep: int) -
         cleanup_reports(root, category="target-monitor", current=monitor_output, keep=keep, dry_run=False)
         return EXIT_OK, acceptance
     if monitor_rc == EXIT_REVIEW:
-        # Another target may have moved concurrently. The accepted target remains proven.
         print("REVIEW_REQUIRED: accepted target is current, but another target requires review.", file=sys.stderr)
         return EXIT_REVIEW, acceptance
     print(
-        "STOP: accepted target is current, but another monitor lookup failed; "
-        "inspect the post-monitor report.",
+        "STOP: accepted target is current, but another monitor lookup failed; inspect the post-monitor report.",
         file=sys.stderr,
     )
     return EXIT_ERROR, acceptance
@@ -1058,7 +1183,6 @@ def run_maintenance(root: Path, *, mode: str, audit: bool, device_proof: bool, k
             log_path=log,
         )
         audit_rc = audit_result.returncode
-        # The public-boundary audit already includes the complete repository test suite.
         test = CommandResult(("public-init-audit",), 0 if audit_rc == 0 else audit_rc, "", "")
         mode = "audit(full)"
     else:
@@ -1146,17 +1270,17 @@ def issue_body(item: dict[str, Any], issue_number: int | None = None) -> str:
             "## Required resolution",
             "",
             "1. Retain and inspect the exact immutable upstream source/release evidence.",
-            "2. Compare the previously reviewed and observed module trees, including hashes and modes.",
-            "3. Run fake-root Report and Preflight without executing upstream installers.",
-            "4. Update compatibility/runtime support when the package changed; otherwise use the structured baseline-accept command.",
-            "5. Run `otast maintain --full` and keep all private fixture/evidence paths outside Git.",
-            "6. Open a focused PR containing the evidence summary and tests.",
+            "2. Classify changed source paths using the target impact policy.",
+            "3. Compare the previously reviewed and observed installable module trees, including hashes and modes.",
+            "4. Run fake-root Report and Preflight without executing upstream installers.",
+            "5. Advance the baseline only for a proven `DOCS_OR_CI_ONLY` delta with an identical module tree.",
+            "6. Run `otast maintain --full` and keep all private fixture/evidence paths outside Git.",
             "",
             "## Acceptance criteria",
             "",
-            "- Monitor on the PR head reports the target as `supported`.",
+            "- Monitor on the PR head reports the target as `supported` only after the classified review is accepted.",
             "- Full tests and public-boundary audit pass.",
-            "- Device proof is included when installer-generated or runtime behaviour changed.",
+            "- Device proof is included when installer-generated, native, or runtime behaviour changed.",
             "- The PR body includes `Closes #" + (str(issue_number) if issue_number else "<issue-number>") + "`.",
             "",
             "This issue is reconciled automatically. It closes only after the default branch contains a reviewed matching baseline.",
@@ -1200,24 +1324,49 @@ def sync_issues(report_path: Path, repository: str) -> int:
         if item["status"] == "supported":
             if existing and existing.get("state") == "OPEN":
                 close = run_command(
-                    ["gh", "issue", "close", str(existing["number"]), "--repo", repository, "--comment", "The default branch monitor now reports this target as supported."],
+                    [
+                        "gh",
+                        "issue",
+                        "close",
+                        str(existing["number"]),
+                        "--repo",
+                        repository,
+                        "--comment",
+                        "The default branch monitor now reports this target as supported.",
+                    ],
                     env=env,
                     timeout=45,
                 )
                 if close.returncode != 0:
                     raise ControlledError(f"cannot close issue #{existing['number']}: {(close.stderr or close.stdout).strip()}")
             continue
-        title = f"[OTAST target] {target} upstream review required" if item["status"] == "review-required" else f"[OTAST monitor] {target} lookup failed"
+        title = (
+            f"[OTAST target] {target} upstream review required"
+            if item["status"] == "review-required"
+            else f"[OTAST monitor] {target} lookup failed"
+        )
         if existing:
             number = int(existing["number"])
             body = issue_body(item, number)
-            # Use a temporary body file so the issue body is passed without shell interpolation.
             with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
                 handle.write(body)
                 body_path = Path(handle.name)
             try:
                 edit = run_command(
-                    ["gh", "issue", "edit", str(number), "--repo", repository, "--title", title, "--body-file", str(body_path), "--add-label", "monitor,compatibility,needs-review," + label],
+                    [
+                        "gh",
+                        "issue",
+                        "edit",
+                        str(number),
+                        "--repo",
+                        repository,
+                        "--title",
+                        title,
+                        "--body-file",
+                        str(body_path),
+                        "--add-label",
+                        "monitor,compatibility,needs-review," + label,
+                    ],
                     env=env,
                     timeout=60,
                 )
@@ -1236,7 +1385,19 @@ def sync_issues(report_path: Path, repository: str) -> int:
                 body_path = Path(handle.name)
             try:
                 create = run_command(
-                    ["gh", "issue", "create", "--repo", repository, "--title", title, "--body-file", str(body_path), "--label", "monitor,compatibility,needs-review," + label],
+                    [
+                        "gh",
+                        "issue",
+                        "create",
+                        "--repo",
+                        repository,
+                        "--title",
+                        title,
+                        "--body-file",
+                        str(body_path),
+                        "--label",
+                        "monitor,compatibility,needs-review," + label,
+                    ],
                     env=env,
                     timeout=60,
                 )
@@ -1245,8 +1406,7 @@ def sync_issues(report_path: Path, repository: str) -> int:
                 match = re.search(r"/issues/(\d+)(?:\s*)$", create.stdout.strip())
                 if match is None:
                     raise ControlledError(
-                        f"created issue for {target}, but could not determine its number from gh output: "
-                        f"{create.stdout.strip()!r}"
+                        f"created issue for {target}, but could not determine its number from gh output: {create.stdout.strip()!r}"
                     )
                 number = int(match.group(1))
                 body_path.write_text(issue_body(item, number), encoding="utf-8")
@@ -1257,8 +1417,7 @@ def sync_issues(report_path: Path, repository: str) -> int:
                 )
                 if edit.returncode != 0:
                     raise ControlledError(
-                        f"created issue #{number}, but could not bind its closure instruction: "
-                        f"{(edit.stderr or edit.stdout).strip()}"
+                        f"created issue #{number}, but could not bind its closure instruction: {(edit.stderr or edit.stdout).strip()}"
                     )
             finally:
                 body_path.unlink(missing_ok=True)
@@ -1272,7 +1431,6 @@ def parser() -> argparse.ArgumentParser:
         epilog="Exit codes: 0=complete/supported, 10=review required, 20=error.",
     )
     sub = result.add_subparsers(dest="command", required=True)
-
     sub.add_parser("doctor", help="Check Termux, repository, gh authentication and API budget.")
 
     monitor = sub.add_parser("monitor", help="Run the authenticated upstream target monitor.")
@@ -1280,14 +1438,14 @@ def parser() -> argparse.ArgumentParser:
     monitor.add_argument("--no-cleanup", action="store_true")
     monitor.add_argument("--keep", type=int, default=3)
 
-    review = sub.add_parser("review", help="Review one observed upstream target change end-to-end.")
+    review = sub.add_parser("review", help="Classify and review one observed upstream target change end-to-end.")
     review.add_argument("target")
     review.add_argument("--observed")
     review.add_argument("--fixture")
     review.add_argument("--name")
     review.add_argument("--keep", type=int, default=3)
 
-    accept = sub.add_parser("accept", help="Advance only monitor.expected_head from a passing no-impact review.")
+    accept = sub.add_parser("accept", help="Advance monitor.expected_head only after a proven docs/CI-only review.")
     accept.add_argument("target")
     accept.add_argument("--review")
     accept.add_argument("--keep", type=int, default=3)

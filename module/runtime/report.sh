@@ -33,5 +33,12 @@ otast_report() {
     done
     [ "$_otast_found" -eq 1 ] || printf 'module=%s path=ABSENT_OR_DISABLED\n' "$_otast_id"
   done
+
+  if [ "${OTAST_PIF_PENDING_RETIREMENTS:-0}" -gt 0 ] 2>/dev/null; then
+    printf 'managed_state_verification=DEFERRED_PIF_PROFILE_OWNERSHIP_RETIREMENT\n'
+    printf 'pif_profile_ownership_pending_records=%s\n' "$OTAST_PIF_PENDING_RETIREMENTS"
+    return 0
+  fi
+  printf 'managed_state_verification=ACTIVE\n'
   otast_verify_managed
 }

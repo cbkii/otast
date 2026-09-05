@@ -10,15 +10,15 @@ on:
         type: string
         default: ''
       full_validation:
-        description: Run full test/fake-root qualification
+        description: Run full test/fake-root qualification (always required for stable)
         required: true
         type: boolean
         default: false
       physical_proof:
-        description: Require physical Pixel proof before publishing
+        description: Require physical Pixel proof for prerelease too (always required for stable)
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -41,13 +41,13 @@ jobs:
           fi
 
       - name: Checkout authoritative main
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: main
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
@@ -55,16 +55,14 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y busybox-static unzip zip
+          sudo apt-get install -y busybox-static unzip zip curl xz-utils
 
-      - name: Install full-validation tools
-        if: inputs.full_validation
+      - name: Install pinned shell validators
         env:
           SHELLCHECK_VERSION: v0.11.0
           SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
         shell: bash
         run: |
-          sudo apt-get install -y curl xz-utils
           archive="$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
           extracted="$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}"
           curl --fail --location --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 300 \
@@ -124,6 +122,33 @@ jobs:
             printf 'exists=false\ndraft=false\npublished=false\nproof_present=false\ntarget=\n' >>"$GITHUB_OUTPUT"
           fi
 
+      - name: Fresh compatibility target monitor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          monitor="$GITHUB_WORKSPACE/reports/release-target-monitor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf -- "$monitor"
+          if python3 scripts/otast-maintenance.py monitor --output "$monitor" --no-cleanup; then
+            printf 'FRESH TARGET MONITOR: SUPPORTED\n' >>"$GITHUB_STEP_SUMMARY"
+          else
+            rc=$?
+            if [[ -f $monitor/target-monitor.md ]]; then
+              cat "$monitor/target-monitor.md" >>"$GITHUB_STEP_SUMMARY"
+            fi
+            printf 'Fresh target/dependency monitor blocked release qualification (status %s).\n' "$rc" >&2
+            exit "$rc"
+          fi
+
+      - name: Upload target-monitor evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-target-monitor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/reports/release-target-monitor-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Generate release notes
         if: steps.existing.outputs.exists != 'true'
         env:
@@ -160,17 +185,17 @@ jobs:
           printf 'NEW CANDIDATE SOURCE INTEGRITY: PASS\n' >>"$GITHUB_STEP_SUMMARY"
 
       - name: Full repository qualification
-        if: steps.existing.outputs.exists != 'true' && inputs.full_validation
+        if: steps.existing.outputs.exists != 'true' && (inputs.full_validation || steps.version.outputs.prerelease != 'true')
         shell: bash
         run: |
           bash scripts/test.sh --full
           printf 'FULL VALIDATION: PASS\n' >>"$GITHUB_STEP_SUMMARY"
 
       - name: Record skipped full qualification
-        if: steps.existing.outputs.exists != 'true' && !inputs.full_validation
+        if: steps.existing.outputs.exists != 'true' && !inputs.full_validation && steps.version.outputs.prerelease == 'true'
         shell: bash
         run: |
-          printf 'FULL VALIDATION: SKIPPED (default)\n' >>"$GITHUB_STEP_SUMMARY"
+          printf 'FULL VALIDATION: SKIPPED (explicit prerelease fast path)\n' >>"$GITHUB_STEP_SUMMARY"
 
       - name: Persist version bump to main
         if: steps.existing.outputs.exists != 'true'
@@ -238,6 +263,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           EXPECTED_CODE: ${{ steps.version.outputs.version_code }}
           REQUIRE_PROOF: ${{ inputs.physical_proof }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         shell: bash
         run: |
           assets="$RUNNER_TEMP/hosted"
@@ -278,11 +304,11 @@ jobs:
               --proof "$assets/$proof" --module-zip "$assets/$zip" --version "$VERSION"
           fi
 
-          if [[ $REQUIRE_PROOF == true && $has_proof != true ]]; then
+          if [[ $has_proof != true && ($PRERELEASE != true || $REQUIRE_PROOF == true) ]]; then
             printf 'publish=false\n' >>"$GITHUB_OUTPUT"
             {
               printf '## DRAFT READY — PHYSICAL PROOF REQUIRED\n\n'
-              printf 'The exact candidate is hosted and verified. Run the Pixel proof flow, then rerun this same Release workflow with the same version and physical proof enabled.\n'
+              printf 'Stable releases always require the exact Pixel proof. Prereleases require it when the workflow input is enabled. Run the Pixel proof flow, then rerun this same Release workflow with the same version.\n'
             } >>"$GITHUB_STEP_SUMMARY"
           else
             printf 'publish=true\n' >>"$GITHUB_OUTPUT"
@@ -380,10 +406,10 @@ jobs:
             printf -- '- Version: `%s`\n' "${VERSION:-unresolved}"
             printf -- '- Workflow status: `%s`\n' "$STATUS"
             printf -- '- Full validation requested: `%s`\n' "$FULL"
-            printf -- '- Physical proof required: `%s`\n' "$PROOF"
+            printf -- '- Physical proof input: `%s` (stable is always required)\n' "$PROOF"
             if [[ $STATUS == success && $PUBLISH == true ]]; then
               printf -- '- Release: `PUBLISHED`\n'
-            elif [[ $STATUS == success && $PROOF == true ]]; then
+            elif [[ $STATUS == success ]]; then
               printf -- '- Release: `DRAFT / AWAITING PHYSICAL PROOF`\n'
             fi
           } >>"$GITHUB_STEP_SUMMARY"

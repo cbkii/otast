@@ -6,12 +6,16 @@ import sys
 from pathlib import Path
 
 from .authority import parse_authority
-from .build import build_module, validate_module_zip
+from .build import build_module, source_runtime_digest, validate_module_zip
 from .capture import safe_extract_capture
 from .fake_root import clone_fixture_root, qualify_fake_root
 from .fixture import reset_fixture, sanitize_fixture
 from .monitor import monitor_targets
 from .privacy import require_public_safe, scan_repository
+from .qualification import (
+    classify_root_exposure_report,
+    validate_qualification_registry,
+)
 from .release import (
     build_release_bundle,
     load_release_list,
@@ -23,6 +27,7 @@ from .release import (
     write_update_metadata,
 )
 from .repository import build_source_zip, validate_source_zip
+from .runtime_digest import RUNTIME_DIGEST_ALGORITHM, runtime_digest_from_zip
 from .util import OtastError, stable_json
 from .verify import verify_repository
 
@@ -51,6 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     verify_release.add_argument("--zip", required=True)
     verify_release.add_argument("--checksum", required=True)
     verify_release.add_argument("--manifest", required=True)
+
+    digest = sub.add_parser("runtime-digest", help="compute the canonical shipping runtime/module payload digest")
+    digest.add_argument("--zip", help="optional built Magisk ZIP; default hashes source module tree")
+
+    sub.add_parser("qualification-validate", help="validate sanitized physical qualification registry/provenance")
+
+    attribution = sub.add_parser("root-attribution", help="classify a read-only root-exposure-doctor report for release qualification")
+    attribution.add_argument("report")
 
     resolve_release = sub.add_parser("resolve-release-version", help="resolve the next or explicitly requested release identity")
     resolve_release.add_argument("--requested", default="", help="explicit vMAJOR.MINOR.PATCH[-prerelease], otherwise automatic")
@@ -122,8 +135,6 @@ def _select_release_input(releases: list[dict[str, object]], requested: str) -> 
     normalized: list[dict[str, object]] = []
     for release in releases:
         if release.get("tag_name") == requested and release.get("draft") is False:
-            # Explicit publication retries may need to finish stable updater
-            # synchronization after GitHub already made the proven release public.
             release = dict(release)
             release["draft"] = True
         normalized.append(release)
@@ -146,6 +157,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "verify-release":
             report = verify_release_bundle(_root(args.zip), _root(args.checksum), _root(args.manifest))
             print(stable_json(report), end="")
+        elif args.command == "runtime-digest":
+            value = runtime_digest_from_zip(_root(args.zip)) if args.zip else source_runtime_digest(repo)
+            print(stable_json({"algorithm": RUNTIME_DIGEST_ALGORITHM, "runtime_digest": value}), end="")
+        elif args.command == "qualification-validate":
+            print(stable_json(validate_qualification_registry(repo)), end="")
+        elif args.command == "root-attribution":
+            report = json.loads(_root(args.report).read_text(encoding="utf-8"))
+            result = classify_root_exposure_report(report)
+            print(stable_json(result), end="")
+            return 0 if result["result"] in {"PASS", "PASS_WITH_ATTRIBUTION"} else 1
         elif args.command == "resolve-release-version":
             print(stable_json(resolve_release_identity_from_repo(repo, requested_version=args.requested)), end="")
         elif args.command == "stamp-release":
@@ -172,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             validate_source_zip(_root(args.zip))
             print("source ZIP validation passed")
         elif args.command == "authority-validate":
-            authority = parse_authority(_root(args.path))
+            authority = parse_authority(_root(args.path), root=repo)
             print(stable_json({"result": "PASS", "sha256": authority.sha256, "values": authority.values}), end="")
         elif args.command == "fake-root":
             output = _root(args.output) if Path(args.output).is_absolute() else (repo / args.output).resolve()
@@ -201,18 +222,12 @@ def main(argv: list[str] | None = None) -> int:
             print(_root(args.destination))
         elif args.command == "fixture-clone":
             module_zip = _root(args.module_zip) if args.module_zip else None
-            report = clone_fixture_root(
-                repo,
-                _root(args.source),
-                _root(args.destination),
-                _root(args.allowed_root),
-                module_zip=module_zip,
-            )
+            report = clone_fixture_root(repo, _root(args.source), _root(args.destination), _root(args.allowed_root), module_zip=module_zip)
             print(stable_json(report), end="")
         else:  # pragma: no cover
             parser.error("unknown command")
         return 0
-    except (OtastError, OSError, ValueError) as exc:
+    except (OtastError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

@@ -1,83 +1,94 @@
 # OTAST maintenance from Termux
 
-This is the normal ongoing maintenance interface for the repository. The commands are sourceable through `scripts/otast-playbook.sh` and are designed to return controlled statuses rather than terminate the interactive Termux shell.
+This is the normal ongoing maintenance interface. Commands are exposed through `scripts/otast-playbook.sh` and return controlled statuses rather than terminating the interactive Termux shell.
 
-## Commands to remember
+## Commands
 
 ```bash
 otast maintain
 ```
 
-Runs the normal end-to-end maintenance sequence:
-
-1. checks Termux and repository prerequisites;
-2. verifies authenticated GitHub CLI access and API allowance;
-3. compares all monitored upstream refs with reviewed baselines;
-4. runs the standard repository tests when all targets are current;
-5. writes structured Markdown/JSON output;
-6. removes superseded transient reports only after a successful run.
+Checks prerequisites/authentication, compares all explicit monitored upstream refs against reviewed baselines, then runs repository validation only when every target is current.
 
 ```bash
 otast review TARGET
 ```
 
-Investigates one changed target using the exact old and observed Git commits. It retains both immutable source archives, compares the module trees including hashes and modes, creates a staged fake root, and runs Report and Preflight. It never executes upstream installers.
+Reviews one changed target using exact old/observed commits. It now performs **two independent comparisons** before any baseline may move:
+
+1. GitHub source changed paths are classified by the target's machine-readable impact policy;
+2. retained immutable old/new installable module trees are compared by path/hash/mode.
+
+It then stages the candidate into a fake Magisk root and runs read-only Report/Preflight evidence. Upstream installers are never executed.
 
 ```bash
 otast accept TARGET
 ```
 
-Permitted only after a completed `NO_PACKAGE_IMPACT` review. It updates only:
+Permitted only after a review whose result is `DOCS_OR_CI_ONLY` **and** whose immutable old/new module trees are byte/mode identical. It updates only:
 
 ```text
 targets.<target>.monitor.expected_head
 ```
 
-It deliberately leaves historical `reviewed_sources` provenance unchanged. It then runs an authenticated monitor and restores the original registry automatically if the accepted target is not confirmed.
+Native, preserved, managed, structure-sensitive, module-identity and unknown changes are never automatically accepted.
 
 ```bash
 otast prepush
 ```
 
-Runs the public-boundary audit, device-derived lifecycle proof, and exact-commit qualification. Run it after committing locally and before pushing.
+Runs the public-boundary audit, device-derived lifecycle proof and exact-commit qualification. Run it after committing locally and before pushing release-sensitive work.
 
 ```bash
 otast cleanup --dry-run
 ```
 
-Shows which old transient monitor, review, and maintenance reports would be removed. The automatic cleanup contract never removes device fixtures, fake roots, upstream source evidence, qualification evidence, non-matching report directories, or directories containing `.otast-keep`.
+Shows removable transient monitor/review/maintenance reports. Cleanup never removes private device fixtures, fake roots, retained upstream evidence or `.otast-keep` directories.
 
 ## Exit statuses
 
-The maintenance commands use distinct statuses:
-
 | Status | Meaning |
 |---|---|
-| `0` | Requested workflow completed successfully. |
-| `10` | A valid comparison completed and target review is required. |
-| `20` | Authentication, API, registry, validation, or tooling failure prevented a reliable result. |
+| `0` | Requested workflow completed; monitor is current or a docs/CI-only review is acceptance-ready. |
+| `10` | A reliable comparison completed and compatibility review/qualification is required. |
+| `20` | Authentication, API, registry, evidence or tooling failure prevented a reliable result. |
 
-Status `10` is not a network retry condition and must not be hidden with `|| true`.
+Status `10` is a completed review state, not a network retry condition.
 
-## GitHub authentication
+## Semantic upstream-impact classes
 
-Local monitoring uses `gh api`. Run this once during Termux setup:
+Every changed source path is classified deterministically using the reviewed target record:
 
-```bash
-gh auth login --hostname github.com
-```
+- `DOCS_OR_CI_ONLY` — documentation/workflow/metadata surface only;
+- `PRESERVED_SURFACE_CHANGED` — upstream-owned surface OTAST deliberately preserves;
+- `NATIVE_DEPENDENCY_CHANGED` — Zygisk/native/build-toolchain surface requiring ABI/platform review;
+- `MANAGED_WHOLE_FILE_CHANGED` — a whole-file neutraliser surface changed;
+- `STRUCTURE_SENSITIVE_CHANGED` — an exact-hash/anchor transform surface changed;
+- `MODULE_IDENTITY_CHANGED` — `module.prop`/distribution identity changed;
+- `UNKNOWN_PACKAGE_CHANGE` — changed source cannot be safely classified or source comparison is incomplete.
 
-Check it with:
+Overlapping path globs resolve to the highest-risk matching class. A broad preserved path cannot mask a structure-sensitive writer.
 
-```bash
-otast doctor
-```
+`DOCS_OR_CI_ONLY` is **not** accepted from source classification alone. The installable module tree must also be byte/mode identical and comparison/Report evidence must succeed. If source appears docs-only but the module tree changes, the review is upgraded to `UNKNOWN_PACKAGE_CHANGE`.
 
-The maintenance script uses an existing `GH_TOKEN`/`GITHUB_TOKEN` when provided. Otherwise it obtains the active credential through `gh auth token` only for child processes. The token is not printed, written to reports, or stored in the repository.
+A `NATIVE_DEPENDENCY_CHANGED` result is always review-required even when the current installable module tree happens to be identical. This is intentional: ABI, page-size, linker and build-toolchain changes require the appropriate platform/native evidence rather than automatic baseline movement.
 
-Before target lookup, the command reads the authenticated core API allowance and stops before making partial comparisons when the remaining budget is too low.
+## Current PIF regression fixture
 
-## Normal target-update sequence
+The repository retains the real source-path delta between:
+
+- reviewed baseline `b994391970b51a2dfefed0e1d420dd6b017756e8`;
+- observed `inject_s` head `2f8199a90a150ad98921438608e1e0e951ba2d5f`.
+
+The changed paths are workflow/Gradle/Zygisk-build surfaces. Because the highest relevant class is native/build dependency, the deterministic result is `NATIVE_DEPENDENCY_CHANGED`. The PIF monitor baseline therefore remains at the reviewed commit until native/platform qualification is completed; it is not silently advanced merely because managed shell writers did not move.
+
+## Distribution identity
+
+A branch head is provenance, not always the installable compatibility boundary. Each managed target records its relevant distribution model: branch build/source, release asset, release/workflow artefact, or branch source with a reviewed version range. Where available this also records release/tag/ref, source commit, asset name/SHA-256, module ID, author, version and versionCode.
+
+This metadata allows maintenance to distinguish a docs-only source commit from an installable package/native change.
+
+## Normal update sequence
 
 ### 1. Detect
 
@@ -85,119 +96,82 @@ Before target lookup, the command reads the authenticated core API allowance and
 otast maintain
 ```
 
-When a target changed, the command exits `10`, writes a target-monitor report, and prints the exact review command.
+A changed target produces `REVIEW_REQUIRED`, exit `10`, and the exact `otast review TARGET` command.
 
 ### 2. Review
 
 ```bash
-otast review yurikey
+otast review playintegrityfix
 ```
 
-Possible results:
-
-- `NO_PACKAGE_IMPACT`: old and new immutable module package trees are byte/mode identical and comparison/Report evidence is valid; staged Preflight is retained as diagnostic evidence when static source topology cannot model installer-derived runtime topology;
-- `PACKAGE_CHANGED`: compatibility/runtime work is required before the baseline can move;
-- `VALIDATION_FAILED`: the generated review log must be investigated.
-
-Review outputs are stored under:
+Review outputs live below:
 
 ```text
 reports/target-review-<target>-<observed-sha>-<timestamp>/
 ```
 
-The output includes `review.json`, `review.md`, `module-comparison.json`, and `review.log`.
+and include:
 
-### 3A. Accept a proven no-impact update
+- `source-comparison.json` — exact changed source paths and compare completeness;
+- `impact-classification.json` — deterministic semantic class per path and overall class;
+- `module-comparison.json` — immutable installable tree hash/mode comparison;
+- `review.json` / `review.md` — combined decision and evidence summary;
+- `review.log` — fake-root/materialisation validation log.
 
-```bash
-otast accept yurikey
-```
+Possible completed semantic results are the seven impact classes above. `VALIDATION_FAILED` is an evidence/tooling error and exits `20`.
 
-This selects the latest passing review for that target, performs a structured single-field update, confirms it through the authenticated monitor, records `acceptance.json`, and prints the resulting Git diff boundary.
-
-### 3B. Handle a changed package
-
-Do not run `accept`. Update the relevant compatibility profile, templates, writer/path rules, tests, and documentation. Obtain device-derived installed-tree proof when installer-generated files or runtime branching prevents static certainty. Then rerun:
+### 3A. Accept a proven docs/CI-only update
 
 ```bash
-otast review TARGET
-otast maintain --full
-otast prepush
+otast accept TARGET
 ```
 
-## Fake-root names
+Acceptance requires `DOCS_OR_CI_ONLY`, complete source comparison, an identical module tree and valid comparison/Report evidence. The structured update changes only `monitor.expected_head`, then immediately re-runs the authenticated monitor. If confirmation fails, the registry is restored.
 
-Commands that accept a fake root now support a safe bare name:
+### 3B. Handle every runtime-relevant class
+
+Do **not** run `accept`. Inspect the exact changed surface and update compatibility contracts/runtime/tests only when justified. Native changes require native/platform evidence; structure-sensitive changes require reviewed source hashes/anchors; module identity/distribution changes require exact artefact review. Then run the standard full validation and physical/device proof where the supported runtime boundary changed.
+
+## Native/runtime evidence
+
+For read-only environment qualification:
 
 ```bash
-otast action review-yurikey-5330b77c0b79 report
+python3 scripts/runtime-compatibility-evidence.py \
+  --output "$HOME/otast-runtime-compatibility.json"
 ```
 
-A bare name resolves only below:
+The collector reads only compatibility-registry dependency IDs and records runtime page size, ABI, Magisk/Zygisk identity, native `.so` inventory and ELF `PT_LOAD` alignment evidence. It does not modify Zygisk Next, Vector, Inline Hook Invalidate, Magisk denylist state or target applications.
 
-```text
-~/.cache/otast/fake-roots
+Detector cleanliness is not an OTAST acceptance condition. Use detector diagnostics for attribution, not as a reason to mutate unrelated module configuration.
+
+## GitHub authentication
+
+Local monitoring uses authenticated `gh api`. Configure once with:
+
+```bash
+gh auth login --hostname github.com
+otast doctor
 ```
 
-Absolute paths are accepted only when the existing safety guard confirms they remain in that same private disposable root.
+The active token is passed only to child processes and is not printed or written to reports. Monitoring checks API allowance before partial comparisons.
 
-## Reports and troubleshooting
+## GitHub Actions issue reconciliation
 
-Every maintenance stage writes a persistent log and machine-readable JSON. A failure summary always includes the report/log path. Successful runs prune superseded transient reports, keeping the newest three by default.
+The target-monitor workflow compares explicit monitored refs and reconciles one deterministic issue per target. A review-required state is an expected monitoring outcome; a monitor/authentication error is not. Issues close only when the default branch contains a reviewed matching baseline.
 
-To preserve a report indefinitely:
+Issue instructions require semantic source classification, immutable installable-tree comparison, fake-root evidence and full validation before a baseline may advance.
+
+## Report retention
+
+Successful workflows retain the requested recent successful history plus the newest failed diagnostic run. Preserve a report indefinitely with:
 
 ```bash
 touch reports/<report-directory>/.otast-keep
 ```
 
-To inspect cleanup without deleting anything:
+Inspect cleanup without deletion with:
 
 ```bash
 otast cleanup --dry-run --keep 3
 ```
-
-## GitHub Actions issue reconciliation
-
-`.github/workflows/target-monitor.yml` runs twice weekly and on manual dispatch. It uses the workflow `GITHUB_TOKEN` with `contents: read` and `issues: write`, uploads the complete monitor report, and reconciles one deterministic issue per target.
-
-A changed or failed target issue contains:
-
-- a stable hidden target marker;
-- expected and observed commits;
-- exact Termux reproduction commands;
-- required evidence and acceptance criteria;
-- the PR closure instruction.
-
-An issue is closed only when a later default-branch monitor reports that target as supported. `REVIEW_REQUIRED` is a successful monitoring outcome and does not fail the workflow; an actual monitor error does.
-
-The workflow raises and maintains issues. It does not itself schedule or operate a ChatGPT agent. A scheduled agent can use the deterministic issue format as its work queue.
-
-## Reliability corrections derived from the initial Termux rollout
-
-The v5 workflow directly addresses these observed failures:
-
-| Earlier failure | Correction |
-|---|---|
-| Kit checks omitted ShellCheck in the packaging environment and successive warnings appeared only on-device. | Installer and self-test run all available shell lint before copying; regression tests also cover the specific retired colour variables, ambiguous assignments, and completion-array construction that failed previously. |
-| Top-level `exit 1` inside a block sourced by `spaste` could close the interactive Termux shell. | User-facing commands return controlled statuses. Documentation no longer requires sourced blocks containing top-level `exit`. |
-| `git diff` showed nothing because the overlay files were untracked. | The installer prints every changed path; the commit procedure uses `git status`, `git add -N` for review, and an explicit file list. |
-| `REVIEW_REQUIRED` looked like an ordinary failure. | Exit `10` is reserved for a completed comparison requiring review; exit `20` means the comparison itself failed. Reports print exact next commands. |
-| `refresh upstream` assumed release assets although Yurikey was monitored by branch commit. | `otast review TARGET` always binds old and observed refs to immutable commit archives and handles branch-monitored targets automatically. |
-| Bare fake-root names were interpreted relative to `$HOME` and then rejected. | Safe bare names now resolve only below `~/.cache/otast/fake-roots`. |
-| A global SHA text replacement stopped because the same historical commit legitimately appeared twice. | `otast accept` performs a structured update of only `targets.<target>.monitor.expected_head` and proves no other JSON value changed. |
-| Monitor requests were unauthenticated and exhausted the low IP-based API allowance. | All monitoring uses authenticated `gh api`, checks the rate budget before lookup, and does not retry deterministic authentication/rate failures. |
-| Final `printf` statements masked the failing command status in sourced blocks. | The command hub propagates the documented status from each maintenance stage. |
-| Reports accumulated and obscured the current result. | A successful run keeps the newest successful history and newest failed diagnostic run, removes older managed reports, and honours `.otast-keep`. |
-| Python contract tests could create `__pycache__` and unrelated untracked files. | Installer syntax checks avoid imports and self-tests set `PYTHONDONTWRITEBYTECODE=1`; a regression test enforces this. |
-| Target-update steps were spread across ad hoc commands and manual path/SHA handling. | `maintain → review → accept → prepush` is now the canonical sequence, with JSON/Markdown evidence at each boundary. |
-| GitHub monitoring automation was not proven to create deterministic agent-readable issues. | The scheduled workflow now reconciles one marker-based issue per target, binds a newly created issue body to its actual issue number, uploads evidence, and treats review-required as an expected workflow result. |
-
-
-## Test-process isolation
-
-Contract tests must never assign directly to functions on shared standard-library
-modules such as `os.geteuid`. Ownership tests derive the expected UID from the
-fixture path owner and use bounded `mock.patch` contexts. The installer self-test
-runs maintenance and playbook contracts together in one process so cross-module
-state leakage is detected before normal maintenance begins.

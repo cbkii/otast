@@ -6,6 +6,8 @@ import zipfile
 from pathlib import Path
 
 from .build import build_module, module_metadata, validate_module_zip
+from .qualification import registry_provenance
+from .runtime_digest import RUNTIME_DIGEST_ALGORITHM, runtime_digest_from_zip, validate_runtime_digest
 from .util import OtastError, atomic_write, sha256_file, stable_json
 
 REPOSITORY = "cbkii/otast"
@@ -13,11 +15,18 @@ UPDATE_JSON_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/main/update.j
 CHANGELOG_URL = f"https://raw.githubusercontent.com/{REPOSITORY}/main/CHANGELOG.md"
 VERSION_RE = re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?$")
 SOURCE_SHA_RE = re.compile(r"^(?:unknown|[0-9a-f]{40}|[0-9a-f]{64})$")
+MANIFEST_SCHEMA_VERSION = 2
 MANIFEST_KEYS = {
     "schema_version",
     "version",
     "version_code",
     "source_commit",
+    "runtime_digest_algorithm",
+    "runtime_digest",
+    "compatibility_registry_schema",
+    "compatibility_registry_sha256",
+    "qualification_registry_schema",
+    "qualification_registry_sha256",
     "zip_filename",
     "zip_sha256",
     "checksum_filename",
@@ -289,25 +298,37 @@ def _load_manifest(manifest_path: Path) -> dict[str, object]:
     if not isinstance(manifest, dict):
         raise OtastError("release manifest must be a JSON object")
     if set(manifest) != MANIFEST_KEYS:
-        raise OtastError("release manifest fields do not match schema 1")
-    if manifest.get("schema_version") != 1:
-        raise OtastError("release manifest schema_version must be 1")
+        raise OtastError(f"release manifest fields do not match schema {MANIFEST_SCHEMA_VERSION}")
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise OtastError(f"release manifest schema_version must be {MANIFEST_SCHEMA_VERSION}")
     return manifest
 
 
-def _manifest_identity(manifest: dict[str, object]) -> tuple[str, int, str]:
+def _manifest_identity(manifest: dict[str, object]) -> tuple[str, int, str, str]:
     version = manifest.get("version")
     version_code = manifest.get("version_code")
     source_commit = manifest.get("source_commit")
+    runtime_digest = manifest.get("runtime_digest")
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise OtastError("release manifest version is invalid")
     if type(version_code) is not int or version_code <= 0:
         raise OtastError("release manifest version_code is invalid")
     if not isinstance(source_commit, str) or not SOURCE_SHA_RE.fullmatch(source_commit):
         raise OtastError("release manifest source_commit is invalid")
+    runtime_digest = validate_runtime_digest(runtime_digest)
+    if manifest.get("runtime_digest_algorithm") != RUNTIME_DIGEST_ALGORITHM:
+        raise OtastError("release manifest runtime digest algorithm mismatch")
     if manifest.get("release_tag") != version:
         raise OtastError("release manifest tag/version mismatch")
-    return version, version_code, source_commit
+    for key in ("compatibility_registry_schema", "qualification_registry_schema"):
+        value = manifest.get(key)
+        if type(value) is not int or value <= 0:
+            raise OtastError(f"release manifest {key} is invalid")
+    for key in ("compatibility_registry_sha256", "qualification_registry_sha256"):
+        value = manifest.get(key)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise OtastError(f"release manifest {key} is invalid")
+    return version, version_code, source_commit, runtime_digest
 
 
 def build_release_bundle(repo_root: Path, output_dir: Path, *, commit_sha: str = "unknown") -> dict[str, object]:
@@ -324,12 +345,17 @@ def build_release_bundle(repo_root: Path, output_dir: Path, *, commit_sha: str =
     calculated = sha256_file(zip_path)
     if digest != calculated:
         raise OtastError("generated checksum does not match generated module ZIP")
+    runtime_digest = runtime_digest_from_zip(zip_path)
+    provenance = registry_provenance(repo_root)
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "version": version,
         "version_code": version_code,
         "source_commit": commit_sha,
+        "runtime_digest_algorithm": RUNTIME_DIGEST_ALGORITHM,
+        "runtime_digest": runtime_digest,
+        **provenance,
         "zip_filename": zip_path.name,
         "zip_sha256": calculated,
         "checksum_filename": checksum_path.name,
@@ -349,8 +375,9 @@ def build_release_bundle(repo_root: Path, output_dir: Path, *, commit_sha: str =
 def verify_release_bundle(zip_path: Path, checksum_path: Path, manifest_path: Path) -> dict[str, object]:
     validate_module_zip(zip_path)
     actual_digest = sha256_file(zip_path)
+    actual_runtime_digest = runtime_digest_from_zip(zip_path)
     manifest = _load_manifest(manifest_path)
-    version, version_code, source_commit = _manifest_identity(manifest)
+    version, version_code, source_commit, runtime_digest = _manifest_identity(manifest)
 
     expected_zip = expected_asset_name(version)
     expected_checksum = f"{expected_zip}.sha256"
@@ -364,6 +391,8 @@ def verify_release_bundle(zip_path: Path, checksum_path: Path, manifest_path: Pa
         raise OtastError("release ZIP SHA-256 does not match checksum sidecar")
     if manifest.get("zip_sha256") != actual_digest:
         raise OtastError("release manifest ZIP SHA-256 mismatch")
+    if runtime_digest != actual_runtime_digest:
+        raise OtastError("release manifest runtime digest mismatch")
 
     try:
         with zipfile.ZipFile(zip_path) as archive:
@@ -383,7 +412,7 @@ def verify_release_bundle(zip_path: Path, checksum_path: Path, manifest_path: Pa
         raise OtastError("embedded module versionCode does not match release manifest")
     if embedded_metadata.get("updateJson") != UPDATE_JSON_URL:
         raise OtastError("embedded module updateJson is not the stable OTAST update channel")
-    if release_properties.get("schema_version") != "1":
+    if release_properties.get("schema_version") != "2":
         raise OtastError("release.properties schema_version mismatch")
     if release_properties.get("version") != version:
         raise OtastError("release.properties version mismatch")
@@ -392,15 +421,33 @@ def verify_release_bundle(zip_path: Path, checksum_path: Path, manifest_path: Pa
     if release_properties.get("commit_sha") != source_commit:
         raise OtastError("release.properties source commit mismatch")
 
+    expected_release_properties = {
+        "runtime_digest_algorithm": str(manifest["runtime_digest_algorithm"]),
+        "runtime_digest": runtime_digest,
+        "compatibility_registry_schema": str(manifest["compatibility_registry_schema"]),
+        "compatibility_registry_sha256": str(manifest["compatibility_registry_sha256"]),
+        "qualification_registry_schema": str(manifest["qualification_registry_schema"]),
+        "qualification_registry_sha256": str(manifest["qualification_registry_sha256"]),
+    }
+    for key, expected in expected_release_properties.items():
+        if release_properties.get(key) != expected:
+            raise OtastError(f"release.properties {key} mismatch")
+
     return {
         "result": "PASS",
         "version": version,
         "version_code": version_code,
         "source_commit": source_commit,
+        "runtime_digest_algorithm": RUNTIME_DIGEST_ALGORITHM,
+        "runtime_digest": runtime_digest,
         "zip_filename": zip_path.name,
         "zip_sha256": actual_digest,
         "checksum_filename": checksum_path.name,
         "manifest_filename": manifest_path.name,
+        "compatibility_registry_schema": manifest["compatibility_registry_schema"],
+        "compatibility_registry_sha256": manifest["compatibility_registry_sha256"],
+        "qualification_registry_schema": manifest["qualification_registry_schema"],
+        "qualification_registry_sha256": manifest["qualification_registry_sha256"],
     }
 
 
@@ -436,7 +483,7 @@ def load_update_metadata(path: Path, *, expected: dict[str, object] | None = Non
 
 def update_metadata_from_manifest(manifest_path: Path) -> dict[str, object]:
     manifest = _load_manifest(manifest_path)
-    version, version_code, _ = _manifest_identity(manifest)
+    version, version_code, _, _ = _manifest_identity(manifest)
     if is_prerelease(version):
         raise OtastError("prerelease manifest cannot update the stable Magisk channel")
     expected_zip = expected_asset_name(version)
