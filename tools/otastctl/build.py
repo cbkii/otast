@@ -38,6 +38,9 @@ RELEASE_PROPERTIES_KEYS = {
     "qualification_registry_schema",
     "qualification_registry_sha256",
 }
+VERSION_RE = re.compile(r"^v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
+HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_RE = re.compile(r"^(?:unknown|[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 def module_metadata(path: Path) -> dict[str, str]:
@@ -54,6 +57,8 @@ def module_metadata(path: Path) -> dict[str, str]:
             raise OtastError(f"module.prop is missing: {key}")
     if values["id"] != "otast":
         raise OtastError("module ID must be otast")
+    if VERSION_RE.fullmatch(values["version"]) is None:
+        raise OtastError("module version must be a canonical vMAJOR.MINOR.PATCH value")
     if not values["versionCode"].isdigit() or int(values["versionCode"]) <= 0:
         raise OtastError("versionCode must be positive")
     return values
@@ -92,10 +97,31 @@ def _parse_release_properties(raw: str) -> dict[str, str]:
     return values
 
 
+def _validate_release_properties(release: dict[str, str], metadata: dict[str, str]) -> None:
+    if release["schema_version"] != "2":
+        raise OtastError("release.properties schema_version mismatch")
+    if release["version"] != metadata["version"] or VERSION_RE.fullmatch(release["version"]) is None:
+        raise OtastError("release.properties version does not match module.prop")
+    if release["version_code"] != metadata["versionCode"] or not release["version_code"].isdigit() or int(release["version_code"]) <= 0:
+        raise OtastError("release.properties version_code does not match module.prop")
+    if COMMIT_RE.fullmatch(release["commit_sha"]) is None:
+        raise OtastError("release.properties commit_sha is invalid")
+    if release["runtime_digest_algorithm"] != RUNTIME_DIGEST_ALGORITHM:
+        raise OtastError("release.properties runtime digest algorithm mismatch")
+    if HEX64_RE.fullmatch(release["runtime_digest"]) is None:
+        raise OtastError("release.properties runtime_digest is invalid")
+    for key in ("compatibility_registry_schema", "qualification_registry_schema"):
+        if not release[key].isdigit() or int(release[key]) <= 0:
+            raise OtastError(f"release.properties {key} is invalid")
+    for key in ("compatibility_registry_sha256", "qualification_registry_sha256"):
+        if HEX64_RE.fullmatch(release[key]) is None:
+            raise OtastError(f"release.properties {key} is invalid")
+
+
 def build_module(repo_root: Path, output_dir: Path, commit_sha: str = "unknown") -> Path:
     module = repo_root / "module"
     metadata = module_metadata(module / "module.prop")
-    if commit_sha != "unknown" and not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit_sha):
+    if COMMIT_RE.fullmatch(commit_sha) is None:
         raise OtastError("commit SHA must be unknown or lowercase 40/64 hex")
     output_dir.mkdir(parents=True, exist_ok=True)
     version = metadata["version"].removeprefix("v")
@@ -138,35 +164,56 @@ def build_module(repo_root: Path, output_dir: Path, commit_sha: str = "unknown")
 def validate_module_zip(path: Path) -> None:
     if path.is_symlink() or not path.is_file():
         raise OtastError(f"module ZIP is missing or unsafe: {path}")
-    with zipfile.ZipFile(path) as archive:
-        names = [info.filename for info in archive.infolist()]
-        if len(names) != len(set(names)):
-            raise OtastError("module ZIP contains duplicate paths")
-        missing = REQUIRED - set(names)
-        if missing:
-            raise OtastError("module ZIP is missing: " + ", ".join(sorted(missing)))
-        if "release.properties" not in names:
-            raise OtastError("module ZIP is missing release.properties")
-        for info in archive.infolist():
-            posix = PurePosixPath(info.filename)
-            if posix.is_absolute() or ".." in posix.parts or "\\" in info.filename:
-                raise OtastError(f"unsafe ZIP path: {info.filename}")
-            mode = (info.external_attr >> 16) & 0o777
-            if info.filename in ENTRYPOINTS and mode != 0o755:
-                raise OtastError(f"wrong executable mode for {info.filename}: {mode:04o}")
-            if info.filename not in ENTRYPOINTS and mode != 0o644:
-                raise OtastError(f"wrong regular-file mode for {info.filename}: {mode:04o}")
-            if info.file_size > 8 * 1024 * 1024:
-                raise OtastError(f"oversized ZIP member: {info.filename}")
-        if archive.testzip() is not None:
-            raise OtastError("module ZIP is corrupt")
-        metadata = archive.read("module.prop").decode("utf-8")
-        if "id=otast\n" not in metadata:
-            raise OtastError("module ZIP has the wrong identity")
-        release = _parse_release_properties(archive.read("release.properties").decode("utf-8"))
-        if release["schema_version"] != "2":
-            raise OtastError("release.properties schema_version mismatch")
-        if release["runtime_digest_algorithm"] != RUNTIME_DIGEST_ALGORITHM:
-            raise OtastError("release.properties runtime digest algorithm mismatch")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = [info.filename for info in archive.infolist()]
+            if len(names) != len(set(names)):
+                raise OtastError("module ZIP contains duplicate paths")
+            missing = REQUIRED - set(names)
+            if missing:
+                raise OtastError("module ZIP is missing: " + ", ".join(sorted(missing)))
+            if "release.properties" not in names:
+                raise OtastError("module ZIP is missing release.properties")
+            for info in archive.infolist():
+                posix = PurePosixPath(info.filename)
+                if posix.is_absolute() or ".." in posix.parts or "\\" in info.filename or posix.as_posix() != info.filename:
+                    raise OtastError(f"unsafe ZIP path: {info.filename}")
+                mode = (info.external_attr >> 16) & 0o777
+                if info.filename in ENTRYPOINTS and mode != 0o755:
+                    raise OtastError(f"wrong executable mode for {info.filename}: {mode:04o}")
+                if info.filename not in ENTRYPOINTS and mode != 0o644:
+                    raise OtastError(f"wrong regular-file mode for {info.filename}: {mode:04o}")
+                if info.file_size > 8 * 1024 * 1024:
+                    raise OtastError(f"oversized ZIP member: {info.filename}")
+            if archive.testzip() is not None:
+                raise OtastError("module ZIP is corrupt")
+            metadata = module_metadata_from_text(archive.read("module.prop").decode("utf-8"))
+            release = _parse_release_properties(archive.read("release.properties").decode("utf-8"))
+            _validate_release_properties(release, metadata)
+    except OtastError:
+        raise
+    except (OSError, UnicodeDecodeError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise OtastError(f"cannot validate module ZIP: {path}") from exc
     if runtime_digest_from_zip(path) != release["runtime_digest"]:
         raise OtastError("release.properties runtime digest does not match module ZIP payload")
+
+
+def module_metadata_from_text(raw: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in raw.splitlines():
+        if not line or "=" not in line:
+            raise OtastError("module.prop contains a malformed line")
+        key, value = line.split("=", 1)
+        if key in values or not key or not value:
+            raise OtastError("module.prop contains duplicate or empty metadata")
+        values[key] = value
+    for key in ("id", "name", "version", "versionCode", "author", "description", "updateJson"):
+        if key not in values:
+            raise OtastError(f"module.prop is missing: {key}")
+    if values["id"] != "otast":
+        raise OtastError("module ID must be otast")
+    if VERSION_RE.fullmatch(values["version"]) is None:
+        raise OtastError("module version must be a canonical vMAJOR.MINOR.PATCH value")
+    if not values["versionCode"].isdigit() or int(values["versionCode"]) <= 0:
+        raise OtastError("versionCode must be positive")
+    return values
