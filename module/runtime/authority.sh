@@ -152,7 +152,14 @@ otast_validate_authority_file() {
 
   OTAST_PIF_IDENTITY_POLICY=$(otast_authority_optional otast.pif.identity preserve) || return 1
   OTAST_TRICKY_PATCH_POLICY=$(otast_authority_optional otast.trickystore.securityPatch preserve) || return 1
-  case "$OTAST_PIF_IDENTITY_POLICY" in preserve|ota) ;; *) otast_stop "invalid PIF identity policy: $OTAST_PIF_IDENTITY_POLICY"; return 1 ;; esac
+  case "$OTAST_PIF_IDENTITY_POLICY" in
+    preserve) ;;
+    ota)
+      otast_stop 'otast.pif.identity=ota is retired: remove this key and let PIF own its custom/fallback attestation profiles'
+      return 1
+      ;;
+    *) otast_stop "invalid PIF identity policy: $OTAST_PIF_IDENTITY_POLICY"; return 1 ;;
+  esac
   case "$OTAST_TRICKY_PATCH_POLICY" in preserve|ota) ;; *) otast_stop "invalid TrickyStore security-patch policy: $OTAST_TRICKY_PATCH_POLICY"; return 1 ;; esac
 
   OTAST_PIF_SPOOF_BUILD=$(otast_authority_optional otast.pif.spoofBuild preserve) || return 1
@@ -170,7 +177,14 @@ otast_validate_authority_file() {
     "$OTAST_PIF_SPOOF_VENDING_BUILD" \
     "$OTAST_PIF_SPOOF_VENDING_SDK" \
     "$OTAST_PIF_DEBUG"; do
-    case "$policy" in true|false|preserve) ;; *) otast_stop "invalid PIF policy: $policy"; return 1 ;; esac
+    case "$policy" in
+      preserve) ;;
+      true|false)
+        otast_stop 'otast.pif.spoof* overrides are retired: remove them and configure PIF through its own WebUI/profile'
+        return 1
+        ;;
+      *) otast_stop "invalid PIF policy: $policy"; return 1 ;;
+    esac
   done
   OTAST_AUTHORITY_SHA256=$(otast_sha256 "$OTAST_AUTHORITY") || return 1
   return 0

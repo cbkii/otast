@@ -2,10 +2,14 @@
   "schema_version": 5,
   "support_model": {
     "device_family": "Google Pixel",
-    "supported_platform_profiles": ["android-16"],
+    "supported_platform_profiles": [
+      "android-16"
+    ],
     "family_architecture": {
       "tier": "DESIGN_COMPATIBLE",
-      "platform_profiles": ["android-16"],
+      "platform_profiles": [
+        "android-16"
+      ],
       "meaning": "The authority/runtime architecture is designed for Google Pixel devices on the reviewed platform profile; this is not physical qualification of an undeclared model or build."
     },
     "undeclared_device_tier": "UNQUALIFIED",
@@ -30,7 +34,9 @@
         "model": "Pixel 9a",
         "platform_profile": "android-16",
         "tier": "DEVICE_VALIDATED",
-        "qualified_builds": ["CP1A.260305.018"],
+        "qualified_builds": [
+          "CP1A.260305.018"
+        ],
         "authority_fixture": "authority/reference-tegu-CP1A.260305.018.ota.prop"
       },
       "shiba": {
@@ -51,13 +57,18 @@
   "compatibility_policy": {
     "whole_file_neutralizers": "when a target has a reviewed version-range contract, module identity + compatible version + safe regular-file/path validation replace brittle source-hash gating; exact original bytes/mode are still restored transactionally",
     "structure_sensitive_transforms": "exact reviewed source hashes plus transformation anchors remain mandatory where OTAST preserves or surgically edits upstream logic",
-    "restore": "every managed file still records and restores exact original bytes and mode transactionally",
+    "restore": "every managed file still records and restores exact original bytes and mode transactionally; PIF custom/fallback profile data is intentionally outside current Restore ownership",
     "impact_classification": "upstream movement is classified by changed source surface; only a docs/CI-only source delta with byte/mode-identical installable module evidence may advance the monitor baseline automatically"
   },
   "conflicts": {
     "legacy-identity-governors": {
       "severity": "HARD_STOP",
-      "module_ids": ["AshLooper", "AshReXcue", "BetterKnownInstalled", "BKI"],
+      "module_ids": [
+        "AshLooper",
+        "AshReXcue",
+        "BetterKnownInstalled",
+        "BKI"
+      ],
       "reason": "These integrations can overlap OTAST-owned identity/property state. Runtime discovery does not traverse them; explicit coexistence is rejected by the established policy boundary."
     }
   },
@@ -65,55 +76,123 @@
     "magisk": {
       "mode": "READ_ONLY",
       "kind": "root_framework",
-      "evidence": ["magisk version/versionCode", "Magisk BusyBox ash runtime availability"],
-      "native_constraints": ["runtime page size", "primary ABI"]
+      "evidence": [
+        "magisk version/versionCode",
+        "Magisk BusyBox ash runtime availability"
+      ],
+      "native_constraints": [
+        "runtime page size",
+        "primary ABI"
+      ]
     },
     "zygisk-next": {
       "mode": "READ_ONLY",
       "kind": "zygisk_implementation",
-      "module_ids": ["rezygisk", "zygisksu"],
-      "evidence": ["module.prop", "bounded zygiskd diagnostics where available"],
-      "native_constraints": ["runtime page size", "ELF LOAD alignment", "ABI"]
+      "module_ids": [
+        "rezygisk",
+        "zygisksu"
+      ],
+      "evidence": [
+        "module.prop",
+        "bounded zygiskd diagnostics where available"
+      ],
+      "native_constraints": [
+        "runtime page size",
+        "ELF LOAD alignment",
+        "ABI"
+      ]
     },
     "vector": {
       "mode": "READ_ONLY",
       "kind": "zygisk_lsposed_environment",
-      "module_ids": ["vector"],
-      "evidence": ["module.prop", "sepolicy.rule hash when present"],
-      "native_constraints": ["runtime page size", "ELF LOAD alignment", "ABI"]
+      "module_ids": [
+        "vector"
+      ],
+      "evidence": [
+        "module.prop",
+        "sepolicy.rule hash when present"
+      ],
+      "native_constraints": [
+        "runtime page size",
+        "ELF LOAD alignment",
+        "ABI"
+      ]
     },
     "inline-hook-invalidate": {
       "mode": "READ_ONLY",
       "kind": "zygisk_module",
-      "module_ids": ["inline_hook_invalidate"],
-      "observed_paths": ["config.txt"],
-      "evidence": ["module.prop", "config.txt metadata and bounded target-process configuration"],
-      "native_constraints": ["runtime page size", "ELF LOAD alignment", "ABI"]
+      "module_ids": [
+        "inline_hook_invalidate"
+      ],
+      "observed_paths": [
+        "config.txt"
+      ],
+      "evidence": [
+        "module.prop",
+        "config.txt metadata and bounded target-process configuration"
+      ],
+      "native_constraints": [
+        "runtime page size",
+        "ELF LOAD alignment",
+        "ABI"
+      ]
     },
     "playintegrityfix-native": {
       "mode": "READ_ONLY",
       "kind": "preserved_native_surface",
       "managed_target": "playintegrityfix",
-      "observed_paths": ["zygisk/**"],
-      "native_constraints": ["runtime page size", "ELF LOAD alignment", "ABI", "native build dependency identity"]
+      "observed_paths": [
+        "zygisk/**"
+      ],
+      "native_constraints": [
+        "runtime page size",
+        "ELF LOAD alignment",
+        "ABI",
+        "native build dependency identity"
+      ]
     }
   },
-  "strict_exclusions": ["AshLooper", "AshReXcue", "BetterKnownInstalled", "BKI"],
+  "strict_exclusions": [
+    "AshLooper",
+    "AshReXcue",
+    "BetterKnownInstalled",
+    "BKI"
+  ],
   "targets": {
     "playintegrityfix": {
-      "target_role": "MANAGED",
+      "target_role": "MANAGED_WRITERS_WITH_EXTERNAL_PROFILE_DATA",
       "compatibility_basis": "STRUCTURE_SENSITIVE_TRANSFORM",
+      "profile_ownership": "PIF_OWNED_MUTABLE_CONFIGURATION",
       "accepted_hashes": {
         "autopif.sh": [
           "1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1",
           "67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a",
           "04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213"
         ],
-        "autopif_ota.sh": ["cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1"],
-        "security_patch.sh": ["a21fa1444ad870ad2ba09cb2a45a0576361df6062369d13f05fbf0db78f29476"]
+        "autopif_ota.sh": [
+          "cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1"
+        ],
+        "security_patch.sh": [
+          "a21fa1444ad870ad2ba09cb2a45a0576361df6062369d13f05fbf0db78f29476"
+        ]
       },
-      "managed_paths": ["autopif.sh", "autopif_ota.sh", "pif.prop", "security_patch.sh", "system.prop"],
-      "module_ids": ["playintegrityfix"],
+      "managed_paths": [
+        "autopif.sh",
+        "autopif_ota.sh",
+        "security_patch.sh",
+        "system.prop"
+      ],
+      "observed_paths": [
+        "/data/adb/pif.prop",
+        "pif.prop"
+      ],
+      "profile_runtime_precedence": [
+        "/data/adb/pif.prop",
+        "/data/adb/modules/playintegrityfix/pif.prop"
+      ],
+      "module_ids": [
+        "playintegrityfix"
+      ],
       "monitor": {
         "repository": "KOWX712/PlayIntegrityFix",
         "branch": "inject_s",
@@ -127,55 +206,153 @@
         "module_id": "playintegrityfix"
       },
       "impact_policy": {
-        "module_identity": ["module/module.prop"],
-        "structure_sensitive": ["module/autopif.sh", "module/autopif_ota.sh", "module/security_patch.sh", "module/pif.prop", "module/system.prop"],
-        "native_dependency": ["zygisk/**", "gradle/**", "build.gradle.kts", "settings.gradle.kts", "gradle.properties", ".gitmodules"],
-        "preserved_surface": ["module/action.sh", "module/post-fs-data.sh", "module/service.sh", "module/common_func.sh", "webui/**", "module/webroot/**"],
-        "docs_ci": [".github/**", "README.md", "CHANGELOG.md", "LICENSE", ".gitattributes", ".gitignore"]
+        "module_identity": [
+          "module/module.prop"
+        ],
+        "structure_sensitive": [
+          "module/autopif.sh",
+          "module/autopif_ota.sh",
+          "module/security_patch.sh",
+          "module/system.prop"
+        ],
+        "native_dependency": [
+          "zygisk/**",
+          "gradle/**",
+          "build.gradle.kts",
+          "settings.gradle.kts",
+          "gradle.properties",
+          ".gitmodules"
+        ],
+        "preserved_surface": [
+          "module/action.sh",
+          "module/post-fs-data.sh",
+          "module/service.sh",
+          "module/common_func.sh",
+          "webui/**",
+          "module/webroot/**",
+          "module/pif.prop"
+        ],
+        "docs_ci": [
+          ".github/**",
+          "README.md",
+          "CHANGELOG.md",
+          "LICENSE",
+          ".gitattributes",
+          ".gitignore"
+        ]
       },
       "observed_only_hashes": {
-        "action.sh": ["245168235a0e36172bf77a58fe0b39b5d3e2faf83c8845d90b404cfca3bc07af"],
-        "post-fs-data.sh": ["aba3ff2dbec9912b616d08a4cc9904ef02bea8a94e75fccfcfbb75cf7f09f5d3"],
-        "service.sh": ["02b171bfce8476dffb97ccaa4d8dbf2ad068d9d4c46ba7032c25cc332f32d09a"]
+        "action.sh": [
+          "245168235a0e36172bf77a58fe0b39b5d3e2faf83c8845d90b404cfca3bc07af"
+        ],
+        "post-fs-data.sh": [
+          "aba3ff2dbec9912b616d08a4cc9904ef02bea8a94e75fccfcfbb75cf7f09f5d3"
+        ],
+        "service.sh": [
+          "02b171bfce8476dffb97ccaa4d8dbf2ad068d9d4c46ba7032c25cc332f32d09a"
+        ]
       },
-      "preserved_paths": ["action.sh", "post-fs-data.sh", "service.sh", "common_func.sh", "webroot/**", "zygisk/**"],
-      "reviewed_sources": [
-        {"commit": "35c7f59191c0bdc96f2024cb3fad8f3fa1a51570", "ref": "inject-s v4.7.1"},
-        {"commit": "ea93222c58f90108cef0c02a11e66bdfdf4b21b6", "ref": "source snapshot"},
-        {"commit": "8b4a00cef9536dc9c8428d392725eacf364605a9", "ref": "inject_s AutoPIF crawler refresh reviewed 2026-08-10"},
-        {"commit": "b994391970b51a2dfefed0e1d420dd6b017756e8", "ref": "inject_s docs/WebUI-only delta reviewed 2026-08-29; managed runtime sources unchanged"}
+      "preserved_paths": [
+        "action.sh",
+        "post-fs-data.sh",
+        "service.sh",
+        "common_func.sh",
+        "webroot/**",
+        "zygisk/**"
       ],
-      "strategy": "separate attestation profile from platform identity: preserve profile fingerprint/model/SECURITY_PATCH by default, force global PIF system.prop SPL to OTA authority, and neutralize the reviewed security_patch.sh global resetprop writer; structure-sensitive PIF transforms remain exact-hash gated"
+      "reviewed_sources": [
+        {
+          "commit": "35c7f59191c0bdc96f2024cb3fad8f3fa1a51570",
+          "ref": "inject-s v4.7.1"
+        },
+        {
+          "commit": "ea93222c58f90108cef0c02a11e66bdfdf4b21b6",
+          "ref": "source snapshot"
+        },
+        {
+          "commit": "8b4a00cef9536dc9c8428d392725eacf364605a9",
+          "ref": "inject_s AutoPIF crawler refresh reviewed 2026-08-10"
+        },
+        {
+          "commit": "b994391970b51a2dfefed0e1d420dd6b017756e8",
+          "ref": "inject_s docs/WebUI-only delta reviewed 2026-08-29; managed runtime sources unchanged"
+        },
+        {
+          "commit": "2f8199a90a150ad98921438608e1e0e951ba2d5f",
+          "ref": "inject_s lifecycle revalidated 2026-09-05; shell/profile lifecycle unchanged from b994391, but native/build dependency movement remains review-required"
+        }
+      ],
+      "strategy": "PIF custom and module-local pif.prop are separate mutable custom/fallback configuration layers and are not OTAST-managed or mirrored. OTAST exact-hash manages only reviewed AutoPIF/self-update/security-patch writer surfaces plus OTA-derived PIF system.prop. AutoPIF profile refresh remains functional; executable self-update is review-gated; profile SPL can never become OTA platform or TrickyStore SPL authority."
     },
     "ta-utl": {
       "target_role": "MANAGED",
       "compatibility_basis": "STRUCTURE_SENSITIVE_TRANSFORM",
       "accepted_hashes": {
-        "prop.sh": ["fffa4d98aafb444594480ccaecbdbc083fee8e860418f86cc55e2422dc7a647f"],
-        "webui/assets/boot_hash-C0kIcwCH.js": ["bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"]
+        "prop.sh": [
+          "fffa4d98aafb444594480ccaecbdbc083fee8e860418f86cc55e2422dc7a647f"
+        ],
+        "webui/assets/boot_hash-C0kIcwCH.js": [
+          "bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"
+        ]
       },
-      "managed_paths": ["prop.sh", "webui/assets/boot_hash-C0kIcwCH.js"],
-      "module_ids": ["TA_utl", ".TA_utl"],
-      "monitor": {"repository": "KOWX712/Tricky-Addon-Update-Target-List", "branch": "main", "expected_head": "cf167849aaa7696972a3c7826ec94294e9e47fce"},
+      "managed_paths": [
+        "prop.sh",
+        "webui/assets/boot_hash-C0kIcwCH.js"
+      ],
+      "module_ids": [
+        "TA_utl",
+        ".TA_utl"
+      ],
+      "monitor": {
+        "repository": "KOWX712/Tricky-Addon-Update-Target-List",
+        "branch": "main",
+        "expected_head": "cf167849aaa7696972a3c7826ec94294e9e47fce"
+      },
       "distribution_identity": {
         "source_type": "RELEASE_AND_WORKFLOW_ARTIFACT",
         "repository": "KOWX712/Tricky-Addon-Update-Target-List",
         "release_ref": "v4.4",
         "reviewed_source_commit": "5d852b6ae087758178c42e56f98a4cde9c696f49",
         "reviewed_generated_commit": "03375e62b0c6e8fee95d401c7b1fd84aa38af24f",
-        "module_ids": ["TA_utl", ".TA_utl"]
+        "module_ids": [
+          "TA_utl",
+          ".TA_utl"
+        ]
       },
       "impact_policy": {
-        "module_identity": ["module.prop", "module/module.prop"],
-        "structure_sensitive": ["prop.sh", "**/prop.sh", "webui/scripts/boot_hash.js", "webui/assets/boot_hash-*.js"],
+        "module_identity": [
+          "module.prop",
+          "module/module.prop"
+        ],
+        "structure_sensitive": [
+          "prop.sh",
+          "**/prop.sh",
+          "webui/scripts/boot_hash.js",
+          "webui/assets/boot_hash-*.js"
+        ],
         "native_dependency": [],
-        "preserved_surface": ["webui/**", "action.sh", "service.sh"],
-        "docs_ci": [".github/**", "README.md", "CHANGELOG.md", "LICENSE"]
+        "preserved_surface": [
+          "webui/**",
+          "action.sh",
+          "service.sh"
+        ],
+        "docs_ci": [
+          ".github/**",
+          "README.md",
+          "CHANGELOG.md",
+          "LICENSE"
+        ]
       },
       "preserved_scope": "all non-vbmeta prop.sh behaviour and all TA UTL WebUI functionality except the reviewed Boot Hash save backend; the Boot Hash field remains readable but its direct save writer is neutralized while OTAST owns VBMeta state",
       "reviewed_sources": [
-        {"commit": "5d852b6ae087758178c42e56f98a4cde9c696f49", "ref": "v4.4 release tag; webui/scripts/boot_hash.js SHA-256 c3ea399eaa9686a5f29f7ff7b0271292f50ea1ec7ac0f994ea6c3adc10ff0ca7"},
-        {"commit": "03375e62b0c6e8fee95d401c7b1fd84aa38af24f", "ref": "v4.4 workflow artifact source; generated boot_hash-C0kIcwCH.js SHA-256 bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"}
+        {
+          "commit": "5d852b6ae087758178c42e56f98a4cde9c696f49",
+          "ref": "v4.4 release tag; webui/scripts/boot_hash.js SHA-256 c3ea399eaa9686a5f29f7ff7b0271292f50ea1ec7ac0f994ea6c3adc10ff0ca7"
+        },
+        {
+          "commit": "03375e62b0c6e8fee95d401c7b1fd84aa38af24f",
+          "ref": "v4.4 workflow artifact source; generated boot_hash-C0kIcwCH.js SHA-256 bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"
+        }
       ],
       "reviewed_ref": "v4.4 source and generated WebUI writer reviewed 2026-08-31; prop.sh and boot_hash-C0kIcwCH.js are both exact-hash managed",
       "strategy": "exact v4.4 transformations: remove the reviewed prop.sh competing VBMeta block and make the reviewed WebUI Boot Hash save backend a no-op; exact hashes remain necessary because these are structure-sensitive surgical transforms"
@@ -184,14 +361,26 @@
       "target_role": "MANAGED",
       "compatibility_basis": "EXACT_REVIEWED_ARTIFACT",
       "implementation": "Tricky Store OSS",
-      "module_ids": ["tricky_store"],
+      "module_ids": [
+        "tricky_store"
+      ],
       "reviewed_version": "v3.1.0 (172-41383f5-release)",
       "version_code": 172,
       "author": "beakthoven",
       "asset_sha256": "f1df8a04d2d020b9c4dda304d22c69ac62be8bdd6187a7bf0a3b94ec2152c9c3",
-      "managed_paths": ["/data/adb/tricky_store/security_patch.txt"],
-      "observed_paths": ["/data/adb/tricky_store/keybox.xml", "/data/adb/tricky_store/target.txt", "/data/adb/tricky_store/tee_status"],
-      "monitor": {"repository": "beakthoven/TrickyStoreOSS", "branch": "main", "expected_head": "19231240c4cfb26beb30d9e32bcbbb9c82e55e7c"},
+      "managed_paths": [
+        "/data/adb/tricky_store/security_patch.txt"
+      ],
+      "observed_paths": [
+        "/data/adb/tricky_store/keybox.xml",
+        "/data/adb/tricky_store/target.txt",
+        "/data/adb/tricky_store/tee_status"
+      ],
+      "monitor": {
+        "repository": "beakthoven/TrickyStoreOSS",
+        "branch": "main",
+        "expected_head": "19231240c4cfb26beb30d9e32bcbbb9c82e55e7c"
+      },
       "distribution_identity": {
         "source_type": "RELEASE_ASSET",
         "repository": "beakthoven/TrickyStoreOSS",
@@ -205,22 +394,58 @@
         "author": "beakthoven"
       },
       "impact_policy": {
-        "module_identity": ["module.prop", "module/module.prop"],
+        "module_identity": [
+          "module.prop",
+          "module/module.prop"
+        ],
         "structure_sensitive": [],
-        "managed_whole_file": ["**/security_patch.txt", "security_patch.txt"],
-        "native_dependency": ["zygisk/**", "jni/**", "src/**", "app/**", "gradle/**", "*.gradle", "*.gradle.kts"],
-        "preserved_surface": ["**/keybox.xml", "**/target.txt", "**/tee_status"],
-        "docs_ci": [".github/**", "README.md", "CHANGELOG.md", "LICENSE"]
+        "managed_whole_file": [
+          "**/security_patch.txt",
+          "security_patch.txt"
+        ],
+        "native_dependency": [
+          "zygisk/**",
+          "jni/**",
+          "src/**",
+          "app/**",
+          "gradle/**",
+          "*.gradle",
+          "*.gradle.kts"
+        ],
+        "preserved_surface": [
+          "**/keybox.xml",
+          "**/target.txt",
+          "**/tee_status"
+        ],
+        "docs_ci": [
+          ".github/**",
+          "README.md",
+          "CHANGELOG.md",
+          "LICENSE"
+        ]
       },
-      "reviewed_sources": [{"commit": "41383f5d4e0d13d86422b49f813c1f106b9e0f3a", "ref": "v3.1.0 release"}],
+      "reviewed_sources": [
+        {
+          "commit": "41383f5d4e0d13d86422b49f813c1f106b9e0f3a",
+          "ref": "v3.1.0 release"
+        }
+      ],
       "strategy": "OTA-derived TrickyStore patch metadata is mandatory; validate exact OSS implementation plus target/keybox readiness before relying on its already-proven RootOfTrust leaf rewrite; never embed or publish physical key material"
     },
     "vbmeta-fixer": {
       "target_role": "MANAGED",
       "compatibility_basis": "EXACT_REVIEWED_ARTIFACT",
-      "managed_templates": {"service.sh": "4a0313507955de8893bc149630b2abb6746b9b6d1c9ca3beb5f3d159730e9365"},
-      "module_ids": ["vbmeta-fixer"],
-      "monitor": {"repository": "Zenlua/Android-VBMeta-Fixer", "branch": "main", "expected_head": "520b25657a4c4473a88afa9c5f24b3f119febd6f"},
+      "managed_templates": {
+        "service.sh": "4a0313507955de8893bc149630b2abb6746b9b6d1c9ca3beb5f3d159730e9365"
+      },
+      "module_ids": [
+        "vbmeta-fixer"
+      ],
+      "monitor": {
+        "repository": "Zenlua/Android-VBMeta-Fixer",
+        "branch": "main",
+        "expected_head": "520b25657a4c4473a88afa9c5f24b3f119febd6f"
+      },
       "distribution_identity": {
         "source_type": "BRANCH_SOURCE",
         "repository": "Zenlua/Android-VBMeta-Fixer",
@@ -229,11 +454,20 @@
         "module_id": "vbmeta-fixer"
       },
       "impact_policy": {
-        "module_identity": ["module.prop"],
-        "structure_sensitive": ["service.sh"],
+        "module_identity": [
+          "module.prop"
+        ],
+        "structure_sensitive": [
+          "service.sh"
+        ],
         "native_dependency": [],
         "preserved_surface": [],
-        "docs_ci": [".github/**", "README.md", "CHANGELOG.md", "LICENSE"]
+        "docs_ci": [
+          ".github/**",
+          "README.md",
+          "CHANGELOG.md",
+          "LICENSE"
+        ]
       },
       "reviewed_commit": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
       "strategy": "neutralize the reviewed upstream runtime writer; preserve bootloader/libavb runtime VBMeta values; this target remains exact-hash gated because no version-range compatibility contract has yet been separately qualified"
@@ -249,30 +483,78 @@
         "service.sh": "c5590491b50fb457ac836db1b887059db2f4a1a15e40aff919bcea16f36f4498",
         "target_txt.sh": "5717af2b823f0da631cce93707400a9f11f746d06f951c2e8e668fac15157e61"
       },
-      "module_ids": ["Yurikey"],
-      "supported_version": {"prefixes": ["3.0.", "v3.0."], "min_version_code": 305, "max_version_code": 399},
-      "monitor": {"repository": "Yurii0307/yurikey", "branch": "main", "expected_head": "5330b77c0b797e580c582d43e91ceae5b450dce6"},
+      "module_ids": [
+        "Yurikey"
+      ],
+      "supported_version": {
+        "prefixes": [
+          "3.0.",
+          "v3.0."
+        ],
+        "min_version_code": 305,
+        "max_version_code": 399
+      },
+      "monitor": {
+        "repository": "Yurii0307/yurikey",
+        "branch": "main",
+        "expected_head": "5330b77c0b797e580c582d43e91ceae5b450dce6"
+      },
       "distribution_identity": {
         "source_type": "BRANCH_SOURCE_WITH_VERSION_RANGE",
         "repository": "Yurii0307/yurikey",
         "ref": "main",
         "reviewed_commit": "5330b77c0b797e580c582d43e91ceae5b450dce6",
         "module_id": "Yurikey",
-        "version_prefixes": ["3.0.", "v3.0."],
-        "version_code_range": [305, 399]
+        "version_prefixes": [
+          "3.0.",
+          "v3.0."
+        ],
+        "version_code_range": [
+          305,
+          399
+        ]
       },
       "impact_policy": {
-        "module_identity": ["module.prop"],
-        "managed_whole_file": ["action.sh", "service.sh", "Yuri/apply.sh", "Yuri/clear-all.sh", "Yuri/keybox.sh", "Yuri/target_txt.sh"],
+        "module_identity": [
+          "module.prop"
+        ],
+        "managed_whole_file": [
+          "action.sh",
+          "service.sh",
+          "Yuri/apply.sh",
+          "Yuri/clear-all.sh",
+          "Yuri/keybox.sh",
+          "Yuri/target_txt.sh"
+        ],
         "structure_sensitive": [],
-        "native_dependency": ["zygisk/**", "jni/**", "gradle/**"],
-        "preserved_surface": ["webroot/**", "README.md"],
-        "docs_ci": [".github/**", "CHANGELOG.md", "LICENSE"]
+        "native_dependency": [
+          "zygisk/**",
+          "jni/**",
+          "gradle/**"
+        ],
+        "preserved_surface": [
+          "webroot/**",
+          "README.md"
+        ],
+        "docs_ci": [
+          ".github/**",
+          "CHANGELOG.md",
+          "LICENSE"
+        ]
       },
       "reviewed_sources": [
-        {"commit": "628d9d8ee9810b97516574475c0e28cdd6d4c026", "ref": "3.0.5"},
-        {"commit": "49d8e04cd256a8ac1df637dd816b112de6de2b36", "ref": "3.0.6-era reviewed source"},
-        {"commit": "5330b77c0b797e580c582d43e91ceae5b450dce6", "ref": "current upstream reviewed 2026-08-29"}
+        {
+          "commit": "628d9d8ee9810b97516574475c0e28cdd6d4c026",
+          "ref": "3.0.5"
+        },
+        {
+          "commit": "49d8e04cd256a8ac1df637dd816b112de6de2b36",
+          "ref": "3.0.6-era reviewed source"
+        },
+        {
+          "commit": "5330b77c0b797e580c582d43e91ceae5b450dce6",
+          "ref": "current upstream reviewed 2026-08-29"
+        }
       ],
       "strategy": "Yurikey 3.0.x whole-file high-risk writers are neutralized by module identity + reviewed version range + safe path checks, not brittle source-file hashes; exact original bytes/mode are preserved for Restore"
     }

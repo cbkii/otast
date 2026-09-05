@@ -125,48 +125,34 @@ EOF_TRICKY
 }
 
 otast_plan_pif() {
-  local dir role source global_planned
+  local dir role
+
+  if [ -e "$ADB_ROOT/pif.prop" ] || [ -L "$ADB_ROOT/pif.prop" ]; then
+    otast_validate_pif_profile_file "$ADB_ROOT/pif.prop" || return 1
+  fi
 
   if [ -e "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] || [ -L "$ADB_ROOT/tricky_store/pif_auto_security_patch" ]; then
     [ -f "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] && [ ! -L "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] || {
       otast_stop 'PIF automatic security-patch flag is not a safe regular file'
       return 1
     }
-    otast_log WARN 'PIF automatic security-patch flag is enabled; OTAST will neutralize its reviewed global writer on Apply'
+    otast_log WARN 'PIF automatic security-patch preference is enabled; OTAST preserves the preference while OTA-derived platform/TrickyStore security-patch authority remains effective'
   fi
 
-  global_planned=0
   for dir in $(otast_effective_module_dirs playintegrityfix); do
     role=$(_otast_role_for_dir "$dir") || return 1
 
-    if [ "$OTAST_PIF_IDENTITY_POLICY" = ota ]; then
-      _otast_plan_transformed_file pif-autopif-$role playintegrityfix "$dir/autopif.sh" 0755 \
-        otast_transform_pif_autopif \
-        '1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1,67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a,04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213' || return 1
+    # pif.prop is deliberately observed-only. Global and module-local profile
+    # identities may differ because PIF uses them as custom and fallback layers.
+    otast_validate_pif_profile_file "$dir/pif.prop" || return 1
 
-      _otast_plan_transformed_file pif-autopif-ota-$role playintegrityfix "$dir/autopif_ota.sh" 0755 \
-        otast_transform_pif_ota \
-        'cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
-    fi
+    _otast_plan_transformed_file pif-autopif-$role playintegrityfix "$dir/autopif.sh" 0755 \
+      otast_transform_pif_autopif \
+      '1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1,67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a,04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213' || return 1
 
-    _otast_plan_transformed_external pif-prop-$role playintegrityfix "$dir/pif.prop" 0644 \
-      otast_transform_pif_prop || return 1
-
-    if [ "$global_planned" -eq 0 ]; then
-      source=$OTAST_TMP_ROOT/source.$$.pif-global-prop
-      if [ -e "$ADB_ROOT/pif.prop" ]; then
-        [ -f "$ADB_ROOT/pif.prop" ] && [ ! -L "$ADB_ROOT/pif.prop" ] || {
-          otast_stop "unsafe global PIF configuration: $ADB_ROOT/pif.prop"
-          return 1
-        }
-        otast_transform_pif_prop "$ADB_ROOT/pif.prop" "$source" || return 1
-      else
-        otast_transform_pif_prop "$dir/pif.prop" "$source" || return 1
-      fi
-      chmod 0600 "$source" || return 1
-      otast_plan_add pif-global-prop playintegrityfix "$ADB_ROOT/pif.prop" 0644 "$source" external '' || return 1
-      global_planned=1
-    fi
+    _otast_plan_transformed_file pif-autopif-ota-$role playintegrityfix "$dir/autopif_ota.sh" 0755 \
+      otast_transform_pif_ota \
+      'cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1' || return 1
 
     _otast_plan_transformed_file pif-security-patch-$role playintegrityfix "$dir/security_patch.sh" 0755 \
       otast_transform_pif_security_patch \

@@ -1,77 +1,94 @@
 # PIF Inject compatibility contract
 
-## Design source
+## Ownership model
 
-This contract is maintained only in `cbkii/otast`. Historical predecessor repositories are deprecated; their earlier findings are relevant only as migration history, not as supported runtime authorities.
+OTAST separates PIF attestation-profile configuration from OTA/platform authority.
 
-Rules:
+PIF Inject intentionally has two profile layers:
 
-1. Prefer preservation and narrow configuration transforms over replacing upstream lifecycle entrypoints.
-2. Preserve update, self-repair, Action, service, post-fs-data, WebUI and process-restart behavior unless a specific writer is proven to conflict.
-3. Preserve the currently selected PIF identity and spoof booleans by default; official OTA identity is source evidence, not an instruction to overwrite a working attestation profile.
-4. Make OTA identity takeover explicit with `otast.pif.identity=ota`.
-5. Preserve unrelated PIF options/comments in `pif.prop`.
-6. Make refresh reconciliation read-only; only an explicit OTAST Apply may mutate reviewed targets.
-7. Disable exact competing writer surfaces and fail closed when their source or anchors drift.
-8. Treat `/data/adb/tricky_store/pif_auto_security_patch` as user configuration, not as the writer itself. A safe regular flag may exist at Preflight; Apply must neutralize the reviewed `security_patch.sh` writer before OTAST considers the stack managed.
+- `/data/adb/pif.prop` — mutable custom/effective profile, owned by PIF/user;
+- `/data/adb/modules/playintegrityfix/pif.prop` — active packaged fallback/default/reset profile, owned by PIF;
+- `/data/adb/modules_update/playintegrityfix/pif.prop` — staged future fallback, not runtime-effective before promotion on reboot.
 
-## Managed surface
+The reviewed native runtime uses global custom first and active module fallback second. Different identity values between these files are expected and are reported as `DISTINCT_EXPECTED`, not OTAST drift.
 
-For the reviewed PIF Inject source lineage at commits `ea93222c58f90108cef0c02a11e66bdfdf4b21b6`, `8b4a00cef9536dc9c8428d392725eacf364605a9`, and current monitored head `b994391970b51a2dfefed0e1d420dd6b017756e8`, OTAST manages:
+OTAST validates profile files for safe regular-file structure, bounded size, unambiguous keys, required fingerprint/security-patch fields and valid known booleans, but it does not transactionally own, mirror, restore or recreate their bytes.
 
-- module and global `pif.prop` — preserve current identity/options by default; optionally align selected fields with OTA authority;
-- `security_patch.sh` — exact wrapper because uncontrolled automatic patch writes conflict with OTAST's cross-module ownership model;
-- `autopif.sh` and `autopif_ota.sh` **only when** `otast.pif.identity=ota` is explicitly selected. In default `preserve` mode these remain upstream/user-owned.
+`otast.pif.identity=ota` is retired. PIF identity/profile selection belongs to PIF. Existing authority files that still request this takeover fail closed with a migration message.
 
-The `8b4a00ce` review changed AutoPIF Pixel download-page selection (reverse-sorted FI/OTA URLs). The later `b994391` monitored delta is documentation/WebUI localization only: no OTAST-managed runtime source or reviewed lifecycle entrypoint changed, so the existing source hashes and transformations remain valid.
+## Managed writer surface
 
-The following are observed or preserved, not patched:
+OTAST continues to manage only reviewed PIF surfaces that can compete with OTA authority:
 
-- `action.sh`;
-- `post-fs-data.sh`;
-- `service.sh`;
-- `common_func.sh`;
-- `classes.dex`;
-- WebUI assets and configuration;
-- Zygisk libraries;
-- uninstall and installer behavior;
-- a safe regular `/data/adb/tricky_store/pif_auto_security_patch` flag. Its existence is preserved across Apply/Restore, while the reviewed script it would invoke is neutralized during OTAST ownership.
+- `autopif.sh` — profile discovery/generation and `/data/adb/pif.prop` refresh remain intact; only the tail that could delete managed `system.prop` or invoke a profile-SPL global writer is adapted;
+- `autopif_ota.sh` — moving-branch executable self-update is replaced by a review gate while OTAST ownership is active;
+- `security_patch.sh` — `--enable`/`--disable` marker semantics remain available, but profile `SECURITY_PATCH` is never promoted into platform or Tricky Store SPL state;
+- PIF `system.prop` — system/vendor SPL follows official OTA authority.
 
-## Policy keys
+`action.sh`, post-fs-data/service lifecycle, WebUI profile editing/fetching, native Zygisk behavior and PIF's profile reset/fallback behavior remain upstream/PIF-owned.
 
-All omitted values default to `preserve`:
+## Refresh and reset behavior
+
+PIF may legitimately change profile data outside OTAST Apply:
+
+- AutoPIF dynamically obtains current Pixel Canary data and writes `/data/adb/pif.prop`;
+- the WebUI GitHub fetch writes the selected device profile to `/data/adb/pif.prop`;
+- WebUI option toggles rewrite the global custom profile;
+- WebUI recovery can refresh the module fallback and delete `/data/adb/pif.prop`, causing native fallback to the active module profile;
+- a PIF module update can replace the module-local packaged fallback.
+
+These are configuration changes, not OTAST managed-file drift.
+
+Opening the reviewed PIF WebUI also invokes its AutoPIF executable updater in the background. OTAST therefore gates `autopif_ota.sh`: profile freshness remains available through the installed reviewed AutoPIF engine and GitHub profile-fetch path, but newly downloaded executable code cannot replace the live reviewed adapter before compatibility review.
+
+## Auto Security Patch preference
+
+`/data/adb/tricky_store/pif_auto_security_patch` remains a PIF/user preference marker. OTAST preserves it.
+
+The adapted `security_patch.sh` keeps marker enable/disable semantics but does not:
+
+- derive Tricky Store patch metadata from PIF profile SPL;
+- create/delete OTAST-owned `system.prop`;
+- resetprop system/vendor SPL from the PIF profile.
+
+Report distinguishes the requested preference from the effective policy:
 
 ```text
-otast.pif.identity=preserve|ota
-otast.pif.spoofBuild=preserve|true|false
-otast.pif.spoofProps=preserve|true|false
-otast.pif.spoofProvider=preserve|true|false
-otast.pif.spoofSignature=preserve|true|false
-otast.pif.spoofVendingBuild=preserve|true|false
-otast.pif.spoofVendingSdk=preserve|true|false
-otast.pif.DEBUG=preserve|true|false
+pif_auto_security_patch_requested=true|false
+pif_auto_security_patch_effective_policy=OTAST_OTA_AUTHORITY
 ```
 
-For a Pixel stack, `preserve` is the safe default because the active PIF profile may intentionally be a different or newer attestation-compatible Pixel profile while `ota.prop` continues to describe the installed official OS image for the live device.
+## Legacy OTAST state migration
 
-## Runtime consequence
+Older/current OTAST builds may have transaction records for:
 
-In `preserve` mode, OTAST does not rewrite AutoPIF selection or the chosen fingerprint/model/security patch. It still prevents known competing security-patch writers from silently changing cross-module state.
+```text
+pif-global-prop
+pif-prop-active
+pif-prop-staged
+```
 
-PIF's own Auto Security Patch toggle is implemented as a marker file. Upstream `autopif.sh` checks that marker and invokes `security_patch.sh`; the reviewed upstream `security_patch.sh` then rewrites TrickyStore patch state and runtime security-patch properties. OTAST therefore governs the writer, not the marker. An already-enabled marker is accepted when safe, and Apply replaces the reviewed writer with the managed no-op form. Restore recovers the exact upstream writer while leaving the user's original marker state intact.
+Explicit Apply validates these exact historical records, their authorised paths and original backup evidence before atomically retiring the records under `retired/pif-profile-ownership-v1/`. Live PIF profile bytes are not rewritten. Original backup evidence is retained for audit. Restore retires the same legacy ownership records before restoring remaining OTAST-managed surfaces, so a PIF profile cannot be rolled back after ownership retirement.
 
-In explicit `ota` mode, an upstream `autopif_ota.sh` refresh may replace `autopif.sh`; OTAST then performs read-only preflight. Until the refreshed source hash and anchors are reviewed and an explicit Apply succeeds, preflight/Verify blocks. OTAST never silently re-patches downloaded source at boot.
+Malformed, path-mismatched or contradictory historical state fails closed.
+
+## Upstream review state
+
+The monitored acceptance baseline remains `b994391970b51a2dfefed0e1d420dd6b017756e8`.
+
+The `inject_s` head `2f8199a90a150ad98921438608e1e0e951ba2d5f` was re-inspected for this lifecycle work. PIF shell/profile lifecycle behavior remains unchanged from the reviewed baseline, but the delta includes native/build dependency changes. It therefore remains review-required and is not promoted merely to make monitoring green.
 
 ## Regression requirements
 
-A PIF change is acceptable only when tests prove:
+Qualification must prove at least:
 
-- upstream Action, post-fs-data and service bytes do not change;
-- unknown `pif.prop` keys and comments survive OTAST's merge;
-- preserve mode leaves the selected identity and spoof booleans unchanged;
-- explicit OTA mode propagates authority fingerprint, model, product, device and security patch;
-- transformation is byte-idempotent;
-- a safe existing `pif_auto_security_patch` marker does not block Preflight merely because the user previously enabled the option;
-- Apply neutralizes the reviewed automatic security-patch writer before managed verification succeeds;
-- unsafe marker types/symlinks, unknown writer hashes or missing anchors fail before mutation;
-- Restore recovers exact upstream originals.
+- global custom and module fallback profiles may differ without drift;
+- runtime precedence is global custom, then active fallback; staged is not current runtime fallback;
+- AutoPIF/WebUI-style profile refresh does not change OTA platform or Tricky Store SPL;
+- global reset/deletion exposes active fallback and OTAST does not recreate the custom profile;
+- PIF module fallback replacement is not rolled back as OTAST drift;
+- AutoPIF executable self-update cannot replace the reviewed live engine;
+- marker enable/disable semantics survive while global SPL writes remain suppressed;
+- legacy managed-profile state is retired without rewriting current PIF data;
+- unsafe profile files, source drift and malformed legacy state fail closed;
+- exact managed script originals remain recoverable by Restore.
