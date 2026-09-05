@@ -264,13 +264,13 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(record["reviewed_sources"][0]["commit"], OLD)
         self.assertTrue((review_dir / "acceptance.json").is_file())
 
-    def test_accept_rejects_native_dependency_review(self) -> None:
+    def test_accept_rejects_native_dependency_review_even_if_marked_ready(self) -> None:
         review_dir = self.repo / f"reports/target-review-yurikey-{NEW[:12]}-native"
         review_dir.mkdir()
         review = {
             "schema_version": 2,
             "result": "NATIVE_DEPENDENCY_CHANGED",
-            "acceptance_ready": False,
+            "acceptance_ready": True,
             "target": "yurikey",
             "expected_head": OLD,
             "observed_head": NEW,
@@ -284,6 +284,8 @@ class MaintenanceTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 20)
         self.assertIn("not acceptance-ready", result.stderr)
+        registry = json.loads((self.repo / "compatibility/supported-targets.json").read_text())
+        self.assertEqual(registry["targets"]["yurikey"]["monitor"]["expected_head"], OLD)
 
     def test_bare_fake_root_name_is_resolved_under_private_root(self) -> None:
         module_path = self.repo / "scripts/otast-maintenance.py"
