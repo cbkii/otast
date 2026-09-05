@@ -181,27 +181,44 @@ otast_pif_fallback_profile_state() {
 }
 
 otast_pif_effective_profile_path() {
-  local path
-  if [ "$(otast_pif_custom_profile_state)" = PRESENT ]; then
-    printf '%s\n' "$ADB_ROOT/pif.prop"
-    return 0
-  fi
+  local path state
+  state=$(otast_pif_custom_profile_state) || return 1
+  case "$state" in
+    PRESENT)
+      printf '%s\n' "$ADB_ROOT/pif.prop"
+      return 0
+      ;;
+    ABSENT) ;;
+    *) return 1 ;;
+  esac
   path=$(otast_pif_active_fallback_path 2>/dev/null) || return 1
   otast_validate_pif_profile_file "$path" >/dev/null 2>&1 || return 1
   printf '%s\n' "$path"
 }
 
 otast_pif_autopif_engine_state() {
-  local path
+  local path begin_count end_count
   path=$ADB_ROOT/modules/playintegrityfix/autopif.sh
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
     printf 'UNAVAILABLE\n'
-  elif [ -f "$path" ] && [ ! -L "$path" ] && grep -Fq "$OTAST_PIF_REFRESH_AUTHORITY_BEGIN" "$path" 2>/dev/null; then
-    printf 'MANAGED_REVIEWED\n'
-  elif [ -f "$path" ] && [ ! -L "$path" ]; then
-    printf 'REVIEWED_APPLY_REQUIRED\n'
-  else
+    return 0
+  fi
+  if [ ! -f "$path" ] || [ -L "$path" ]; then
     printf 'UNSAFE\n'
+    return 0
+  fi
+
+  begin_count=$(grep -Fxc "$OTAST_PIF_REFRESH_AUTHORITY_BEGIN" "$path" 2>/dev/null) || begin_count=0
+  end_count=$(grep -Fxc "$OTAST_PIF_REFRESH_AUTHORITY_END" "$path" 2>/dev/null) || end_count=0
+  if [ "$begin_count" -eq 1 ] 2>/dev/null &&
+     [ "$end_count" -eq 1 ] 2>/dev/null &&
+     ! grep -Eq 'rm[[:space:]]+-f[[:space:]]+.*system\.prop' "$path" 2>/dev/null &&
+     otast_shell_file_valid "$path"; then
+    printf 'MANAGED_REVIEWED\n'
+  elif [ "$begin_count" -gt 0 ] 2>/dev/null || [ "$end_count" -gt 0 ] 2>/dev/null; then
+    printf 'UNSAFE\n'
+  else
+    printf 'REVIEWED_APPLY_REQUIRED\n'
   fi
 }
 
