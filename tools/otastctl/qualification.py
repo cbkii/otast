@@ -22,6 +22,14 @@ RECORD_STATES = {
     "PARTIAL",
 }
 ROOT_ATTRIBUTION_RESULTS = {"PASS", "PASS_WITH_ATTRIBUTION", "FAIL", "INCONCLUSIVE"}
+ROOT_REPORT_ACCEPTED_RESULTS = {"PASS", "PASS_WITH_WARNINGS"}
+ROOT_FINDING_CATEGORIES = {
+    "OTAST-owned semantic inconsistency",
+    "detector/report inconsistency",
+    "unknown/needs investigation",
+    "diagnostic coverage limitation",
+    "another reviewed module's exposure",
+}
 
 
 def _load_json(path: Path, label: str) -> dict[str, Any]:
@@ -58,6 +66,7 @@ def registry_provenance(root: Path) -> dict[str, object]:
 
 
 def validate_qualification_registry(root: Path) -> dict[str, object]:
+    root = root.resolve()
     compatibility = load_registry(root)
     qualification = load_qualification_registry(root)
     if qualification.get("schema_version") != QUALIFICATION_SCHEMA_VERSION:
@@ -89,6 +98,7 @@ def validate_qualification_registry(root: Path) -> dict[str, object]:
         raise OtastError("qualification records must be an object")
 
     current_records = 0
+    authority_root = (root / "authority").resolve()
     for record_id, record in records.items():
         if not isinstance(record_id, str) or not record_id or not isinstance(record, dict):
             raise OtastError("qualification record is malformed")
@@ -108,7 +118,12 @@ def validate_qualification_registry(root: Path) -> dict[str, object]:
         build_id = record.get("build_id")
         if not isinstance(build_id, str) or not build_id:
             raise OtastError(f"qualification build ID is missing: {record_id}")
-        if build_id not in device_record.get("qualified_builds", []):
+        qualified_builds = device_record.get("qualified_builds")
+        if not isinstance(qualified_builds, list) or not all(
+            isinstance(item, str) and item for item in qualified_builds
+        ):
+            raise OtastError(f"compatibility qualified_builds is malformed: {device}")
+        if build_id not in qualified_builds:
             raise OtastError(f"qualification build is not declared for device: {record_id}")
         source = record.get("qualified_source_commit")
         if not isinstance(source, str) or SHA40_RE.fullmatch(source) is None:
@@ -129,12 +144,18 @@ def validate_qualification_registry(root: Path) -> dict[str, object]:
             raise OtastError(f"qualification authority fixture path is invalid: {record_id}")
         authority_path = (root / authority_relative).resolve()
         try:
-            authority_path.relative_to(root.resolve())
+            authority_path.relative_to(authority_root)
         except ValueError as exc:
-            raise OtastError(f"qualification authority fixture escapes repository: {record_id}") from exc
+            raise OtastError(f"qualification authority fixture escapes authority directory: {record_id}") from exc
+        if authority_path == authority_root or authority_path.is_symlink() or not authority_path.is_file():
+            raise OtastError(f"qualification authority fixture is missing or unsafe: {record_id}")
         if sha256_file(authority_path) != record["authority_sha256"]:
             raise OtastError(f"qualification authority SHA-256 mismatch: {record_id}")
-        authority = parse_authority(authority_path, platform_profile=str(record["platform_profile"]))
+        authority = parse_authority(
+            authority_path,
+            platform_profile=str(record["platform_profile"]),
+            root=root,
+        )
         expected_identity = {
             "ro.product.device": record["device"],
             "ro.product.model": record["model"],
@@ -230,19 +251,31 @@ def classify_root_exposure_report(report: object) -> dict[str, object]:
         return {"result": "INCONCLUSIVE", "reason": "root-exposure report is not an object"}
     if report.get("read_only") is not True:
         return {"result": "FAIL", "reason": "root-exposure evidence is not declared read-only"}
-    if report.get("fatal_reason") or report.get("result") == "PARTIAL":
+    report_result = report.get("result")
+    if report.get("fatal_reason") or report_result == "PARTIAL":
         return {"result": "INCONCLUSIVE", "reason": "root-exposure evidence is incomplete"}
+    if report_result == "FAIL":
+        return {"result": "FAIL", "reason": "root-exposure report declares failure"}
+    if report_result not in ROOT_REPORT_ACCEPTED_RESULTS:
+        return {"result": "INCONCLUSIVE", "reason": "root-exposure report result is not accepted"}
 
     findings = report.get("findings")
     if not isinstance(findings, list):
         return {"result": "INCONCLUSIVE", "reason": "root-exposure findings are missing"}
-    categories = {str(item.get("category", "")) for item in findings if isinstance(item, dict)}
+    categories: set[str] = set()
+    for item in findings:
+        if not isinstance(item, dict):
+            return {"result": "INCONCLUSIVE", "reason": "root-exposure finding is malformed"}
+        category = item.get("category")
+        if not isinstance(category, str) or not category or category not in ROOT_FINDING_CATEGORIES:
+            return {"result": "INCONCLUSIVE", "reason": "unrecognized root-exposure finding category"}
+        categories.add(category)
+
     if "OTAST-owned semantic inconsistency" in categories:
         return {"result": "FAIL", "reason": "OTAST-owned exposure or semantic inconsistency detected"}
     if categories & {"detector/report inconsistency", "unknown/needs investigation", "diagnostic coverage limitation"}:
         return {"result": "INCONCLUSIVE", "reason": "detector evidence requires further attribution"}
-    external = categories & {"another reviewed module's exposure"}
-    if external:
+    if "another reviewed module's exposure" in categories:
         return {
             "result": "PASS_WITH_ATTRIBUTION",
             "reason": "findings are attributed to declared external root-stack dependencies; no OTAST mutation is authorized",
