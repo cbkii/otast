@@ -32,6 +32,12 @@ def main() -> int:
             print(f"STOP: cannot read changed-path evidence: {exc}", file=sys.stderr)
             return 20
         if isinstance(value, dict):
+            if value.get("complete") is not True:
+                print(
+                    "STOP: changed-path evidence is incomplete; refusing semantic classification",
+                    file=sys.stderr,
+                )
+                return 20
             value = value.get("changed_paths")
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             print("STOP: changed-path evidence must be a string list or object with changed_paths", file=sys.stderr)
