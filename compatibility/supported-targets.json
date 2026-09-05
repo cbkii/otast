@@ -160,7 +160,7 @@
   ],
   "targets": {
     "playintegrityfix": {
-      "target_role": "MANAGED_WRITERS_WITH_EXTERNAL_PROFILE_DATA",
+      "target_role": "MANAGED",
       "compatibility_basis": "STRUCTURE_SENSITIVE_TRANSFORM",
       "profile_ownership": "PIF_OWNED_MUTABLE_CONFIGURATION",
       "accepted_hashes": {
