@@ -21,17 +21,21 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 MAX_OUTPUT = 2_000_000
 MAX_MODULES = 32
 MAX_NATIVE_LIBS = 128
 MAX_ELF_PREFIX = 262_144
+MAX_MODULE_PROP = 32_768
 MODULE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class EvidenceError(RuntimeError):
     pass
+
+
+def _valid_module_id(value: object) -> bool:
+    return isinstance(value, str) and value not in {".", ".."} and MODULE_ID_RE.fullmatch(value) is not None
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,17 @@ def load_registry(root: Path) -> dict[str, object]:
     return value
 
 
+def _module_id_list(value: object, label: str) -> list[str]:
+    if not isinstance(value, list):
+        raise EvidenceError(f"{label} must be a list")
+    result: list[str] = []
+    for module_id in value:
+        if not _valid_module_id(module_id):
+            raise EvidenceError(f"unsafe {label} module ID: {module_id!r}")
+        result.append(module_id)
+    return result
+
+
 def explicit_native_module_ids(registry: dict[str, object]) -> list[str]:
     result: set[str] = set()
     dependencies = registry.get("observed_dependencies")
@@ -153,20 +168,20 @@ def explicit_native_module_ids(registry: dict[str, object]) -> list[str]:
     for dep_id, raw_record in dependencies.items():
         if not isinstance(raw_record, dict) or raw_record.get("mode") != "READ_ONLY":
             raise EvidenceError(f"observed dependency is not read-only: {dep_id}")
-        for module_id in raw_record.get("module_ids", []):
-            if not isinstance(module_id, str) or not MODULE_ID_RE.fullmatch(module_id):
-                raise EvidenceError(f"unsafe observed dependency module ID: {module_id!r}")
+        for module_id in _module_id_list(raw_record.get("module_ids", []), f"observed dependency {dep_id}"):
             result.add(module_id)
         managed_target = raw_record.get("managed_target")
         if managed_target is not None:
             target = targets.get(managed_target)
             if not isinstance(target, dict):
                 raise EvidenceError(f"observed dependency references unknown target: {dep_id}")
-            for module_id in target.get("module_ids", []):
-                if not isinstance(module_id, str) or not MODULE_ID_RE.fullmatch(module_id):
-                    raise EvidenceError(f"unsafe managed target module ID: {module_id!r}")
+            for module_id in _module_id_list(target.get("module_ids"), f"managed target {managed_target}"):
                 result.add(module_id)
-    return sorted(result)[:MAX_MODULES]
+    if len(result) > MAX_MODULES:
+        raise EvidenceError(
+            f"declared native module inventory exceeds bounded maximum ({len(result)} > {MAX_MODULES})"
+        )
+    return sorted(result)
 
 
 def parse_module_prop(raw: bytes) -> dict[str, str]:
@@ -191,14 +206,11 @@ def parse_elf_load_alignments(raw: bytes) -> dict[str, object]:
     endian = "<" if data_encoding == 1 else ">"
     try:
         if elf_class == 2:
-            if len(raw) < 64:
-                return {"status": "TRUNCATED"}
             e_phoff = struct.unpack_from(endian + "Q", raw, 32)[0]
             e_phentsize = struct.unpack_from(endian + "H", raw, 54)[0]
             e_phnum = struct.unpack_from(endian + "H", raw, 56)[0]
             minimum = 56
             align_offset = 48
-            type_offset = 0
         elif elf_class == 1:
             if len(raw) < 52:
                 return {"status": "TRUNCATED"}
@@ -207,7 +219,6 @@ def parse_elf_load_alignments(raw: bytes) -> dict[str, object]:
             e_phnum = struct.unpack_from(endian + "H", raw, 44)[0]
             minimum = 32
             align_offset = 28
-            type_offset = 0
         else:
             return {"status": "UNSUPPORTED_CLASS"}
     except struct.error:
@@ -221,8 +232,8 @@ def parse_elf_load_alignments(raw: bytes) -> dict[str, object]:
     for index in range(e_phnum):
         offset = e_phoff + index * e_phentsize
         try:
-            p_type = struct.unpack_from(endian + "I", raw, offset + type_offset)[0]
-            if p_type != 1:  # PT_LOAD
+            p_type = struct.unpack_from(endian + "I", raw, offset)[0]
+            if p_type != 1:
                 continue
             if elf_class == 2:
                 p_align = struct.unpack_from(endian + "Q", raw, offset + align_offset)[0]
@@ -273,25 +284,30 @@ def collect_platform(runner: RootRunner) -> dict[str, object]:
 
 
 def collect_module(runner: RootRunner, module_id: str, page_size: int) -> dict[str, object]:
+    if not _valid_module_id(module_id):
+        raise EvidenceError(f"unsafe module ID: {module_id!r}")
     base = f"/data/adb/modules/{module_id}"
     qbase = shlex.quote(base)
     safe = runner.run(f"[ -d {qbase} ] && [ ! -L {qbase} ]", timeout=5, max_output=4096)
     if safe.returncode != 0:
         return {"module_id": module_id, "status": "ABSENT_OR_UNSAFE"}
     prop = runner.run(
-        f"if [ -f {qbase}/module.prop ] && [ ! -L {qbase}/module.prop ]; then cat {qbase}/module.prop; fi",
+        f"if [ -f {qbase}/module.prop ] && [ ! -L {qbase}/module.prop ]; then head -c {MAX_MODULE_PROP} {qbase}/module.prop; fi",
         timeout=5,
-        max_output=32_768,
+        max_output=MAX_MODULE_PROP,
     )
     metadata = parse_module_prop(prop.stdout if prop.returncode == 0 else b"")
     listing = runner.run(
-        f"find {qbase} -type f -name '*.so' 2>/dev/null | head -n {MAX_NATIVE_LIBS}",
+        f"find {qbase} -type f -name '*.so' 2>/dev/null | head -n {MAX_NATIVE_LIBS + 1}",
         timeout=10,
         max_output=256_000,
     )
     libraries: list[dict[str, object]] = []
+    inventory_truncated = False
     if listing.returncode == 0:
-        for raw_path in listing.stdout.decode("utf-8", errors="replace").splitlines()[:MAX_NATIVE_LIBS]:
+        raw_paths = listing.stdout.decode("utf-8", errors="replace").splitlines()
+        inventory_truncated = len(raw_paths) > MAX_NATIVE_LIBS
+        for raw_path in raw_paths[:MAX_NATIVE_LIBS]:
             path = raw_path.strip()
             if not path.startswith(base + "/") or "\n" in path or "\r" in path:
                 continue
@@ -323,6 +339,7 @@ def collect_module(runner: RootRunner, module_id: str, page_size: int) -> dict[s
         "module": metadata,
         "native_libraries": libraries,
         "native_library_count": len(libraries),
+        "native_library_inventory_truncated": inventory_truncated,
     }
 
 
@@ -336,8 +353,8 @@ def write_output(path_arg: str | None, encoded: str) -> None:
     if not path_arg:
         return
     path = Path(path_arg).expanduser()
-    if path.exists() and path.is_symlink():
-        raise EvidenceError(f"output path is a symlink: {path}")
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise EvidenceError(f"output path is unsafe: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temp = Path(raw)
@@ -347,7 +364,7 @@ def write_output(path_arg: str | None, encoded: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         temp.chmod(0o600)
-        temp.replace(path)
+        os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -357,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         registry = load_registry(repo_root())
         explicit_ids = explicit_native_module_ids(registry)
+        if not explicit_ids:
+            raise EvidenceError("declared native module inventory is empty")
         runner = RootRunner()
         if not runner.ready:
             raise EvidenceError("no working root backend")
@@ -364,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
         page = platform.get("runtime_page_size")
         page_size = page if isinstance(page, int) else 0
         modules = [collect_module(runner, module_id, page_size) for module_id in explicit_ids]
+        if any(item.get("native_library_inventory_truncated") is True for item in modules):
+            raise EvidenceError("native library inventory exceeds bounded maximum; evidence would be incomplete")
         zygisk_ids = {"rezygisk", "zygisksu"}
         zygisk_present = [
             item
