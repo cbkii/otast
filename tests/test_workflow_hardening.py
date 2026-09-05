@@ -26,7 +26,7 @@ class WorkflowHardeningTests(unittest.TestCase):
 
     def test_dependabot_maintains_github_actions_pins(self) -> None:
         dependabot = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
-        self.assertIn('package-ecosystem: "github-actions"', dependabot)
+        self.assertRegex(dependabot, r"(?m)^\s*- package-ecosystem:\s*['\"]?github-actions['\"]?\s*$")
         self.assertIn("interval: weekly", dependabot)
 
     def test_release_runs_fresh_monitor_before_any_release_mutation(self) -> None:
