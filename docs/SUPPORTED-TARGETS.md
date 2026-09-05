@@ -1,92 +1,79 @@
 # Supported targets
 
-The machine-readable source of truth is `compatibility/supported-targets.json`.
+The machine-readable source of truth is `compatibility/supported-targets.json`; Android-version assumptions are in `compatibility/platforms/`. Generated [Compatibility status](COMPATIBILITY-STATUS.md) is validated in CI and must match the registry.
 
-## Compatibility policy
+## Device/platform scope
 
-OTAST intentionally distinguishes two kinds of managed integration:
+OTAST currently supports only the reviewed `android-16` profile (Android 16 / SDK 36) for the Google Pixel family. Family architectural compatibility and device/build qualification are separate:
 
-1. **Whole-file neutralizers with a reviewed version-range contract** — OTAST replaces the complete upstream writer with a small OTAST-owned no-op/read-only entrypoint. These are gated by module identity, a reviewed compatible version range, and safe regular-file/path checks. The upstream file's exact SHA-256 is diagnostic provenance only; harmless upstream byte changes must not block installation. OTAST still records the original bytes and mode exactly and Restore must recover them exactly.
-2. **Structure-sensitive or not-yet-migrated integrations** — exact reviewed hashes remain required where OTAST preserves/edits upstream logic, or where a version-range migration has not yet been separately qualified.
+- Pixel 9a / `tegu` / `CP1A.260305.018` is `DEVICE_VALIDATED` in current repository evidence;
+- Pixel 8 / `shiba` is `DESIGN_COMPATIBLE` only;
+- undeclared Pixel models/builds are `UNQUALIFIED` until explicit evidence is added;
+- `RELEASE_QUALIFIED` is reserved for an exact release artefact that completes the physical release acceptance gate.
 
-A hash mismatch by itself is therefore not a failure for a whole-file neutralizer that explicitly declares a reviewed version range. An unsupported module/version, unsafe path type, missing required file, changed transformation anchors, or unknown structure-sensitive source remains a fail-closed condition.
+Unknown Android SDK/platform versions fail closed rather than inheriting Android 16 assumptions.
 
-## Device scope
+## Ownership model
 
-OTAST is documented for Google Pixel devices rather than a single Pixel model. Physical-device testing to date is limited to **Pixel 9a** and **Pixel 8**. Other Pixel models remain untested until their exact device/build path and managed-module combination have been qualified.
+The registry distinguishes managed targets, mutable external configuration, observed dependencies and explicit conflicts/exclusions. Observed dependencies and PIF profile data are not mutated merely because they are relevant to compatibility.
 
-This model-agnostic documentation does not weaken the fail-closed compatibility boundary: authority identity, live-device identity, supported module/version contracts and structure-sensitive transformation anchors must still match what the running release accepts.
+## Compatibility bases
+
+1. **`WHOLE_FILE_VERSION_RANGE`** — complete upstream writers replaced by reviewed OTAST implementations using module identity/version/path safety as the compatibility boundary.
+2. **`STRUCTURE_SENSITIVE_TRANSFORM`** — upstream logic is preserved or surgically edited; exact reviewed hashes and anchors remain mandatory.
+3. **`EXACT_REVIEWED_ARTIFACT`** — compatibility is tied to a specific reviewed installed/distribution artefact.
+
+No global fuzzy matching replaces exact gates.
 
 ## PIF Inject
 
-OTAST separates the selected PIF attestation profile from ordinary platform-visible identity:
+PIF Inject (`playintegrityfix`) remains structure-sensitive for its competing writer/code surfaces, but its profile files are now explicitly classified as **PIF-owned mutable configuration**.
 
-- `action.sh`, `post-fs-data.sh`, `service.sh`, `common_func.sh`, WebUI files and Zygisk binaries remain upstream-owned and byte-identical.
-- `pif.prop` is merged rather than blindly replaced. Its fingerprint/model/profile `SECURITY_PATCH` and spoof booleans are preserved by default for the process-local attestation profile.
-- `otast.pif.identity=ota` is an explicit opt-in that constrains the reviewed profile identity fields to `ota.prop`; without that opt-in, AutoPIF selection remains upstream/user-owned.
-- individual `otast.pif.spoof*` and `otast.pif.DEBUG` values default to `preserve`; explicit `true` or `false` is required for OTAST to replace a selected boolean.
-- PIF's global `system.prop` SPL entries are reconciled to the official OTA system/vendor security patch so profile values cannot leak into normal Android runtime identity.
-- `security_patch.sh` is transformed into a managed no-op competing writer.
-- an existing `/data/adb/tricky_store/pif_auto_security_patch` flag is accepted when it is a safe regular file. The flag is user configuration, not the writer itself; OTAST preserves it and neutralizes the reviewed global writer on Apply.
+Runtime profile topology is:
 
-PIF's `autopif.sh`, `autopif_ota.sh` and `security_patch.sh` handling preserves portions of upstream code, so those structure-sensitive transforms remain exact-hash/anchor gated. Unsafe flag types/links or missing transformation anchors stop Preflight. See [PIF compatibility](PIF-COMPATIBILITY.md).
+- `/data/adb/pif.prop` — mutable custom/effective profile;
+- active module `pif.prop` — packaged fallback/default/reset profile;
+- staged module `pif.prop` — future fallback after promotion, not current native fallback.
+
+A different global/fallback fingerprint, model or profile `SECURITY_PATCH` is expected and is not platform drift. OTAST validates these files but does not merge, mirror, recreate or restore them.
+
+Managed PIF surfaces are limited to:
+
+- `autopif.sh`: retain current profile fetching/writing while preventing its tail from deleting managed `system.prop` or exporting profile SPL into OTA-owned state;
+- `autopif_ota.sh`: block moving-branch executable replacement until OTAST compatibility review;
+- `security_patch.sh`: preserve PIF preference-marker controls but suppress profile-derived Tricky Store/system/vendor SPL writes;
+- `system.prop`: reconcile official OTA system/vendor SPL.
+
+Action, post-fs-data, service, common/WebUI/native/Zygisk behavior remains upstream-owned unless separately reviewed.
+
+`otast.pif.identity=ota` is retired; attestation-profile selection belongs to PIF.
+
+The monitored source baseline remains `b994391970b51a2dfefed0e1d420dd6b017756e8`. Upstream `inject_s` head `2f8199a90a150ad98921438608e1e0e951ba2d5f` was re-inspected for this lifecycle work: shell/profile behavior relevant here is unchanged, but its Gradle/Zygisk/native-build dependency movement remains `NATIVE_DEPENDENCY_CHANGED` and review-required.
 
 ## Tricky Store OSS
 
-The supported implementation is the exact reviewed Tricky Store OSS v3.1.0 build recorded in `compatibility/supported-targets.json`.
-
-`/data/adb/tricky_store/security_patch.txt` is OTA-owned for the supported runtime contract and is aligned to the official system/vendor security patch. Normal Apply does not choose or replace `keybox.xml` and does not prune or rebuild `target.txt`.
-
-Runtime health checks validate target/keybox readiness without printing key material. If configured targets depend on an empty, malformed, unreadable or unsafe active keybox, Verify fails rather than reporting a clean state. Deep cryptographic keybox validation remains an explicit local operation.
+Tricky Store OSS (`tricky_store`) is `EXACT_REVIEWED_ARTIFACT`. `/data/adb/tricky_store/security_patch.txt` is the managed OTA patch contract. `keybox.xml`, `target.txt` and TEE status remain observed/user/upstream data.
 
 ## Yurikey
 
-OTAST replaces only the high-risk whole-file writer surfaces and leaves unrelated functionality upstream-owned. Yurikey compatibility is now based on module identity plus the reviewed **3.0.x** line (`versionCode` 305..399), rather than requiring every managed source file to match one historical SHA-256.
-
-This is deliberate: OTAST replaces these files completely, so comments, logging changes, download URLs or other harmless upstream byte differences do not affect the safety of the managed replacement. Unsafe paths, missing required writers, the wrong module ID, or a Yurikey version outside the reviewed compatibility line still stop Preflight.
-
-Managed behavior includes:
-
-- root `action.sh` becomes a read-only OTAST Report entrypoint by default, preventing one click from simultaneously killing Google processes, rebuilding targets, rewriting PIF/security-patch state or changing Zygisk Next loader settings;
-- `service.sh` generic runtime property rewriting is disabled;
-- both boot-hash entrypoints are redirected through OTAST, eliminating Yurikey's empty-read fallback to a 64-zero VBMeta digest;
-- `Yuri/target_txt.sh` is disabled so Yurikey cannot replace `target.txt` with `all user apps + all system apps`;
-- Yurikey security-patch/PIF helper writers redirect through OTAST;
-- the broad detection-trace cleanup entrypoint remains disabled by default;
-- the unattended remote keybox updater is disabled because it can replace a working keybox with an unusable download/decode result.
-
-Existing Tricky Store targets and the active keybox remain user/upstream data; OTAST does not select replacements for them. Every managed Yurikey file still has its original bytes and mode stored transactionally for exact Restore.
+Yurikey uses `WHOLE_FILE_VERSION_RANGE` for the reviewed 3.0.x line (`versionCode` 305..399). Managed high-risk entrypoints are replaced while exact originals/modes remain restorable. A new major/minor line requires review.
 
 ## TA UTL
 
-The supported installed writer contract is TA UTL v4.4, including both the reviewed `prop.sh` writer and the generated WebUI Boot Hash save backend.
-
-OTAST:
-
-- removes only the reviewed `prop.sh` block that writes `ro.boot.vbmeta.*`; verified-boot, lock-state and other non-vbmeta behavior remains in place;
-- exact-hash manages `webui/assets/boot_hash-C0kIcwCH.js`, generated from the reviewed v4.4 `webui/scripts/boot_hash.js` source;
-- keeps the Boot Hash value readable in the WebUI but makes its direct save shell backend a no-op while OTAST owns `/data/adb/boot_hash` and `ro.boot.vbmeta.digest`;
-- preserves every unrelated TA UTL WebUI/action/service path;
-- records original bytes/mode transactionally so Restore recovers the exact reviewed TA UTL files.
-
-The generated WebUI asset is not patched heuristically: its exact reviewed SHA-256 and transformation anchors must match. Other TA UTL versions or rebuilt assets fail closed until reviewed. The historical `/data/adb/disable_prop_handler` assumption is not used because v4.4 does not consume it.
-
-TA UTL no longer requires Android VBMeta Fixer to be enabled.
+TA UTL (`TA_utl` / `.TA_utl`) remains `STRUCTURE_SENSITIVE_TRANSFORM`. Its reviewed `prop.sh` VBMeta block and generated WebUI Boot Hash save backend are exact-hash/anchor managed while unrelated behavior is preserved.
 
 ## Android VBMeta Fixer
 
-OTAST does not use the upstream VBMeta Fixer algorithm as a source of truth. The reviewed upstream service derives runtime values that do not match the live Pixel device's bootloader/libavb telemetry, including a hard-coded AVB version and a block-size-derived `ro.boot.vbmeta.size`.
+Android VBMeta Fixer remains `EXACT_REVIEWED_ARTIFACT`. OTAST neutralizes the reviewed runtime property writer and preserves bootloader/libavb evidence.
 
-If a recognised VBMeta Fixer module is enabled, OTAST replaces its `service.sh` with a no-op. This target remains exact-hash gated in this PR; its whole-file version-range migration should be qualified separately rather than bundled into the Yurikey installation fix.
+## Distribution identity
 
-VBMeta Fixer does not need to be enabled for OTAST operation.
+Each managed target records its installable/distribution model and provenance. Source-only docs/CI movement is distinguished from changed installable packages and native dependencies.
 
-`ota.prop`'s `ro.boot.vbmeta.size` remains required as OTA/factory artifact provenance, but it is not a managed runtime property. OTAST validates runtime/source agreement using the VBMeta digest and AVB version; runtime size is reported separately and never corrected with `resetprop`.
+## Semantic upstream impact
+
+`otast review TARGET` classifies changed paths as docs/CI-only, preserved-surface, native-dependency, managed-whole-file, structure-sensitive, module-identity or unknown-package movement. Only a complete docs/CI-only delta with byte/mode-identical installable module evidence may be accepted automatically.
 
 ## Legacy governors
 
-Normal Report, Preflight, Apply and Verify stop while any known `ota-sot` or `otasst` module, state root or dispatcher remains. Restore stays available so a failed transition can still recover OTAST-managed originals.
-
-## Version changes
-
-Version strings are compatibility boundaries, not automatic trust signals. A new major/minor line still requires review before its supported range is expanded. Within an explicitly reviewed version-range contract, whole-file neutralizers tolerate harmless source-byte variation; structure-sensitive and not-yet-migrated integrations remain pinned to reviewed hashes/anchors until their changed source is reviewed.
+Known legacy authority governors remain hard-stop conflicts. Normal Report, Preflight, Apply and Verify stop on their established traces while Restore remains available for safe recovery.

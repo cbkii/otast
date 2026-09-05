@@ -7,11 +7,13 @@ For the real Pixel validation path, see [PHYSICAL-DEVICE-PROOF.md](PHYSICAL-DEVI
 Use those documents for:
 
 - automatic or explicit release versioning;
-- optional full validation and mandatory release-integrity gates;
-- production draft preparation;
-- optional physical Pixel qualification with `otast release --no-publish`;
-- publishing with physical proof required or explicitly bypassed by the repository owner;
-- publication-time tag verification and stable Magisk `update.json` synchronization;
-- the separate branch-build workflow.
+- fresh release-time compatibility target/dependency monitoring;
+- mandatory full deterministic qualification for stable candidates;
+- production draft preparation and exact hosted-bundle verification;
+- mandatory stable physical Pixel proof, with proof reuse only under runtime-equivalence provenance;
+- independent 4 KiB/16 KiB page-size qualification status;
+- publication-time tag verification and stable Magisk `update.json` synchronisation;
+- the separate read-only branch-build workflow;
+- immutable GitHub Actions pins maintained through Dependabot review.
 
-This file intentionally contains no duplicate workflow instructions so the release contract has one maintained source of truth.
+This file intentionally contains no duplicate workflow procedure so the release contract has one maintained source of truth.

@@ -19,12 +19,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
@@ -61,3 +62,54 @@ jobs:
 
       - name: Full repository and fake-root gate
         run: bash scripts/test.sh --full
+
+      - name: Build exact deliverable and provenance
+        id: exact_build
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          rm -rf -- dist
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" build-release \
+            --output dist --commit-sha "$SOURCE_COMMIT" >dist-build.json
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" verify-release \
+            --zip "dist/$(python3 -c 'import json; print(json.load(open("dist/release-manifest.json"))["zip_filename"])')" \
+            --checksum "dist/$(python3 -c 'import json; print(json.load(open("dist/release-manifest.json"))["checksum_filename"])')" \
+            --manifest dist/release-manifest.json >dist-verify.json
+          python3 -m tools.otastctl --repo-root "$GITHUB_WORKSPACE" runtime-digest \
+            --zip "dist/$(python3 -c 'import json; print(json.load(open("dist/release-manifest.json"))["zip_filename"])')" \
+            >runtime-digest.json
+          python3 - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          manifest=json.loads(Path('dist/release-manifest.json').read_text())
+          with zipfile.ZipFile(Path('dist')/manifest['zip_filename']) as archive:
+              inventory=[]
+              for item in archive.infolist():
+                  if item.is_dir():
+                      continue
+                  inventory.append({
+                      'path': item.filename,
+                      'mode': f"{((item.external_attr >> 16) & 0o777):04o}",
+                      'size': item.file_size,
+                  })
+          Path('zip-inventory.json').write_text(json.dumps(inventory, indent=2, sort_keys=True)+'\n')
+          with open(Path(__import__('os').environ['GITHUB_STEP_SUMMARY']), 'a', encoding='utf-8') as out:
+              out.write('## Exact deliverable\n\n')
+              out.write(f"- source: `{manifest['source_commit']}`\n")
+              out.write(f"- ZIP SHA-256: `{manifest['zip_sha256']}`\n")
+              out.write(f"- runtime digest: `{manifest['runtime_digest']}`\n")
+          PY
+
+      - name: Upload exact CI evidence
+        if: ${{ always() && steps.exact_build.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: exact-deliverable-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/
+            dist-build.json
+            dist-verify.json
+            runtime-digest.json
+            zip-inventory.json
+          if-no-files-found: warn
+          retention-days: 30

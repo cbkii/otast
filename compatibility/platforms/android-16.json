@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "id": "android-16",
+  "status": "SUPPORTED",
+  "android_release": "16",
+  "sdk": 36,
+  "device_family": {
+    "manufacturer": "Google",
+    "model_prefix": "Pixel ",
+    "device_pattern": "^[a-z0-9_]+$",
+    "fingerprint_vendor": "google",
+    "fingerprint_suffix": ":user/release-keys"
+  },
+  "authority": {
+    "required_keys": [
+      "boot.img.sha256",
+      "ro.boot.vbmeta.digest",
+      "ro.boot.vbmeta.size",
+      "ro.boot.vbmeta.avb_version",
+      "ro.boot.avb_version",
+      "ro.build.fingerprint",
+      "ro.build.id",
+      "ro.build.version.sdk",
+      "ro.build.version.security_patch",
+      "ro.vendor.build.security_patch",
+      "ro.product.device",
+      "ro.product.manufacturer",
+      "ro.product.model"
+    ],
+    "runtime_security_patch_keys": [
+      "ro.build.version.security_patch",
+      "ro.vendor.build.security_patch"
+    ],
+    "required_vbmeta_keys": [
+      "ro.boot.vbmeta.digest",
+      "ro.boot.vbmeta.size",
+      "ro.boot.vbmeta.avb_version",
+      "ro.boot.avb_version"
+    ],
+    "runtime_vbmeta_keys": [
+      "ro.boot.vbmeta.digest",
+      "ro.boot.vbmeta.avb_version",
+      "ro.boot.avb_version"
+    ],
+    "provenance_only_vbmeta_keys": [
+      "ro.boot.vbmeta.size"
+    ]
+  },
+  "static_property_sources": {
+    "ro.build.version.security_patch": [
+      "/system/build.prop",
+      "/system/system/build.prop",
+      "/product/build.prop"
+    ],
+    "ro.vendor.build.security_patch": [
+      "/vendor/build.prop",
+      "/odm/build.prop"
+    ]
+  },
+  "bootconfig_evidence": {
+    "androidboot.vbmeta.digest": "ro.boot.vbmeta.digest",
+    "androidboot.vbmeta.avb_version": "ro.boot.vbmeta.avb_version"
+  },
+  "software_boot_state_keys": [
+    "ro.boot.flash.locked",
+    "ro.boot.vbmeta.device_state",
+    "ro.boot.verifiedbootstate",
+    "ro.boot.veritymode",
+    "vendor.boot.vbmeta.device_state",
+    "vendor.boot.verifiedbootstate"
+  ],
+  "native_environment_evidence": {
+    "runtime_page_size": "getconf PAGE_SIZE",
+    "primary_abi": "getprop ro.product.cpu.abi",
+    "abi_list": "getprop ro.product.cpu.abilist",
+    "native_library_inventory": "read-only inventory of declared observed dependency native libraries",
+    "elf_load_alignment": "readelf -l on declared observed dependency ELF files when available",
+    "zygisk_identity": "declared Zygisk implementation module metadata and bounded diagnostics"
+  },
+  "future_platform_policy": "Unknown SDK/platform profiles fail closed. Android 17 requires a separate reviewed profile and qualification; SDK 36 constants must not be widened in place."
+}

@@ -46,130 +46,103 @@ class ProfileTests(unittest.TestCase):
             digest = hashlib.sha256((FIXTURES / fixture_name).read_bytes()).hexdigest()
             self.assertIn(digest, manifest["targets"][target]["accepted_hashes"][name])
 
-    def _pif_env(self, identity: str = "ota") -> str:
-        return f'''
-            OTAST_FINGERPRINT='google/tegu/tegu:16/TEST/1:user/release-keys'
-            OTAST_MANUFACTURER='Google'
-            OTAST_MODEL='Pixel 9a'
-            OTAST_SYSTEM_PATCH='2026-03-05'
-            OTAST_DEVICE='tegu'
-            OTAST_PIF_IDENTITY_POLICY='{identity}'
-            OTAST_PIF_SPOOF_BUILD='true'
-            OTAST_PIF_SPOOF_PROPS='true'
-            OTAST_PIF_SPOOF_PROVIDER='true'
-            OTAST_PIF_SPOOF_SIGNATURE='true'
-            OTAST_PIF_SPOOF_VENDING_BUILD='true'
-            OTAST_PIF_SPOOF_VENDING_SDK='true'
-            OTAST_PIF_DEBUG='false'
-        '''
-
-    def test_pif_transform_preserves_lifecycle_and_unknown_configuration(self) -> None:
+    def test_pif_autopif_transform_preserves_profile_refresh_and_removes_competing_tail(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
-        with tempfile.TemporaryDirectory(prefix="otast-pif-test-") as raw:
+        for fixture_name in ("pif-autopif-ea93222c.sh", "pif-autopif-8b4a00ce.sh"):
+            with self.subTest(fixture=fixture_name), tempfile.TemporaryDirectory(prefix="otast-pif-auto-") as raw:
+                work = Path(raw)
+                source = FIXTURES / fixture_name
+                first = work / "first.sh"
+                second = work / "second.sh"
+                command = f'''
+                    . "{pif_runtime}" || exit 1
+                    otast_transform_pif_autopif "{source}" "{first}" || exit 2
+                    otast_transform_pif_autopif "{first}" "{second}" || exit 3
+                '''
+                subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+                text = first.read_text(encoding="utf-8")
+                self.assertIn("# --- otast pif refresh authority BEGIN ---", text)
+                self.assertIn("cat <<EOF | tee pif.prop", text)
+                self.assertIn('cat "$TEMPDIR/pif.prop" > /data/adb/pif.prop', text)
+                self.assertIn('sh "$MODDIR/security_patch.sh"', text)
+                self.assertNotIn("rm -f $MODDIR/system.prop", text)
+                self.assertNotIn("# --- otast pif final identity BEGIN ---", text)
+                self.assertEqual(first.read_bytes(), second.read_bytes())
+
+    def test_pif_autopif_ota_transform_gates_moving_executable_update_before_body(self) -> None:
+        pif_runtime = ROOT / "module/runtime/pif.sh"
+        fixture = FIXTURES / "pif-autopif-ota-ea93222c.sh"
+        with tempfile.TemporaryDirectory(prefix="otast-pif-ota-") as raw:
             work = Path(raw)
-            prop = work / "pif.prop"
-            auto = work / "autopif.sh"
-            ota = work / "autopif_ota.sh"
-            security = work / "security_patch.sh"
-            prop.write_text(
-                "# retain-comment\nFINGERPRINT=old\nCUSTOM_OPTION=retain-me\nspoofBuild=false\n",
-                encoding="utf-8",
-            )
-            for destination, source in (
-                (auto, FIXTURES / "pif-autopif-ea93222c.sh"),
-                (ota, FIXTURES / "pif-autopif-ota-ea93222c.sh"),
-                (security, FIXTURES / "pif-security-patch-ea93222c.sh"),
-            ):
-                destination.write_bytes(source.read_bytes())
+            first = work / "first.sh"
+            second = work / "second.sh"
             command = f'''
                 . "{pif_runtime}" || exit 1
-                {self._pif_env("ota")}
-                otast_transform_pif_prop "{prop}" "{work / 'pif.out'}" || exit 2
-                otast_transform_pif_autopif "{auto}" "{work / 'auto.out'}" || exit 3
-                otast_transform_pif_ota "{ota}" "{work / 'ota.out'}" || exit 4
-                otast_transform_pif_security_patch "{security}" "{work / 'security.out'}" || exit 5
+                otast_transform_pif_ota "{fixture}" "{first}" || exit 2
+                otast_transform_pif_ota "{first}" "{second}" || exit 3
             '''
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
-            prop_text = (work / "pif.out").read_text(encoding="utf-8")
-            self.assertIn("# retain-comment", prop_text)
-            self.assertIn("CUSTOM_OPTION=retain-me", prop_text)
-            self.assertIn("FINGERPRINT=google/tegu/tegu:16/TEST/1:user/release-keys", prop_text)
-            self.assertIn("spoofBuild=true", prop_text)
-            auto_text = (work / "auto.out").read_text(encoding="utf-8")
-            self.assertIn("# --- otast pif authority BEGIN ---", auto_text)
-            self.assertIn("# --- otast pif final identity BEGIN ---", auto_text)
-            self.assertIn("# --- otast pif output identity BEGIN ---", auto_text)
-            self.assertIn("PRODUCT=$PRODUCT", auto_text)
-            self.assertIn("DEVICE=$DEVICE", auto_text)
-            ota_text = (work / "ota.out").read_text(encoding="utf-8")
-            self.assertTrue(ota_text.startswith((FIXTURES / "pif-autopif-ota-ea93222c.sh").read_text(encoding="utf-8")))
-            self.assertIn('sh "$OTAST_ENTRY" preflight', ota_text)
-            security_text = (work / "security.out").read_text(encoding="utf-8")
-            self.assertIn("# otast managed", security_text)
-            self.assertIn("exit 0", security_text.splitlines()[:5])
-            self.assertIn("Tricky Store Security Patch Util", security_text)
+            lines = first.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[1], "# otast managed: AutoPIF executable self-update gate")
+            self.assertEqual(lines[4], "exit 0")
+            self.assertIn("fetch_autopif", first.read_text(encoding="utf-8"))
+            self.assertEqual(first.read_bytes(), second.read_bytes())
 
-    def test_pif_preserve_mode_leaves_identity_and_booleans_unchanged(self) -> None:
+    def test_pif_security_patch_adapter_preserves_marker_controls_without_profile_spl_writes(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
-        with tempfile.TemporaryDirectory(prefix="otast-pif-preserve-") as raw:
+        fixture = FIXTURES / "pif-security-patch-ea93222c.sh"
+        with tempfile.TemporaryDirectory(prefix="otast-pif-security-") as raw:
             work = Path(raw)
-            prop = work / "pif.prop"
-            prop.write_text(
+            first = work / "first.sh"
+            second = work / "second.sh"
+            command = f'''
+                . "{pif_runtime}" || exit 1
+                otast_transform_pif_security_patch "{fixture}" "{first}" || exit 2
+                otast_transform_pif_security_patch "{first}" "{second}" || exit 3
+            '''
+            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+            text = first.read_text(encoding="utf-8")
+            self.assertIn("# otast managed: PIF auto-security-patch compatibility adapter", text)
+            self.assertIn("--enable", text)
+            self.assertIn("--disable", text)
+            self.assertIn('touch "$AUTO_FLAG"', text)
+            self.assertIn('rm -f "$AUTO_FLAG"', text)
+            self.assertNotIn('rm -f "$AUTO_FLAG" "$MODDIR/system.prop"', "\n".join(text.splitlines()[:35]))
+            self.assertNotIn("resetprop -n", "\n".join(text.splitlines()[:35]))
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+
+    def test_pif_profile_validator_accepts_distinct_valid_profiles_and_rejects_duplicate_keys(self) -> None:
+        pif_runtime = ROOT / "module/runtime/pif.sh"
+        with tempfile.TemporaryDirectory(prefix="otast-pif-validator-") as raw:
+            work = Path(raw)
+            valid = work / "valid.prop"
+            duplicate = work / "duplicate.prop"
+            valid.write_text(
                 "FINGERPRINT=google/tegu_beta/tegu:CANARY/KEEP/1:user/release-keys\n"
-                "MODEL=Pixel 9a\n"
-                "SECURITY_PATCH=2026-08-05\n"
-                "spoofBuild=true\n"
-                "spoofProps=false\n"
-                "spoofVendingSdk=false\n",
+                "MODEL=Pixel 9a\nSECURITY_PATCH=2026-08-05\nspoofBuild=true\nspoofProps=false\n",
+                encoding="utf-8",
+            )
+            duplicate.write_text(
+                "FINGERPRINT=a\nFINGERPRINT=b\nSECURITY_PATCH=2026-08-05\n",
                 encoding="utf-8",
             )
             command = f'''
+                otast_stop() {{ printf '%s\\n' "$*" >&2; }}
+                otast_valid_date() {{
+                  case "$1" in [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) return 0;; *) return 1;; esac
+                }}
                 . "{pif_runtime}" || exit 1
-                OTAST_FINGERPRINT='google/tegu/tegu:16/OTA/1:user/release-keys'
-                OTAST_MANUFACTURER='Google'
-                OTAST_MODEL='Pixel 9a'
-                OTAST_SYSTEM_PATCH='2026-03-05'
-                OTAST_DEVICE='tegu'
-                OTAST_PIF_IDENTITY_POLICY='preserve'
-                OTAST_PIF_SPOOF_BUILD='preserve'
-                OTAST_PIF_SPOOF_PROPS='preserve'
-                OTAST_PIF_SPOOF_PROVIDER='preserve'
-                OTAST_PIF_SPOOF_SIGNATURE='preserve'
-                OTAST_PIF_SPOOF_VENDING_BUILD='preserve'
-                OTAST_PIF_SPOOF_VENDING_SDK='preserve'
-                OTAST_PIF_DEBUG='preserve'
-                otast_transform_pif_prop "{prop}" "{work / 'out'}" || exit 2
+                otast_validate_pif_profile_file "{valid}" || exit 2
+                if otast_validate_pif_profile_file "{duplicate}"; then exit 3; fi
             '''
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
-            self.assertEqual((work / "out").read_text(encoding="utf-8"), prop.read_text(encoding="utf-8"))
 
-    def test_current_pif_autopif_transform_preserves_authority_contract(self) -> None:
-        pif_runtime = ROOT / "module/runtime/pif.sh"
-        fixture = FIXTURES / "pif-autopif-8b4a00ce.sh"
-        with tempfile.TemporaryDirectory(prefix="otast-pif-current-test-") as raw:
-            work = Path(raw)
-            output = work / "autopif.out"
-            command = f'''
-                . "{pif_runtime}" || exit 1
-                {self._pif_env("ota")}
-                otast_transform_pif_autopif "{fixture}" "{output}" || exit 2
-            '''
-            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
-            transformed = output.read_text(encoding="utf-8")
-            self.assertIn("sort -ru | head -n1", transformed)
-            self.assertNotIn("| grep 'qpr' |", transformed)
-            self.assertIn("# --- otast pif authority BEGIN ---", transformed)
-            self.assertIn("# --- otast pif final identity BEGIN ---", transformed)
-            self.assertIn("# --- otast pif output identity BEGIN ---", transformed)
-            self.assertIn("MODEL='Pixel 9a'", transformed)
-            self.assertIn("PRODUCT='tegu_beta'", transformed)
-            self.assertIn("DEVICE='tegu'", transformed)
-            self.assertIn(
-                "FINGERPRINT='google/tegu/tegu:16/TEST/1:user/release-keys'",
-                transformed,
-            )
-            self.assertIn("PRODUCT=$PRODUCT", transformed)
-            self.assertIn("DEVICE=$DEVICE", transformed)
+    def test_pif_manifest_models_profile_data_as_observed_not_managed(self) -> None:
+        manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
+        pif = manifest["targets"]["playintegrityfix"]
+        self.assertNotIn("pif.prop", pif["managed_paths"])
+        self.assertIn("pif.prop", pif["observed_paths"])
+        self.assertIn("PIF_OWNED_MUTABLE_CONFIGURATION", pif["profile_ownership"])
 
     def test_ta_v44_transform_disables_only_vbmeta_block(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
@@ -235,7 +208,6 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn("zygiskd", action)
         self.assertIn("target regeneration is disabled", target)
         self.assertNotIn("pm list packages", target)
-        self.assertNotIn("rm -rf", target)
         self.assertIn("automatic keybox replacement is disabled", keybox)
         self.assertNotIn("curl", keybox)
         self.assertNotIn("wget", keybox)

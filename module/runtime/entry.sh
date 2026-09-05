@@ -20,6 +20,7 @@ OTAST_AUTHORITY=${OTAST_AUTHORITY:-$ADB_ROOT/ota.prop}
 OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 
 . "$MODDIR/common.sh" || exit 70
+. "$MODDIR/platform.sh" || exit 70
 . "$MODDIR/authority.sh" || exit 70
 . "$MODDIR/transaction.sh" || exit 70
 . "$MODDIR/pif.sh" || exit 70
@@ -56,28 +57,40 @@ _otast_preflight() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
   _otast_validate_source || return 1
+  otast_validate_pif_profiles_current || return 1
+  otast_pif_inspect_legacy_profile_state || return 1
   otast_plan_all || return 1
   otast_plan_strict_runtime_identity || return 1
-  printf 'READY\toperations=%s\tauthority=%s\n' "$OTAST_PLAN_COUNT" "$OTAST_AUTHORITY_SHA256"
+  printf 'READY\toperations=%s\tpif_profile_state_retirements=%s\tauthority=%s\n' \
+    "$OTAST_PLAN_COUNT" "$OTAST_PIF_PENDING_RETIREMENTS" "$OTAST_AUTHORITY_SHA256"
 }
 
 _otast_apply() {
-  local result plan_count
+  local result plan_count retired_count
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
   _otast_validate_source || return 1
+  otast_validate_pif_profiles_current || return 1
   otast_acquire_lock || return 1
   result=0
   otast_recover_transactions || result=1
+  [ "$result" -ne 0 ] || otast_pif_inspect_legacy_profile_state || result=1
   [ "$result" -ne 0 ] || otast_plan_all || result=1
   [ "$result" -ne 0 ] || otast_plan_strict_runtime_identity || result=1
   plan_count=${OTAST_PLAN_COUNT:-0}
   [ "$result" -ne 0 ] || otast_apply_plan || result=1
+  # Retire legacy profile ownership only after all candidate-managed changes
+  # commit successfully. A planning/apply failure must leave the predecessor's
+  # profile ownership records intact rather than partially migrating state.
+  [ "$result" -ne 0 ] || otast_pif_retire_legacy_profile_state || result=1
+  retired_count=${OTAST_PIF_RETIRED_COUNT:-0}
   otast_release_lock || result=1
   [ "$result" -eq 0 ] || return 1
   otast_verify_managed || return 1
   if [ "$plan_count" -gt 0 ]; then
     printf 'REBOOT_REQUIRED\tmanaged files changed; reboot before Verify\n'
+  elif [ "$retired_count" -gt 0 ]; then
+    printf 'STATE_MIGRATION_COMPLETE\tretired_pif_profile_records=%s\treboot_not_required\n' "$retired_count"
   else
     printf 'NO_CHANGES_REQUIRED\tmanaged files are already current\n'
   fi
@@ -87,6 +100,12 @@ _otast_verify() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
   _otast_validate_source || return 1
+  otast_validate_pif_profiles_current || return 1
+  otast_pif_inspect_legacy_profile_state || return 1
+  if [ "$OTAST_PIF_PENDING_RETIREMENTS" -gt 0 ]; then
+    otast_stop 'legacy OTAST PIF profile ownership state is pending retirement; run explicit Apply before Verify'
+    return 1
+  fi
   otast_compare_live_managed_vbmeta || return 1
   otast_compare_live_strict_runtime_identity || return 1
   otast_verify_trickystore_health || return 1
@@ -99,6 +118,9 @@ _otast_restore() {
   otast_acquire_lock || return 1
   result=0
   otast_recover_transactions || result=1
+  # Ownership retirement precedes Restore so PIF-owned profile data can never be
+  # rolled back by a legacy OTAST record. All state is validated before moves.
+  [ "$result" -ne 0 ] || otast_pif_retire_legacy_profile_state || result=1
   [ "$result" -ne 0 ] || otast_restore_all || result=1
   otast_release_lock || result=1
   [ "$result" -eq 0 ]
@@ -107,6 +129,7 @@ _otast_restore() {
 _otast_report() {
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
+  otast_pif_inspect_legacy_profile_state || return 1
   otast_report || return 1
   otast_report_strict_runtime_identity || return 1
   otast_report_trickystore_health

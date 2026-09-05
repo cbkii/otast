@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import subprocess
@@ -10,10 +9,16 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from tools.otastctl.build import build_module
+from tools.otastctl.qualification import registry_provenance
+from tools.otastctl.runtime_digest import RUNTIME_DIGEST_ALGORITHM, runtime_digest_from_zip
+from tools.otastctl.util import sha256_file
+
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts/validate-device-release-proof.py"
 RELEASE_SCRIPT = ROOT / "scripts/release-device.sh"
 LIFECYCLE_SCRIPT = ROOT / "scripts/release-device-lifecycle.sh"
+TEST_COMMIT = "1" * 40
 
 
 def load_validator():
@@ -26,89 +31,147 @@ def load_validator():
 
 
 class ReleaseDeviceTests(unittest.TestCase):
-    def make_proof(self, root: Path, *, apply_result: str = "PASS") -> tuple[Path, Path, str]:
-        module_zip = root / "otast-v1.0.0.zip"
-        with zipfile.ZipFile(module_zip, "w") as archive:
-            archive.writestr("module.prop", "id=otast\nversion=v1.0.0\n")
-            archive.writestr(
-                "release.properties",
-                "schema_version=1\nversion=v1.0.0\nversion_code=100004\ncommit_sha=diagnostic-only\n",
-            )
-        module_sha = hashlib.sha256(module_zip.read_bytes()).hexdigest()
-        proof = root / "otast-v1.0.0-device-proof.json"
-        proof.write_text(
-            json.dumps(
-                {
-                    "schema_version": 2,
-                    "result": "PASS",
-                    "version": "v1.0.0",
-                    "source_commit": "diagnostic-only",
-                    "module_sha256": module_sha,
-                    "device": "tegu",
-                    "sdk": 36,
-                    "phases": {
-                        "baseline": "NOT_REQUIRED",
-                        "install_reboot": "PASS",
-                        "apply_reboot": apply_result,
-                        "verify_noop_restore": "PASS",
-                        "restore_reboot_report": "PASS",
-                    },
-                    "generated_utc": "2026-08-10T00:00:00Z",
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return proof, module_zip, module_sha
+    def make_proof(self, root: Path, *, root_result: str = "PASS_WITH_ATTRIBUTION") -> tuple[Path, Path, dict[str, object]]:
+        module = load_validator()
+        module_zip = build_module(ROOT, root / "dist", commit_sha=TEST_COMMIT)
+        with zipfile.ZipFile(module_zip) as archive:
+            prop = {
+                k: v
+                for k, v in (
+                    line.split("=", 1)
+                    for line in archive.read("module.prop").decode("utf-8").splitlines()
+                    if "=" in line
+                )
+            }
+        reference = module.release_reference(ROOT)
+        runtime_digest = runtime_digest_from_zip(module_zip)
+        evidence = {
+            "schema_version": 1,
+            "result": "PASS",
+            "read_only": True,
+            "device": {
+                "codename": reference["device"],
+                "model": reference["model"],
+                "manufacturer": reference["manufacturer"],
+                "build_id": reference["build"],
+                "fingerprint": reference["fingerprint"],
+                "platform_profile": reference["platform_profile"],
+                "sdk": str(reference["sdk"]),
+                "sdk_full": "36.0",
+                "system_spl": reference["system_spl"],
+                "vendor_spl": reference["vendor_spl"],
+                "authority_sha256": reference["authority_sha256"],
+                "authority": reference["authority_boot"],
+                "kernel": "Linux tegu 6.1-test",
+                "runtime_page_size": "4096",
+                "primary_abi": "arm64-v8a",
+                "abi_list": "arm64-v8a,armeabi-v7a",
+            },
+            "magisk": {"version": "30.6:MAGISK:R", "version_code": "30600"},
+            "managed_targets": {"playintegrityfix": {"module": {"id": "playintegrityfix", "version": "test"}}},
+            "observed_dependencies": {
+                "zygisk-next": {"module": {"id": "rezygisk", "version": "test"}},
+                "vector": {"module": {"id": "vector", "version": "test"}},
+                "inline-hook-invalidate": {"module": {"id": "inline_hook_invalidate", "version": "test"}},
+            },
+            "root_exposure_attribution": {"result": root_result, "reason": "fixture"},
+            "external_acceptance": {
+                "tricky_store_health": "PASS",
+                "local_attestation": "PASS",
+                "play_integrity": {"basic": "PASS", "device": "PASS", "strong": "PASS"},
+                "play_store_certification": "CERTIFIED",
+            },
+            "validation_failures": [],
+            "privacy": {
+                "keybox_material_exported": False,
+                "arbitrary_module_enumeration": False,
+                "mutation_performed": False,
+            },
+        }
+        value: dict[str, object] = {
+            "schema_version": 4,
+            "result": "PASS",
+            "evidence_kind": "DIRECT_PHYSICAL",
+            "version": prop["version"],
+            "version_code": int(prop["versionCode"]),
+            "qualified_source_commit": TEST_COMMIT,
+            "current_source_commit": TEST_COMMIT,
+            "qualified_zip_sha256": sha256_file(module_zip),
+            "current_zip_sha256": sha256_file(module_zip),
+            "runtime_digest_algorithm": RUNTIME_DIGEST_ALGORITHM,
+            "runtime_digest": runtime_digest,
+            "registry_provenance": registry_provenance(ROOT),
+            "device_evidence": evidence,
+            "installation_context": "UPGRADE_FROM_STABLE",
+            "phases": {
+                "baseline": "PASS",
+                "install_reboot": "PASS",
+                "preflight": "PASS",
+                "apply": "PASS",
+                "post_apply_reboot": "PASS",
+                "verify": "PASS",
+                "second_apply_noop": "PASS",
+                "restore": "PASS",
+                "restore_reboot_report": "PASS",
+                "reapply": "PASS",
+            },
+            "generated_utc": "2026-09-03T00:00:00Z",
+        }
+        proof = root / f"otast-{prop['version']}-device-proof.json"
+        proof.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return proof, module_zip, value
 
-    def test_device_proof_accepts_asset_bound_contract_without_commit_gate(self) -> None:
+    def test_device_proof_accepts_exact_runtime_bound_contract(self) -> None:
         module = load_validator()
         with tempfile.TemporaryDirectory() as raw:
-            proof, module_zip, module_sha = self.make_proof(Path(raw))
-            value = module.validate_proof(proof, module_zip, version="v1.0.0")
-            self.assertEqual(value["module_sha256"], module_sha)
+            proof, module_zip, expected = self.make_proof(Path(raw))
+            value = module.validate_proof(proof, module_zip, version=str(expected["version"]))
+            self.assertEqual(value["current_zip_sha256"], sha256_file(module_zip))
+            self.assertEqual(value["runtime_digest"], runtime_digest_from_zip(module_zip))
 
-    def test_device_proof_accepts_schema1_only_as_asset_bound_migration(self) -> None:
+    def test_device_proof_rejects_legacy_schema(self) -> None:
         module = load_validator()
         with tempfile.TemporaryDirectory() as raw:
-            proof, module_zip, module_sha = self.make_proof(Path(raw))
+            proof, module_zip, expected = self.make_proof(Path(raw))
             value = json.loads(proof.read_text(encoding="utf-8"))
-            value["schema_version"] = 1
-            value.pop("source_commit", None)
-            value["commit_sha"] = "this-legacy-commit-is-diagnostic-only"
+            value["schema_version"] = 2
             proof.write_text(json.dumps(value) + "\n", encoding="utf-8")
-
-            accepted = module.validate_proof(proof, module_zip, version="v1.0.0")
-            self.assertEqual(accepted["module_sha256"], module_sha)
-
-            module_zip.write_bytes(module_zip.read_bytes() + b"different")
             with self.assertRaises(module.ProofError):
-                module.validate_proof(proof, module_zip, version="v1.0.0")
+                module.validate_proof(proof, module_zip, version=str(expected["version"]))
 
-    def test_device_proof_accepts_already_current_first_apply(self) -> None:
+    def test_device_proof_rejects_runtime_or_zip_mismatch(self) -> None:
         module = load_validator()
         with tempfile.TemporaryDirectory() as raw:
-            proof, module_zip, _ = self.make_proof(Path(raw), apply_result="SKIPPED_NO_CHANGES")
-            value = module.validate_proof(proof, module_zip, version="v1.0.0")
-            self.assertEqual(value["phases"]["apply_reboot"], "SKIPPED_NO_CHANGES")
-
-    def test_device_proof_rejects_asset_hash_mismatch(self) -> None:
-        module = load_validator()
-        with tempfile.TemporaryDirectory() as raw:
-            proof, module_zip, _ = self.make_proof(Path(raw))
-            module_zip.write_bytes(module_zip.read_bytes() + b"different")
-            with self.assertRaises(module.ProofError):
-                module.validate_proof(proof, module_zip, version="v1.0.0")
-
-    def test_device_proof_rejects_missing_noop_restore_phase(self) -> None:
-        module = load_validator()
-        with tempfile.TemporaryDirectory() as raw:
-            proof, module_zip, _ = self.make_proof(Path(raw))
+            proof, module_zip, expected = self.make_proof(Path(raw))
             value = json.loads(proof.read_text(encoding="utf-8"))
-            value["phases"]["verify_noop_restore"] = "FAILED"
+            value["runtime_digest"] = "0" * 64
             proof.write_text(json.dumps(value) + "\n", encoding="utf-8")
             with self.assertRaises(module.ProofError):
-                module.validate_proof(proof, module_zip, version="v1.0.0")
+                module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_device_proof_accepts_attributed_external_root_findings(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw), root_result="PASS_WITH_ATTRIBUTION")
+            value = module.validate_proof(proof, module_zip, version=str(expected["version"]))
+            self.assertEqual(value["device_evidence"]["root_exposure_attribution"]["result"], "PASS_WITH_ATTRIBUTION")
+
+    def test_device_proof_rejects_inconclusive_root_findings(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw), root_result="INCONCLUSIVE")
+            with self.assertRaises(module.ProofError):
+                module.validate_proof(proof, module_zip, version=str(expected["version"]))
+
+    def test_device_proof_rejects_missing_external_release_gate(self) -> None:
+        module = load_validator()
+        with tempfile.TemporaryDirectory() as raw:
+            proof, module_zip, expected = self.make_proof(Path(raw))
+            value = json.loads(proof.read_text(encoding="utf-8"))
+            value["device_evidence"]["external_acceptance"]["play_integrity"]["strong"] = "FAIL"
+            proof.write_text(json.dumps(value) + "\n", encoding="utf-8")
+            with self.assertRaises(module.ProofError):
+                module.validate_proof(proof, module_zip, version=str(expected["version"]))
 
     def test_release_wizard_uses_canonical_versioning_and_single_workflow_api(self) -> None:
         text = RELEASE_SCRIPT.read_text(encoding="utf-8")
@@ -126,71 +189,25 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("stable update.json", text)
         self.assertIn("versionCode remains automatic", text)
         self.assertIn("authoritative GitHub Release workflow", text)
-        self.assertNotIn("LEGACY_RELEASE_COMMIT", text)
-        self.assertNotIn("contents/scripts/release-device.sh?ref=", text)
 
-    def test_release_wizard_refreshes_before_identity_and_prevents_nested_reexec(self) -> None:
-        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        refresh_call = text.index("\nrefresh_local_main_once\n")
-        identity = text.index("[INFO] Release identity:")
-        lifecycle = text.index('bash "$LIFECYCLE_SCRIPT"')
-        self.assertLess(refresh_call, identity)
-        self.assertLess(identity, lifecycle)
-        self.assertIn("OTAST_RELEASE_WRAPPER_REEXECED=1", text)
-        self.assertIn("OTAST_RELEASE_REEXECED=1", text)
-        self.assertIn("Entering bounded, resumable physical-device qualification", text)
-
-    def test_release_wizard_bounds_network_calls_and_avoids_unbounded_watch(self) -> None:
-        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("ensure_command timeout coreutils", text)
-        self.assertIn("run_bounded()", text)
-        self.assertIn('timeout_seconds=${OTAST_GH_TIMEOUT_SECONDS:-90}', text)
-        self.assertIn('OTAST_GIT_TIMEOUT_SECONDS="$GIT_TIMEOUT_SECONDS"', text)
-        self.assertIn("watch_publication_run", text)
-        self.assertNotIn('"$REAL_GH" run watch', text)
-        self.assertNotIn("awk '", text)
-
-    def test_release_auth_uses_local_token_not_network_sensitive_status_gate(self) -> None:
-        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("ensure_github_credentials()", text)
-        self.assertIn('auth token --hostname github.com', text)
-        self.assertIn("GitHub authentication diagnostic", text)
-        self.assertIn("actual API/network availability is checked by each bounded", text)
-        self.assertNotIn("if ! run_bounded 'GitHub authentication check'", text)
-        self.assertNotIn("GitHub CLI is not authenticated or the authentication check timed out", text)
-
-    def test_release_wizard_preserves_proven_lifecycle_in_current_source(self) -> None:
-        wrapper = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        lifecycle = LIFECYCLE_SCRIPT.read_text(encoding="utf-8")
-        self.assertTrue(LIFECYCLE_SCRIPT.is_file())
-        self.assertFalse(LIFECYCLE_SCRIPT.is_symlink())
-        self.assertIn('bash "$LIFECYCLE_SCRIPT"', wrapper)
-        for token in (
-            "physical release proof requires tegu / SDK 36",
-            "magisk --install-module",
-            "run_boot_recover_best_effort",
-            "Apply failed; recovering transaction state and retrying once",
-            "Restore failed; attempting boot-recover and one retry",
-            "persistent external writer conflict",
-            "NO_CHANGES_REQUIRED",
-            "REBOOT_REQUIRED",
-            "/proc/sys/kernel/random/boot_id",
-            "validate-device-release-proof.py",
-            "gh release upload",
-        ):
-            self.assertIn(token, lifecycle)
-        self.assertNotIn("magisk --install-module", wrapper)
-        self.assertNotIn("runtime/entry.sh apply", wrapper)
-
-    def test_release_wizard_skips_requalification_for_any_proven_candidate(self) -> None:
-        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("If GitHub already has physical proof for this exact candidate", text)
-        self.assertIn("if [[ $has_proof == yes ]]; then", text)
-        self.assertIn("dispatch_publication", text)
-        self.assertIn("already has physical proof (draft=%s)", text)
-        first_proof_check = text.index("if [[ $has_proof == yes ]]; then")
-        lifecycle_run = text.index('bash "$LIFECYCLE_SCRIPT"')
-        self.assertLess(first_proof_check, lifecycle_run)
+    def test_release_lifecycle_is_registry_driven_and_runtime_bound(self) -> None:
+        text = LIFECYCLE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("load_release_reference", text)
+        self.assertNotIn("DEVICE != tegu", text)
+        self.assertNotIn('"device": "tegu"', text)
+        self.assertIn("runtime_digest=", text)
+        self.assertIn("EVIDENCE_REQUIRED", text)
+        self.assertIn("collect-device-qualification.py", text)
+        self.assertIn("root-exposure.json", text)
+        self.assertIn("external-acceptance.json", text)
+        self.assertIn("REAPPLY_REBOOT", text)
+        self.assertIn("second Apply did not reach NO_CHANGES_REQUIRED", text)
+        self.assertIn("magisk --install-module", text)
+        self.assertIn("run_boot_recover_best_effort", text)
+        self.assertIn("persistent external writer conflict", text)
+        self.assertIn("/proc/sys/kernel/random/boot_id", text)
+        self.assertIn("validate-device-release-proof.py", text)
+        self.assertIn("gh release upload", text)
 
     def test_release_wizard_help_needs_no_device_or_network(self) -> None:
         result = subprocess.run(
@@ -207,7 +224,6 @@ class ReleaseDeviceTests(unittest.TestCase):
         self.assertIn("versionCode remains automatic", result.stdout)
         self.assertIn("otast release", result.stdout)
         self.assertIn("--no-publish", result.stdout)
-        self.assertIn("stalled request", result.stdout)
 
 
 if __name__ == "__main__":

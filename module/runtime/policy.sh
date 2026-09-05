@@ -4,9 +4,7 @@
 #
 # The installed OTA owns platform-visible system/vendor SPL and the conservative
 # software boot-state contract. PIF is a separate attestation-profile domain:
-# its fingerprint/model/profile SECURITY_PATCH may intentionally differ while
-# identity policy is "preserve", but reviewed global writers must not leak that
-# profile SPL into ordinary Android runtime properties.
+# custom/fallback profile identity is PIF-owned and may intentionally differ.
 
 OTAST_SECURITY_PATCH_POLICY=ota
 OTAST_EXPECT_FLASH_LOCKED=1
@@ -24,35 +22,38 @@ otast_enforce_runtime_policy() {
   OTAST_SECURITY_PATCH_POLICY=ota
 }
 
-# Override the compatibility transform from pif.sh. Preserve the PIF profile in
-# preserve mode. Explicit OTA identity takeover replaces its profile identity,
-# including SECURITY_PATCH. Platform SPL is enforced separately through
-# OTAST/PIF system.prop and neutralisation of the reviewed PIF global writer.
-otast_transform_pif_prop() {
-  local source output
+_otast_plan_self_runtime_system_prop() {
+  local source path state live original target source_hash
   source=$1
-  output=$2
-  [ -f "$source" ] && [ ! -L "$source" ] || return 1
-  cat "$source" >"$output" || return 1
+  path=$2
+  state=$(_otast_state_path otast-runtime-system-prop) || return 1
 
-  if [ "$OTAST_PIF_IDENTITY_POLICY" = ota ]; then
-    otast_prop_set_line "$output" FINGERPRINT "$OTAST_FINGERPRINT" || return 1
-    otast_prop_set_line "$output" MANUFACTURER "$OTAST_MANUFACTURER" || return 1
-    otast_prop_set_line "$output" MODEL "$OTAST_MODEL" || return 1
-    otast_prop_set_line "$output" SECURITY_PATCH "$OTAST_SYSTEM_PATCH" || return 1
-    otast_prop_set_line "$output" PRODUCT "${OTAST_DEVICE}_beta" || return 1
-    otast_prop_set_line "$output" DEVICE "$OTAST_DEVICE" || return 1
-    otast_prop_set_line "$output" PRODUCT_LIST "\"${OTAST_DEVICE}_beta\"" || return 1
+  otast_assert_no_symlink_path "$path" || return 1
+  live=$(otast_live_hash "$path") || return 1
+
+  # A Magisk module replacement removes files generated inside the old module
+  # directory. The persistent OTAST transaction records live outside that
+  # directory, so a previously managed system.prop can legitimately be MISSING
+  # immediately after upgrade/reinstall. This narrowly repairs only OTAST's own
+  # generated file when its original state also proves the path did not exist
+  # before OTAST first managed it. Any non-missing byte/mode drift still reaches
+  # the normal transaction classifier and remains a hard stop.
+  if [ "$live" = MISSING ] && [ -f "$state" ] && [ ! -L "$state" ]; then
+    if _otast_validate_record "$state" otast-runtime-system-prop "$path"; then
+      original=$(_otast_state_get "$state" original_exists) || return 1
+      target=$(_otast_state_get "$state" target) || return 1
+      if [ "$original" = 0 ] && [ "$target" = otast ]; then
+        source_hash=$(otast_sha256 "$source") || return 1
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          otast-runtime-system-prop otast "$path" 0644 "$source" "$source_hash" external UPDATE >>"$OTAST_PLAN" || return 1
+        OTAST_PLAN_COUNT=$((OTAST_PLAN_COUNT + 1))
+        otast_log INFO 'OTAST module replacement detected; self-managed system.prop will be transactionally rehydrated'
+        return 0
+      fi
+    fi
   fi
 
-  otast_prop_apply_policy "$output" spoofBuild "$OTAST_PIF_SPOOF_BUILD" || return 1
-  otast_prop_apply_policy "$output" spoofProps "$OTAST_PIF_SPOOF_PROPS" || return 1
-  otast_prop_apply_policy "$output" spoofProvider "$OTAST_PIF_SPOOF_PROVIDER" || return 1
-  otast_prop_apply_policy "$output" spoofSignature "$OTAST_PIF_SPOOF_SIGNATURE" || return 1
-  otast_prop_apply_policy "$output" spoofVendingBuild "$OTAST_PIF_SPOOF_VENDING_BUILD" || return 1
-  otast_prop_apply_policy "$output" spoofVendingSdk "$OTAST_PIF_SPOOF_VENDING_SDK" || return 1
-  otast_prop_apply_policy "$output" DEBUG "$OTAST_PIF_DEBUG" || return 1
-  chmod 0600 "$output" || return 1
+  otast_plan_add otast-runtime-system-prop otast "$path" 0644 "$source" external ''
 }
 
 otast_plan_runtime_system_prop() {
@@ -76,7 +77,7 @@ vendor.boot.vbmeta.device_state=$OTAST_EXPECT_VENDOR_VBMETA_DEVICE_STATE
 vendor.boot.verifiedbootstate=$OTAST_EXPECT_VENDOR_VERIFIED_BOOT_STATE
 EOF_PROP
 ) || return 1
-  otast_plan_add otast-runtime-system-prop otast "$path" 0644 "$source" external ''
+  _otast_plan_self_runtime_system_prop "$source" "$path"
 }
 
 otast_plan_pif_runtime_system_props() {
@@ -98,7 +99,7 @@ otast_plan_pif_runtime_system_props() {
     chmod 0600 "$source" || return 1
 
     # This file is a global Magisk property surface. It must always expose the
-    # installed OTA SPL, regardless of the process-local PIF profile metadata.
+    # installed OTA SPL, regardless of process-local PIF profile metadata.
     otast_prop_set_line "$source" ro.build.version.security_patch "$OTAST_SYSTEM_PATCH" || return 1
     otast_prop_set_line "$source" ro.vendor.build.security_patch "$OTAST_VENDOR_PATCH" || return 1
     chmod 0600 "$source" || return 1
@@ -139,41 +140,142 @@ otast_pif_file_value() {
   otast_kv_value "$path" "$key"
 }
 
+otast_pif_custom_profile_state() {
+  local path
+  path=$ADB_ROOT/pif.prop
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    printf 'ABSENT\n'
+    return 0
+  fi
+  if otast_validate_pif_profile_file "$path" >/dev/null 2>&1; then
+    printf 'PRESENT\n'
+  else
+    printf 'UNSAFE\n'
+  fi
+}
+
+otast_pif_active_fallback_path() {
+  local path
+  path=$ADB_ROOT/modules/playintegrityfix/pif.prop
+  [ -s "$path" ] && [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  printf '%s\n' "$path"
+}
+
+otast_pif_fallback_profile_state() {
+  local module path
+  module=$ADB_ROOT/modules/playintegrityfix
+  path=$module/pif.prop
+  if [ ! -e "$module" ] && [ ! -L "$module" ]; then
+    printf 'ABSENT\n'
+    return 0
+  fi
+  if [ ! -d "$module" ] || [ -L "$module" ]; then
+    printf 'UNSAFE\n'
+    return 0
+  fi
+  if otast_validate_pif_profile_file "$path" >/dev/null 2>&1; then
+    printf 'PRESENT\n'
+  else
+    printf 'UNSAFE\n'
+  fi
+}
+
 otast_pif_effective_profile_path() {
-  local dir
-  if [ -s "$ADB_ROOT/pif.prop" ] && [ -f "$ADB_ROOT/pif.prop" ] && [ ! -L "$ADB_ROOT/pif.prop" ]; then
+  local path
+  if [ "$(otast_pif_custom_profile_state)" = PRESENT ]; then
     printf '%s\n' "$ADB_ROOT/pif.prop"
     return 0
   fi
-  for dir in $(otast_effective_module_dirs playintegrityfix); do
-    case "$dir" in "$ADB_ROOT/modules/playintegrityfix") ;; *) continue ;; esac
-    if [ -s "$dir/pif.prop" ] && [ -f "$dir/pif.prop" ] && [ ! -L "$dir/pif.prop" ]; then
-      printf '%s\n' "$dir/pif.prop"
-      return 0
-    fi
-  done
-  return 1
+  path=$(otast_pif_active_fallback_path 2>/dev/null) || return 1
+  otast_validate_pif_profile_file "$path" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$path"
+}
+
+otast_pif_autopif_engine_state() {
+  local path
+  path=$ADB_ROOT/modules/playintegrityfix/autopif.sh
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    printf 'UNAVAILABLE\n'
+  elif [ -f "$path" ] && [ ! -L "$path" ] && grep -Fq "$OTAST_PIF_REFRESH_AUTHORITY_BEGIN" "$path" 2>/dev/null; then
+    printf 'MANAGED_REVIEWED\n'
+  elif [ -f "$path" ] && [ ! -L "$path" ]; then
+    printf 'REVIEWED_APPLY_REQUIRED\n'
+  else
+    printf 'UNSAFE\n'
+  fi
 }
 
 otast_report_pif_profile() {
-  local path value
-  path=$(otast_pif_effective_profile_path 2>/dev/null) || path='UNAVAILABLE'
-  printf 'pif_effective_profile_path=%s\n' "$path"
-  [ "$path" != UNAVAILABLE ] || return 0
+  local custom_state fallback_state fallback_path path role value relation custom_hash fallback_hash requested ownership
+  custom_state=$(otast_pif_custom_profile_state)
+  fallback_state=$(otast_pif_fallback_profile_state)
+  fallback_path=$(otast_pif_active_fallback_path 2>/dev/null) || fallback_path='UNAVAILABLE'
 
-  value=$(otast_pif_file_value "$path" FINGERPRINT 2>/dev/null) || value='UNAVAILABLE'
-  printf 'pif_profile_fingerprint=%s\n' "$value"
-  value=$(otast_pif_file_value "$path" MODEL 2>/dev/null) || value='UNAVAILABLE'
-  printf 'pif_profile_model=%s\n' "$value"
-  value=$(otast_pif_file_value "$path" SECURITY_PATCH 2>/dev/null) || value='UNAVAILABLE'
-  printf 'pif_profile_security_patch=%s\n' "$value"
-  value=$(otast_pif_file_value "$path" spoofProps 2>/dev/null) || value='UNAVAILABLE'
-  printf 'pif_profile_spoofProps=%s\n' "$value"
-  case "$value" in
-    true|1) printf '%s\n' 'pif_profile_patch_scope=process-local DroidGuard property hook enabled; profile SPL may intentionally differ from platform SPL' ;;
-    false|0) printf '%s\n' 'pif_profile_patch_scope=profile metadata retained; reviewed PIF property hook is disabled' ;;
-    *) printf '%s\n' 'pif_profile_patch_scope=UNKNOWN' ;;
-  esac
+  printf 'pif_custom_profile_path=%s\n' "$ADB_ROOT/pif.prop"
+  printf 'pif_custom_profile_state=%s\n' "$custom_state"
+  printf 'pif_fallback_profile_path=%s\n' "$fallback_path"
+  printf 'pif_fallback_profile_state=%s\n' "$fallback_state"
+
+  path=$(otast_pif_effective_profile_path 2>/dev/null) || path='UNAVAILABLE'
+  role=UNAVAILABLE
+  if [ "$path" = "$ADB_ROOT/pif.prop" ]; then
+    role=CUSTOM
+  elif [ "$path" != UNAVAILABLE ]; then
+    role=ACTIVE_FALLBACK
+  fi
+  printf 'pif_effective_profile_path=%s\n' "$path"
+  printf 'pif_effective_profile_role=%s\n' "$role"
+
+  if [ "$custom_state" = PRESENT ] && [ "$fallback_state" = PRESENT ]; then
+    custom_hash=$(otast_sha256 "$ADB_ROOT/pif.prop" 2>/dev/null) || custom_hash=''
+    fallback_hash=$(otast_sha256 "$fallback_path" 2>/dev/null) || fallback_hash=''
+    if [ -n "$custom_hash" ] && [ "$custom_hash" = "$fallback_hash" ]; then
+      relation=SAME
+    else
+      relation=DISTINCT_EXPECTED
+    fi
+  else
+    relation=UNAVAILABLE
+  fi
+  printf 'pif_profiles_relation=%s\n' "$relation"
+
+  if [ "$path" != UNAVAILABLE ]; then
+    value=$(otast_pif_file_value "$path" FINGERPRINT 2>/dev/null) || value='UNAVAILABLE'
+    printf 'pif_profile_fingerprint=%s\n' "$value"
+    value=$(otast_pif_file_value "$path" MODEL 2>/dev/null) || value='UNAVAILABLE'
+    printf 'pif_profile_model=%s\n' "$value"
+    value=$(otast_pif_file_value "$path" SECURITY_PATCH 2>/dev/null) || value='UNAVAILABLE'
+    printf 'pif_profile_security_patch=%s\n' "$value"
+    value=$(otast_pif_file_value "$path" spoofProps 2>/dev/null) || value='UNAVAILABLE'
+    printf 'pif_profile_spoofProps=%s\n' "$value"
+    case "$value" in
+      true|1) printf '%s\n' 'pif_profile_patch_scope=process-local DroidGuard property hook enabled; profile SPL may intentionally differ from platform SPL' ;;
+      false|0) printf '%s\n' 'pif_profile_patch_scope=profile metadata retained; reviewed PIF property hook is disabled' ;;
+      *) printf '%s\n' 'pif_profile_patch_scope=UNKNOWN' ;;
+    esac
+  else
+    printf '%s\n' 'pif_profile_fingerprint=UNAVAILABLE'
+    printf '%s\n' 'pif_profile_model=UNAVAILABLE'
+    printf '%s\n' 'pif_profile_security_patch=UNAVAILABLE'
+    printf '%s\n' 'pif_profile_spoofProps=UNAVAILABLE'
+    printf '%s\n' 'pif_profile_patch_scope=UNKNOWN'
+  fi
+
+  printf 'pif_autopif_engine_state=%s\n' "$(otast_pif_autopif_engine_state)"
+  printf '%s\n' 'pif_autopif_self_update_policy=OTAST_REVIEW_GATED'
+  if [ -f "$ADB_ROOT/tricky_store/pif_auto_security_patch" ] && [ ! -L "$ADB_ROOT/tricky_store/pif_auto_security_patch" ]; then
+    requested=true
+  else
+    requested=false
+  fi
+  printf 'pif_auto_security_patch_requested=%s\n' "$requested"
+  printf '%s\n' 'pif_auto_security_patch_effective_policy=OTAST_OTA_AUTHORITY'
+  if [ "${OTAST_PIF_PENDING_RETIREMENTS:-0}" -gt 0 ] 2>/dev/null; then
+    ownership=PENDING_RETIREMENT
+  else
+    ownership=PIF_OWNED
+  fi
+  printf 'pif_profile_ownership_state=%s\n' "$ownership"
 }
 
 otast_report_strict_runtime_identity() {

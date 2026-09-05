@@ -86,14 +86,35 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
         target(pif / "module.prop", _synthetic_module_prop("playintegrityfix", "PIF synthetic", "v4.7.1"), 0o644)
         target(
             pif / "pif.prop",
-            "# preserve this comment\n"
-            "FINGERPRINT=old\n"
+            "# PIF packaged fallback\n"
+            "FINGERPRINT=google/oriole_beta/oriole:CANARY/ZP11.260618.005/15760424:user/release-keys\n"
+            "MANUFACTURER=Google\n"
+            "MODEL=Pixel 6\n"
             "SECURITY_PATCH=2026-07-05\n"
             "CUSTOM_OPTION=keep-me\n"
-            "spoofBuild=false\n"
+            "spoofBuild=true\n"
             "spoofProps=false\n",
             0o644,
         )
+
+    # PIF native runtime prefers this mutable custom profile over the packaged
+    # module fallback. The deliberate identity difference models the observed
+    # Pixel 9a state and must never be treated as OTAST drift.
+    target(
+        adb_root / "pif.prop",
+        "FINGERPRINT=google/tegu_beta/tegu:CANARY/ZP11.260717.006/16004061:user/release-keys\n"
+        "MANUFACTURER=Google\n"
+        "MODEL=Pixel 9a\n"
+        "SECURITY_PATCH=2026-08-05\n"
+        "spoofBuild=true\n"
+        "spoofProps=false\n"
+        "spoofProvider=false\n"
+        "spoofSignature=false\n"
+        "spoofVendingBuild=true\n"
+        "spoofVendingSdk=false\n"
+        "DEBUG=false\n",
+        0o600,
+    )
 
     tricky = adb_root / "modules/tricky_store"
     target(
@@ -173,15 +194,7 @@ def _authority_text(system_patch: str = "2026-03-05", vendor_patch: str = "2026-
             "ro.product.device=tegu",
             "ro.product.manufacturer=Google",
             "ro.product.model=Pixel 9a",
-            "otast.pif.identity=ota",
             "otast.trickystore.securityPatch=ota",
-            "otast.pif.spoofBuild=true",
-            "otast.pif.spoofProps=true",
-            "otast.pif.spoofProvider=true",
-            "otast.pif.spoofSignature=true",
-            "otast.pif.spoofVendingBuild=true",
-            "otast.pif.spoofVendingSdk=true",
-            "otast.pif.DEBUG=false",
             "",
         )
     )
@@ -358,6 +371,9 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             "AshLooper": _file_digest(adb_root / "modules/AshLooper/sentinel.bin"),
             "BetterKnownInstalled": _file_digest(adb_root / "modules/BetterKnownInstalled/sentinel.bin"),
         }
+        pif_profile_before = {
+            rel: data for rel, data in originals.items() if rel == "pif.prop" or rel.endswith("playintegrityfix/pif.prop")
+        }
 
         preflight = _run(entry, adb_root, "preflight")
         logs.append("## preflight\n" + preflight.stdout)
@@ -378,21 +394,25 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 rel = (pif_dir / observed).relative_to(adb_root).as_posix()
                 if (pif_dir / observed).read_bytes() != originals[rel]:
                     raise OtastError(f"OTAST changed observed-only PIF lifecycle entrypoint: {rel}")
-            pif_text = (pif_dir / "pif.prop").read_text(encoding="utf-8")
-            for expected in (
-                "# preserve this comment",
-                "CUSTOM_OPTION=keep-me",
-                "FINGERPRINT=google/tegu/tegu:16/TEST/1:user/release-keys",
-                "SECURITY_PATCH=2026-03-05",
-                "spoofBuild=true",
-            ):
-                if expected not in pif_text:
-                    raise OtastError(f"PIF configuration merge lost required content: {expected}")
+            rel = (pif_dir / "pif.prop").relative_to(adb_root).as_posix()
+            if (pif_dir / "pif.prop").read_bytes() != pif_profile_before[rel]:
+                raise OtastError(f"OTAST changed PIF-owned fallback profile: {rel}")
             system_prop = (pif_dir / "system.prop").read_text(encoding="utf-8")
             if "ro.build.version.security_patch=2026-03-05" not in system_prop:
                 raise OtastError("PIF global system.prop did not converge to OTA system SPL")
             if "ro.vendor.build.security_patch=2026-03-05" not in system_prop:
                 raise OtastError("PIF global system.prop did not converge to OTA vendor SPL")
+            auto_ota = (pif_dir / "autopif_ota.sh").read_text(encoding="utf-8").splitlines()
+            if len(auto_ota) < 5 or auto_ota[1] != "# otast managed: AutoPIF executable self-update gate" or auto_ota[4] != "exit 0":
+                raise OtastError("AutoPIF executable self-update is not gated before the reviewed upstream body")
+        if (adb_root / "pif.prop").read_bytes() != pif_profile_before["pif.prop"]:
+            raise OtastError("OTAST changed the PIF-owned global custom profile")
+
+        profile_report = _run(entry, adb_root, "report")
+        if "pif_effective_profile_role=CUSTOM" not in profile_report.stdout:
+            raise OtastError("Report did not identify the global PIF custom profile as effective")
+        if "pif_profiles_relation=DISTINCT_EXPECTED" not in profile_report.stdout:
+            raise OtastError("Report did not classify the custom/fallback identity difference as expected")
 
         yuri_keybox = adb_root / "modules/Yurikey/Yuri/yuri_keybox.sh"
         if "automatic keybox replacement is disabled" not in yuri_keybox.read_text(encoding="utf-8"):
@@ -411,9 +431,36 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         logs.append("## pre-reboot verify rejection\n" + pre_reboot_verify.stdout)
         logs.append("## post-reboot verify\n" + verify_one.stdout)
 
+        # A PIF-sanctioned custom profile refresh is external configuration, not
+        # managed-file drift and not platform SPL authority.
+        tricky_before_refresh = (adb_root / "tricky_store/security_patch.txt").read_bytes()
+        _write(
+            adb_root / "pif.prop",
+            "FINGERPRINT=google/shiba_beta/shiba:CANARY/ZP11.260717.006/16004061:user/release-keys\n"
+            "MANUFACTURER=Google\nMODEL=Pixel 8\nSECURITY_PATCH=2026-08-05\n"
+            "spoofBuild=true\nspoofProps=false\nspoofProvider=false\nspoofSignature=false\n"
+            "spoofVendingBuild=true\nspoofVendingSdk=false\nDEBUG=false\n",
+            0o600,
+        )
+        profile_refresh_verify = _run(entry, adb_root, "verify")
+        if (adb_root / "tricky_store/security_patch.txt").read_bytes() != tricky_before_refresh:
+            raise OtastError("PIF profile refresh changed OTAST-owned TrickyStore patch metadata")
+        logs.append("## PIF custom profile refresh\n" + profile_refresh_verify.stdout)
+
+        # PIF's own reset path may delete the global custom profile. Native
+        # runtime then falls back to the active module profile; OTAST must not
+        # recreate or roll the custom file back.
+        (adb_root / "pif.prop").unlink()
+        fallback_verify = _run(entry, adb_root, "verify")
+        fallback_report = _run(entry, adb_root, "report")
+        if "pif_effective_profile_role=ACTIVE_FALLBACK" not in fallback_report.stdout:
+            raise OtastError("PIF global reset did not expose the active module fallback in Report")
+        if (adb_root / "pif.prop").exists():
+            raise OtastError("OTAST recreated a PIF custom profile after PIF reset")
+        logs.append("## PIF fallback reset\n" + fallback_verify.stdout + fallback_report.stdout)
+        _write(adb_root / "pif.prop", pif_profile_before["pif.prop"].decode("utf-8"), 0o600)
+
         # Semantic runtime drift must fail even when managed file hashes remain CURRENT.
-        # The fake root intentionally reuses live.prop as static source evidence, so the
-        # exact rejection layer may be source-identity or strict-runtime validation.
         semantic_live = adb_root / "live.prop"
         semantic_original = semantic_live.read_text(encoding="utf-8")
         semantic_live.write_text(
@@ -436,6 +483,9 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
 
         _write(adb_root / "ota.prop", _authority_text("2026-04-05", "2026-04-05"), 0o600)
         _write(adb_root / "live.prop", _live_text("2026-04-05", "2026-04-05"), 0o600)
+        staged_pif = adb_root / "modules_update/playintegrityfix/pif.prop"
+        staged_before = staged_pif.read_bytes()
+        global_before = (adb_root / "pif.prop").read_bytes()
         authority_update = _run(entry, adb_root, "apply")
         _simulate_managed_boot(adb_root)
         verify_two = _run(entry, adb_root, "verify")
@@ -443,9 +493,8 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         patch_value = (adb_root / "tricky_store/security_patch.txt").read_text(encoding="utf-8")
         if "boot=2026-04-05" not in patch_value or "vendor=2026-04-05" not in patch_value:
             raise OtastError("authority update did not reach the TrickyStore contract")
-        staged_pif = adb_root / "modules_update/playintegrityfix/pif.prop"
-        if "SECURITY_PATCH=2026-04-05" not in staged_pif.read_text(encoding="utf-8"):
-            raise OtastError("authority update did not reach the staged PIF contract under explicit OTA identity takeover")
+        if staged_pif.read_bytes() != staged_before or (adb_root / "pif.prop").read_bytes() != global_before:
+            raise OtastError("OTA authority update incorrectly rewrote PIF-owned profile data")
 
         managed_autopif = adb_root / "modules/playintegrityfix/autopif.sh"
         managed_bytes = managed_autopif.read_bytes()
@@ -508,6 +557,19 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("symlink attack modified an outside path")
         logs.append("## symlink rejection\n" + symlink.stdout)
 
+        # PIF-owned profiles are still required to be safe regular files.
+        profile_link_root, profile_link_entry, _ = _new_root(base / "pif-profile-symlink", module_zip, staged_pif=False)
+        outside_profile = base / "outside-pif-profile"
+        outside_profile.write_text("FINGERPRINT=outside\nSECURITY_PATCH=2026-08-05\n", encoding="utf-8")
+        (profile_link_root / "pif.prop").unlink()
+        os.symlink(outside_profile, profile_link_root / "pif.prop")
+        profile_link = _run(profile_link_entry, profile_link_root, "preflight", expect=1)
+        if "PIF profile is not a safe regular file" not in profile_link.stdout:
+            raise OtastError("unsafe PIF custom-profile symlink failed for the wrong reason")
+        if outside_profile.read_text(encoding="utf-8") != "FINGERPRINT=outside\nSECURITY_PATCH=2026-08-05\n":
+            raise OtastError("unsafe PIF profile validation modified the symlink target")
+        logs.append("## PIF profile symlink rejection\n" + profile_link.stdout)
+
         # A live lock owner must not be displaced.
         locked_root, locked_entry, _ = _new_root(base / "active-lock", module_zip, staged_pif=False)
         active_lock = locked_root / "otast/lock"
@@ -536,19 +598,21 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("legacy-governor scenario failed for the wrong reason")
         logs.append("## legacy governor rejection\n" + legacy.stdout)
 
-        # PIF's Auto Security Patch flag is user configuration. The flag itself is
-        # preserved while OTAST neutralizes the reviewed writer it would invoke.
+        # PIF's Auto Security Patch flag remains user/PIF configuration. OTAST's
+        # adapter preserves marker semantics but does not promote profile SPL.
         auto_root, auto_entry, auto_originals = _new_root(base / "pif-auto-generator", module_zip, staged_pif=False)
         auto_flag = auto_root / "tricky_store/pif_auto_security_patch"
         _write(auto_flag, "", 0o600)
         auto_preflight = _run(auto_entry, auto_root, "preflight")
-        if "will neutralize its reviewed global writer on Apply" not in auto_preflight.stdout:
-            raise OtastError("PIF auto-patch flag was accepted without explicit ownership evidence")
+        if "OTAST preserves the preference" not in auto_preflight.stdout:
+            raise OtastError("PIF auto-patch flag was accepted without explicit authority evidence")
         auto_apply = _run(auto_entry, auto_root, "apply")
         auto_writer = auto_root / "modules/playintegrityfix/security_patch.sh"
         auto_writer_text = auto_writer.read_text(encoding="utf-8")
-        if "# otast managed" not in auto_writer_text or "exit 0" not in auto_writer_text.splitlines()[:5]:
-            raise OtastError("PIF automatic security-patch writer was not neutralized on Apply")
+        if "# otast managed: PIF auto-security-patch compatibility adapter" not in auto_writer_text:
+            raise OtastError("PIF automatic security-patch writer was not adapted on Apply")
+        if "rm -f \"$AUTO_FLAG\" \"$MODDIR/system.prop\"" not in auto_writer_text:
+            raise OtastError("reviewed upstream security-patch body was not retained as unreachable audit evidence")
         if not auto_flag.is_file() or auto_flag.is_symlink():
             raise OtastError("PIF auto-patch user flag was not preserved during Apply")
         auto_restore = _run(auto_entry, auto_root, "restore")
@@ -602,7 +666,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         logs.append("## state tamper rejection\n" + tampered.stdout)
 
         evidence = {
-            "schema_version": 3,
+            "schema_version": 4,
             "result": "PASS",
             "module_zip": module_zip.name,
             "module_sha256": sha256_file(module_zip),
@@ -622,13 +686,19 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "unknown_hash_rejected": True,
                 "identity_mismatch_rejected": True,
                 "symlink_escape_rejected": True,
+                "pif_profile_symlink_rejected": True,
                 "active_lock_rejected": True,
                 "missing_required_writer_rejected": True,
                 "legacy_governor_rejected": True,
-                "pif_auto_flag_absorbed": True,
+                "pif_auto_flag_preserved": True,
                 "pif_auto_flag_unsafe_symlink_rejected": True,
                 "pif_lifecycle_entrypoints_preserved": True,
-                "pif_unknown_options_preserved": True,
+                "pif_global_custom_profile_preserved": True,
+                "pif_module_fallback_profiles_preserved": True,
+                "pif_distinct_profiles_expected": True,
+                "pif_custom_profile_refresh_accepted": profile_refresh_verify.returncode == 0,
+                "pif_global_reset_uses_active_fallback": fallback_verify.returncode == 0,
+                "pif_autopif_self_update_review_gated": True,
                 "ta_non_vbmeta_behaviour_preserved": True,
                 "yurikey_keybox_writer_neutralized": True,
                 "trickystore_targeted_broken_keybox_rejected": True,
