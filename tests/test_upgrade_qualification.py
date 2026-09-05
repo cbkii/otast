@@ -17,13 +17,14 @@ class UpgradeQualificationTests(unittest.TestCase):
         scenarios = evidence["scenarios"]
         for name in (
             "synthetic_stable_to_candidate",
+            "self_managed_system_prop_rehydrated_transactionally",
             "existing_managed_state_adopted",
             "modules_update_state_preserved",
             "original_backups_preserved",
-            "candidate_reinstall_noop",
+            "second_apply_noop",
+            "candidate_reinstall_safe",
             "active_staged_disagreement_rejected",
             "contradictory_state_rejected",
-            "no_upgrade_transaction_when_runtime_identical",
         ):
             with self.subTest(name=name):
                 self.assertTrue(scenarios[name])
