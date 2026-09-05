@@ -314,6 +314,8 @@
         "release_ref": "v4.4",
         "reviewed_source_commit": "5d852b6ae087758178c42e56f98a4cde9c696f49",
         "reviewed_generated_commit": "03375e62b0c6e8fee95d401c7b1fd84aa38af24f",
+        "release_asset_name": "TrickyAddonModule-v4.4.zip",
+        "release_asset_sha256": "b4a5f0399d766cabc8ac052afadfc9c069396f3e4f6451c05857e209d44a5b5d",
         "module_ids": [
           "TA_utl",
           ".TA_utl"
