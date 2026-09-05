@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,10 @@ PROP_KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 class CollectError(RuntimeError):
     pass
+
+
+def _valid_module_id(value: object) -> bool:
+    return isinstance(value, str) and value not in {".", ".."} and MODULE_ID_RE.fullmatch(value) is not None
 
 
 def run(argv: list[str], *, timeout: int = 10, max_output: int = MAX_OUTPUT) -> subprocess.CompletedProcess[str]:
@@ -100,7 +105,7 @@ def parse_prop_text(raw: str) -> dict[str, str]:
 
 
 def module_prop(module_id: str) -> dict[str, str] | None:
-    if not MODULE_ID_RE.fullmatch(module_id):
+    if not _valid_module_id(module_id):
         raise CollectError(f"unsafe declared module ID: {module_id}")
     path = f"/data/adb/modules/{module_id}/module.prop"
     try:
@@ -148,7 +153,14 @@ def declared_module_ids(registry: dict[str, Any]) -> tuple[dict[str, list[str]],
     for target, record in sorted(targets.items()):
         if not isinstance(record, dict) or record.get("target_role") != "MANAGED":
             continue
-        ids = [str(value) for value in record.get("module_ids", []) if isinstance(value, str)]
+        raw_ids = record.get("module_ids")
+        if not isinstance(raw_ids, list):
+            raise CollectError(f"managed target module_ids must be a list: {target}")
+        ids: list[str] = []
+        for value in raw_ids:
+            if not _valid_module_id(value):
+                raise CollectError(f"unsafe managed target module ID: {value!r}")
+            ids.append(value)
         if ids:
             managed[str(target)] = ids
 
@@ -158,7 +170,14 @@ def declared_module_ids(registry: dict[str, Any]) -> tuple[dict[str, list[str]],
         for name, record in sorted(dependencies.items()):
             if not isinstance(record, dict) or record.get("mode") != "READ_ONLY":
                 continue
-            ids = [str(value) for value in record.get("module_ids", []) if isinstance(value, str)]
+            raw_ids = record.get("module_ids", [])
+            if not isinstance(raw_ids, list):
+                raise CollectError(f"observed dependency module_ids must be a list: {name}")
+            ids = []
+            for value in raw_ids:
+                if not _valid_module_id(value):
+                    raise CollectError(f"unsafe observed dependency module ID: {value!r}")
+                ids.append(value)
             if ids:
                 observed[str(name)] = ids
     return managed, observed
@@ -199,7 +218,7 @@ def ihi_summary(module_ids: list[str]) -> dict[str, object]:
 def load_optional_report(path_text: str | None, label: str) -> dict[str, Any] | None:
     if not path_text:
         return None
-    return load_json(Path(path_text).expanduser().resolve(), label)
+    return load_json(Path(path_text).expanduser(), label)
 
 
 def validate_native_evidence(value: dict[str, Any], *, page_size: str, sdk: str) -> list[str]:
@@ -214,8 +233,24 @@ def validate_native_evidence(value: dict[str, Any], *, page_size: str, sdk: str)
     if str(platform.get("android_sdk", "")) != sdk:
         failures.append("native/runtime evidence SDK disagrees with device capture")
     modules = value.get("modules")
-    if not isinstance(modules, list):
-        failures.append("native/runtime evidence module inventory is missing")
+    if not isinstance(modules, list) or not modules:
+        failures.append("native/runtime evidence module inventory is missing or empty")
+        return failures
+    seen: set[str] = set()
+    for item in modules:
+        if not isinstance(item, dict):
+            failures.append("native/runtime evidence contains a malformed module entry")
+            continue
+        module_id = item.get("module_id")
+        if not _valid_module_id(module_id):
+            failures.append("native/runtime evidence contains an unsafe module ID")
+            continue
+        if module_id in seen:
+            failures.append(f"native/runtime evidence contains duplicate module ID: {module_id}")
+            continue
+        seen.add(module_id)
+        if item.get("status") not in {"AVAILABLE", "ABSENT_OR_UNSAFE"}:
+            failures.append(f"native/runtime evidence has invalid module status: {module_id}")
     return failures
 
 
@@ -314,6 +349,11 @@ def collect(args: argparse.Namespace) -> dict[str, object]:
         "result": "INCONCLUSIVE",
         "reason": "no root-exposure report supplied",
     }
+    if root_attribution.get("result") not in {"PASS", "PASS_WITH_ATTRIBUTION"}:
+        failures.append(
+            f"root-exposure attribution is not acceptable: {root_attribution.get('result', 'INCONCLUSIVE')}"
+        )
+
     acceptance = load_optional_report(args.acceptance_json, "external acceptance evidence") or {
         "status": "NOT_SUPPLIED"
     }
@@ -351,18 +391,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-evidence-json", help="read-only native/runtime compatibility evidence JSON")
     parser.add_argument("--output", required=True, help="private JSON output path")
     args = parser.parse_args(argv)
-    output = Path(args.output).expanduser().resolve()
-    if output.exists() and output.is_symlink():
-        print(f"STOP: output is a symlink: {output}", file=sys.stderr)
+    raw_output = Path(args.output).expanduser()
+    if raw_output.is_symlink():
+        print(f"STOP: output is a symlink: {raw_output}", file=sys.stderr)
         return 2
+    output = raw_output.absolute()
     try:
         report = collect(args)
         encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
         output.parent.mkdir(parents=True, exist_ok=True)
-        temp = output.with_name(output.name + f".tmp.{os.getpid()}")
-        temp.write_text(encoded, encoding="utf-8")
-        temp.chmod(0o600)
-        temp.replace(output)
+        if output.is_symlink() or (output.exists() and not output.is_file()):
+            raise CollectError(f"output path is unsafe: {output}")
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            dir=output.parent,
+            delete=False,
+        ) as handle:
+            temp = Path(handle.name)
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            temp.chmod(0o600)
+            os.replace(temp, output)
+        finally:
+            temp.unlink(missing_ok=True)
         sys.stdout.write(encoded)
         return 0 if report["result"] == "PASS" else 1
     except (CollectError, OSError, ValueError) as exc:
