@@ -40,6 +40,7 @@ SEMANTIC_IMPACTS = {
     "MODULE_IDENTITY_CHANGED",
     "UNKNOWN_PACKAGE_CHANGE",
 }
+LEGACY_REVIEW_RESULTS = {"NO_PACKAGE_IMPACT", "PACKAGE_CHANGED"}
 sys.dont_write_bytecode = True
 
 
@@ -320,19 +321,22 @@ def compare_source_paths(repository: str, base: str, head: str, env: dict[str, s
         if not isinstance(filename, str) or not filename or filename.startswith("/") or ".." in Path(filename).parts:
             raise ControlledError("GitHub compare returned an unsafe changed path")
         paths.append(filename)
-    # GitHub's compare endpoint limits the file list. A boundary-sized response
-    # cannot prove completeness, so it is represented as unknown/review-required.
-    complete = len(files) < 300
-    if not paths:
-        complete = False
+    status = str(value.get("status", "unknown")) if isinstance(value, dict) else "unknown"
+    ahead_by = int(value.get("ahead_by", 0)) if isinstance(value, dict) else 0
+    behind_by = int(value.get("behind_by", 0)) if isinstance(value, dict) else 0
+    # The compare endpoint limits its file list. Semantic auto-classification is
+    # only safe when the observed commit is a strict descendant of the reviewed
+    # baseline and the file list is below that boundary. Diverged/behind histories
+    # remain review-required even when the returned first page happens to be small.
+    complete = status == "ahead" and ahead_by > 0 and behind_by == 0 and 0 < len(files) < 300
     return {
         "schema_version": 1,
         "repository": repository,
         "base": base,
         "head": head,
-        "status": str(value.get("status", "unknown")) if isinstance(value, dict) else "unknown",
-        "ahead_by": int(value.get("ahead_by", 0)) if isinstance(value, dict) else 0,
-        "behind_by": int(value.get("behind_by", 0)) if isinstance(value, dict) else 0,
+        "status": status,
+        "ahead_by": ahead_by,
+        "behind_by": behind_by,
         "total_commits": int(value.get("total_commits", 0)) if isinstance(value, dict) else 0,
         "complete": complete,
         "changed_paths": sorted(set(paths)),
@@ -544,7 +548,7 @@ def run_monitor(root: Path, *, output: Path, cleanup: bool, keep: int) -> tuple[
 def report_classification(path: Path) -> tuple[str, bool]:
     candidates = [
         (path / "target-monitor.json", {"SUPPORTED"}),
-        (path / "review.json", SEMANTIC_IMPACTS),
+        (path / "review.json", SEMANTIC_IMPACTS | LEGACY_REVIEW_RESULTS),
         (path / "maintenance.json", {"PASS"}),
     ]
     for file_path, success_values in candidates:
@@ -735,7 +739,7 @@ def classify_review_result(
     accepted automatically. Native and every other runtime-relevant class remain
     review-required even when current packaging happens to be identical.
     """
-    del preflight_rc  # Staged Preflight remains diagnostic for source/package review.
+    del preflight_rc
     evidence_ok = active_candidate_compare_rc == 0 and report_rc == 0
     if not evidence_ok:
         return False, "VALIDATION_FAILED", EXIT_ERROR, "DIAGNOSTIC_SOURCE_PREFLIGHT"
