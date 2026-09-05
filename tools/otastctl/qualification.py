@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +54,64 @@ def load_qualification_registry(root: Path) -> dict[str, Any]:
     return _load_json(qualification_registry_path(root), "qualification registry")
 
 
+def _candidate_zip_registry_provenance(path: Path, expected_source: str) -> dict[str, object]:
+    """Read registry provenance from the exact candidate ZIP used by physical proof.
+
+    `release-device-lifecycle.sh` supplies ZIP_PATH_VALUE and SOURCE_VALUE only to
+    its proof-generation Python process. In that bounded context the candidate ZIP,
+    not a possibly stale/dirty local checkout, is the provenance authority.
+    """
+    if path.is_symlink() or not path.is_file():
+        raise OtastError(f"candidate ZIP is missing or unsafe: {path}")
+    if SHA40_RE.fullmatch(expected_source) is None:
+        raise OtastError("candidate source commit must be a full Git SHA")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            raw = archive.read("release.properties").decode("utf-8")
+    except (OSError, KeyError, UnicodeDecodeError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise OtastError(f"cannot read candidate release provenance: {path}") from exc
+    values: dict[str, str] = {}
+    for line in raw.splitlines():
+        if not line or "=" not in line:
+            raise OtastError("candidate release.properties contains a malformed line")
+        key, value = line.split("=", 1)
+        if not key or not value or key in values:
+            raise OtastError("candidate release.properties contains duplicate or empty metadata")
+        values[key] = value
+    if values.get("schema_version") != "2":
+        raise OtastError("candidate release.properties schema mismatch")
+    if values.get("commit_sha") != expected_source:
+        raise OtastError("candidate ZIP source commit disagrees with physical-proof source")
+    try:
+        compatibility_schema = int(values["compatibility_registry_schema"])
+        qualification_schema = int(values["qualification_registry_schema"])
+    except (KeyError, ValueError) as exc:
+        raise OtastError("candidate registry schema provenance is invalid") from exc
+    if compatibility_schema <= 0 or qualification_schema <= 0:
+        raise OtastError("candidate registry schema provenance must be positive")
+    compatibility_sha = values.get("compatibility_registry_sha256", "")
+    qualification_sha = values.get("qualification_registry_sha256", "")
+    if SHA64_RE.fullmatch(compatibility_sha) is None or SHA64_RE.fullmatch(qualification_sha) is None:
+        raise OtastError("candidate registry SHA-256 provenance is invalid")
+    return {
+        "compatibility_registry_schema": compatibility_schema,
+        "compatibility_registry_sha256": compatibility_sha,
+        "qualification_registry_schema": qualification_schema,
+        "qualification_registry_sha256": qualification_sha,
+    }
+
+
 def registry_provenance(root: Path) -> dict[str, object]:
+    # Physical proof generation deliberately exports these two values only for
+    # the inline proof writer. Binding here prevents a dirty/stale checkout from
+    # stamping local registry hashes onto a ZIP built by authoritative GitHub main.
+    candidate_zip = os.environ.get("ZIP_PATH_VALUE")
+    candidate_source = os.environ.get("SOURCE_VALUE")
+    if candidate_zip or candidate_source:
+        if not candidate_zip or not candidate_source:
+            raise OtastError("physical-proof candidate provenance environment is incomplete")
+        return _candidate_zip_registry_provenance(Path(candidate_zip), candidate_source)
+
     compatibility_path = root / "compatibility/supported-targets.json"
     qualification_path = qualification_registry_path(root)
     compatibility = _load_json(compatibility_path, "compatibility registry")
