@@ -221,6 +221,26 @@ def load_optional_report(path_text: str | None, label: str) -> dict[str, Any] | 
     return load_json(Path(path_text).expanduser(), label)
 
 
+def collect_runtime_evidence(path_text: str | None) -> dict[str, Any]:
+    if path_text:
+        value = load_optional_report(path_text, "native/runtime compatibility evidence")
+        assert value is not None
+        return value
+    script = ROOT / "scripts/runtime-compatibility-evidence.py"
+    if script.is_symlink() or not script.is_file():
+        raise CollectError(f"native/runtime evidence collector is missing or unsafe: {script}")
+    with tempfile.TemporaryDirectory(prefix="otast-runtime-evidence-") as raw:
+        output = Path(raw) / "runtime-evidence.json"
+        result = run([sys.executable, str(script), "--output", str(output)], timeout=120)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise CollectError(
+                "native/runtime compatibility evidence collection failed"
+                + (f": {detail}" if detail else "")
+            )
+        return load_json(output, "native/runtime compatibility evidence")
+
+
 def validate_native_evidence(value: dict[str, Any], *, page_size: str, sdk: str) -> list[str]:
     failures: list[str] = []
     if value.get("schema_version") != 1 or value.get("collector") != "runtime-compatibility-evidence" or value.get("read_only") is not True:
@@ -357,12 +377,8 @@ def collect(args: argparse.Namespace) -> dict[str, object]:
     acceptance = load_optional_report(args.acceptance_json, "external acceptance evidence") or {
         "status": "NOT_SUPPLIED"
     }
-    native_evidence = load_optional_report(args.runtime_evidence_json, "native/runtime compatibility evidence")
-    if native_evidence is None:
-        failures.append("native/runtime compatibility evidence was not supplied")
-        native_evidence = {"status": "NOT_SUPPLIED"}
-    else:
-        failures.extend(validate_native_evidence(native_evidence, page_size=page_size, sdk=str(identity["sdk"])))
+    native_evidence = collect_runtime_evidence(args.runtime_evidence_json)
+    failures.extend(validate_native_evidence(native_evidence, page_size=page_size, sdk=str(identity["sdk"])))
 
     return {
         "schema_version": 1,
@@ -388,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only OTAST physical qualification evidence collector")
     parser.add_argument("--root-doctor-json", help="optional sanitized root-exposure-doctor JSON")
     parser.add_argument("--acceptance-json", help="optional sanitized external verdict/attestation JSON")
-    parser.add_argument("--runtime-evidence-json", help="read-only native/runtime compatibility evidence JSON")
+    parser.add_argument("--runtime-evidence-json", help="optional pre-collected native/runtime evidence; otherwise collect it read-only now")
     parser.add_argument("--output", required=True, help="private JSON output path")
     args = parser.parse_args(argv)
     raw_output = Path(args.output).expanduser()
