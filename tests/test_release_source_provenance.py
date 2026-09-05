@@ -13,7 +13,7 @@ class ReleaseSourceProvenanceTests(unittest.TestCase):
         text = WRAPPER.read_text(encoding="utf-8")
         self.assertIn("fetch_remote_file update.json", text)
         self.assertIn("fetch_remote_file module/module.prop", text)
-        self.assertIn('git -C "$REPO_ROOT" show "origin/main:$path"', text)
+        self.assertIn('"$REAL_GIT" -C "$REPO_ROOT" show "origin/main:$path"', text)
         self.assertIn("local checkout is dirty; leaving it untouched. Release assets still target GitHub main.", text)
         self.assertIn("local branch is", text)
         self.assertIn("GitHub-main release metadata", text)
