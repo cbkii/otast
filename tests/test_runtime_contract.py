@@ -17,37 +17,65 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertNotIn(" apply", post_fs)
 
     def test_pif_managed_surface_is_minimal(self) -> None:
+        manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
+        pif = manifest["targets"]["playintegrityfix"]
+        self.assertEqual(
+            set(pif["managed_paths"]),
+            {"autopif.sh", "autopif_ota.sh", "pif.prop", "security_patch.sh", "system.prop"},
+        )
         profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
-        for path in ("action.sh", "post-fs-data.sh", "service.sh", "common_func.sh"):
-            self.assertNotIn(f"playintegrityfix/{path}", profiles)
-        for path in ("autopif.sh", "autopif_ota.sh", "pif.prop", "security_patch.sh", "system.prop"):
-            self.assertIn(f"playintegrityfix/{path}", profiles)
+        pif_block = profiles.split("otast_plan_pif()", 1)[1].split("otast_plan_ta_utl()", 1)[0]
+        self.assertIn("otast_effective_module_dirs playintegrityfix", pif_block)
+        for path in ("autopif.sh", "autopif_ota.sh", "pif.prop", "security_patch.sh"):
+            self.assertIn(f'"$dir/{path}"', pif_block)
+        for observed in ("action.sh", "post-fs-data.sh", "service.sh", "common_func.sh"):
+            self.assertNotIn(f'"$dir/{observed}"', pif_block)
+        self.assertFalse((ROOT / "module/runtime/templates/pif").exists())
 
     def test_pif_manifest_and_runtime_autopif_allowlists_match(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         pif = manifest["targets"]["playintegrityfix"]
-        runtime = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
-        for name in ("autopif.sh", "autopif_ota.sh"):
-            expected = pif["accepted_hashes"][name]
-            match = re.search(
-                rf'otast_plan_pif_autopif "[^"\n]+/{re.escape(name)}" "([^"\n]+)" "([^"\n]+)" "([^"\n]+)"',
-                runtime,
-            )
+        profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
+        pif_block = profiles.split("otast_plan_pif()", 1)[1].split("otast_plan_ta_utl()", 1)[0]
+
+        autopif = re.search(
+            r'"\$dir/autopif\.sh" 0755 \\\n\s+otast_transform_pif_autopif \\\n\s+\'([0-9a-f,]+)\'',
+            pif_block,
+        )
+        autopif_ota = re.search(
+            r'"\$dir/autopif_ota\.sh" 0755 \\\n\s+otast_transform_pif_ota \\\n\s+\'([0-9a-f,]+)\'',
+            pif_block,
+        )
+        security_patch = re.search(
+            r'"\$dir/security_patch\.sh" 0755 \\\n\s+otast_transform_pif_security_patch \\\n\s+\'([0-9a-f,]+)\'',
+            pif_block,
+        )
+        for name, match in (
+            ("autopif.sh", autopif),
+            ("autopif_ota.sh", autopif_ota),
+            ("security_patch.sh", security_patch),
+        ):
             self.assertIsNotNone(match, name)
             assert match is not None
-            self.assertEqual([value for value in match.groups() if value], expected)
+            self.assertEqual(set(match.group(1).split(",")), set(pif["accepted_hashes"][name]))
 
     def test_legacy_governor_and_pif_auto_patch_contract(self) -> None:
         common = (ROOT / "module/runtime/common.sh").read_text(encoding="utf-8")
+        entry = (ROOT / "module/runtime/entry.sh").read_text(encoding="utf-8")
         profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
-        self.assertIn("otast_check_legacy_governors", common)
-        self.assertIn("000-$legacy_otasst.sh", common)
-        self.assertIn("persistent runtime trace", common)
-        self.assertIn("$OTAST_PIF_AUTO_PATCH_FLAG", profiles)
-        self.assertNotIn("otast_check_legacy_governors", profiles)
-        self.assertIn("regular Auto Security Patch marker", profiles)
-        self.assertIn("not a regular file", profiles)
-        self.assertNotIn("rm -f \"$OTAST_PIF_AUTO_PATCH_FLAG\"", profiles)
+        pif = (ROOT / "module/runtime/pif.sh").read_text(encoding="utf-8")
+        upstream_autopif = (ROOT / "tests/fixtures/upstream/pif-autopif-ea93222c.sh").read_text(encoding="utf-8")
+
+        self.assertIn("otast_require_no_legacy_governors()", common)
+        self.assertGreaterEqual(entry.count("otast_require_no_legacy_governors"), 4)
+        self.assertIn("pif_auto_security_patch", upstream_autopif)
+        self.assertIn('sh "$MODDIR/security_patch.sh"', upstream_autopif)
+        self.assertIn("pif_auto_security_patch", profiles)
+        self.assertIn("will neutralize its reviewed global writer on Apply", profiles)
+        self.assertIn("PIF automatic security-patch flag is not a safe regular file", profiles)
+        self.assertNotIn("PIF automatic security-patch generation conflicts with OTAST ownership", profiles)
+        self.assertIn("otast_transform_pif_security_patch", profiles)
+        self.assertIn("OTAST owns the PIF/TrickyStore security-patch authority", pif)
 
     def test_runtime_authority_is_pixel_family_not_model_pinned(self) -> None:
         authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
@@ -85,9 +113,8 @@ class RuntimeContractTests(unittest.TestCase):
 
     def test_runtime_never_names_strict_exclusions(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
-        exclusions = manifest["strict_exclusions"]
         runtime_text = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "module").rglob("*.sh"))
-        for exclusion in exclusions:
+        for exclusion in manifest["strict_exclusions"]:
             self.assertNotIn(exclusion, runtime_text)
 
     def test_boot_hash_and_live_vbmeta_contract(self) -> None:
@@ -105,9 +132,11 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("otast_compare_bootloader_vbmeta", authority)
         self.assertIn("androidboot.vbmeta.digest", authority)
         self.assertIn("androidboot.vbmeta.avb_version", authority)
-        self.assertIn("ro.boot.vbmeta.digest", profiles)
-        self.assertIn("ro.boot.vbmeta.avb_version", profiles)
-        self.assertIn("ro.boot.avb_version", profiles)
+        self.assertIn("$OTAST_VBMETA_DIGEST", profiles)
+        boot_block = profiles.split("otast_plan_global_contracts()", 1)[1].split("otast_plan_pif()", 1)[0]
+        self.assertNotIn("ro.boot.vbmeta.digest", boot_block)
+        self.assertNotIn("ro.boot.vbmeta.avb_version", boot_block)
+        self.assertNotIn("ro.boot.avb_version", boot_block)
         self.assertIn("OTAST_VBMETA_SIZE", report)
 
     def test_runtime_vbmeta_contract_excludes_artifact_size(self) -> None:
