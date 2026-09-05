@@ -46,6 +46,11 @@ def _state_snapshot(adb_root: Path) -> dict[str, str]:
     return snapshot
 
 
+def _transaction_count(adb_root: Path) -> int:
+    root = adb_root / "otast/transactions"
+    return len([path for path in root.glob("*") if path.is_dir() and not path.is_symlink()])
+
+
 def _install_candidate(module_zip: Path, adb_root: Path) -> Path:
     destination = adb_root / "modules/otast"
     if destination.is_symlink():
@@ -83,8 +88,9 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
 
     The predecessor uses the candidate runtime with an older synthetic module
     identity. This isolates the upgrade contract itself: records/backups, active
-    and staged targets, no-op adoption, reinstall, and fail-closed contradictory
-    state. Runtime-byte changes are separately guarded by the canonical digest.
+    and staged targets, transactional self-file rehydration, no-op repeat Apply,
+    reinstall, and fail-closed contradictory state. Runtime-byte changes are
+    separately guarded by the canonical digest.
     """
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,19 +111,36 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
             raise OtastError("predecessor did not create managed state for modules_update")
         before_upgrade = _state_snapshot(adb_root)
 
+        # Replacing a Magisk module removes the generated system.prop from the
+        # old module directory while persistent OTAST records survive. Candidate
+        # Apply must rehydrate that one self-owned file transactionally without
+        # replacing original backups or weakening drift handling for other paths.
         candidate_entry = _install_candidate(module_zip, adb_root)
         _run(candidate_entry, adb_root, "preflight")
-        transactions_before = len(list((adb_root / "otast/transactions").glob("*")))
+        transactions_before = _transaction_count(adb_root)
         upgrade_apply = _run(candidate_entry, adb_root, "apply")
-        transactions_after = len(list((adb_root / "otast/transactions").glob("*")))
-        if transactions_after != transactions_before:
-            raise OtastError("compatible predecessor-to-candidate upgrade created a new transaction")
+        transactions_after = _transaction_count(adb_root)
+        if transactions_after != transactions_before + 1:
+            raise OtastError("candidate upgrade did not use exactly one rehydration transaction")
         if _state_snapshot(adb_root) != before_upgrade:
             raise OtastError("candidate upgrade rewrote predecessor state or original backups")
 
+        # Once rehydrated, a second Apply must be a genuine no-op.
+        before_noop = _transaction_count(adb_root)
+        no_op_apply = _run(candidate_entry, adb_root, "apply")
+        after_noop = _transaction_count(adb_root)
+        if after_noop != before_noop:
+            raise OtastError("second candidate Apply created a transaction despite no changes")
+
+        # Reinstalling the same candidate repeats only the expected self-file
+        # rehydration transaction and still preserves the first original backup.
         reinstalled_entry = _install_candidate(module_zip, adb_root)
         _run(reinstalled_entry, adb_root, "preflight")
+        before_reinstall = _transaction_count(adb_root)
         reinstall_apply = _run(reinstalled_entry, adb_root, "apply")
+        after_reinstall = _transaction_count(adb_root)
+        if after_reinstall != before_reinstall + 1:
+            raise OtastError("candidate reinstall did not use exactly one rehydration transaction")
         if _state_snapshot(adb_root) != before_upgrade:
             raise OtastError("candidate reinstall rewrote managed state or original backups")
 
@@ -144,12 +167,13 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
             "result": "PASS",
             "scenarios": {
                 "synthetic_stable_to_candidate": upgrade_apply.returncode == 0,
+                "self_managed_system_prop_rehydrated_transactionally": transactions_after == transactions_before + 1,
                 "existing_managed_state_adopted": True,
                 "modules_update_state_preserved": True,
                 "original_backups_preserved": True,
-                "candidate_reinstall_noop": reinstall_apply.returncode == 0,
+                "second_apply_noop": no_op_apply.returncode == 0 and after_noop == before_noop,
+                "candidate_reinstall_safe": reinstall_apply.returncode == 0 and after_reinstall == before_reinstall + 1,
                 "active_staged_disagreement_rejected": disagreement.returncode == 1,
                 "contradictory_state_rejected": corrupt.returncode == 1,
-                "no_upgrade_transaction_when_runtime_identical": transactions_after == transactions_before,
             },
         }
