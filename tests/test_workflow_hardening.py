@@ -53,9 +53,10 @@ class WorkflowHardeningTests(unittest.TestCase):
         )
         self.assertIn("stable is always required", release)
 
-    def test_target_monitor_runs_daily(self) -> None:
+    def test_target_monitor_runs_daily_at_reviewed_cadence(self) -> None:
         monitor = (WORKFLOWS / "target-monitor.yml").read_text(encoding="utf-8")
-        self.assertRegex(monitor, r"(?m)^\s*- cron:\s*['\"]?[^\n]+['\"]?$")
+        self.assertRegex(monitor, r"(?m)^\s*- cron:\s*['\"]17 7 \* \* \*['\"]\s*$")
+        self.assertEqual(len(re.findall(r"(?m)^\s*- cron:", monitor)), 1)
 
 
 if __name__ == "__main__":
