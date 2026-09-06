@@ -281,21 +281,35 @@ print("yes" if any(a.get("name")==os.environ["PROOF_NAME"] for a in value.get("a
 }
 
 confirm_release_absent() {
-    local err rc
-    err=$WORK/release-absence.err
+    local inventory err rc exists
+    inventory=$WORK/releases-inventory.json
+    err=$WORK/releases-inventory.err
+    : >"$inventory" || return 2
     : >"$err" || return 2
-    run_bounded "confirm GitHub release absence for $VERSION" "$NETWORK_TIMEOUT_SECONDS" \
-        "$REAL_GH" api "repos/$REPO_SLUG/releases/tags/$VERSION" \
-        >/dev/null 2>"$err"
+    run_bounded "inventory GitHub releases for $VERSION" "$NETWORK_TIMEOUT_SECONDS" \
+        "$REAL_GH" api --paginate --slurp "repos/$REPO_SLUG/releases?per_page=100" \
+        >"$inventory" 2>"$err"
     rc=$?
-    if ((rc == 0)); then
-        return 1
+    if ((rc != 0)); then
+        [[ ! -s $err ]] || cat "$err" >&2
+        return 2
     fi
-    if grep -Eqi 'HTTP[[:space:]]+404|Not Found' "$err"; then
-        return 0
-    fi
-    [[ ! -s $err ]] || cat "$err" >&2
-    return 2
+    exists=$(VERSION="$VERSION" python3 - "$inventory" <<'PY'
+import json, os, sys
+pages = json.load(open(sys.argv[1], encoding="utf-8"))
+if not isinstance(pages, list):
+    raise SystemExit(2)
+items = []
+for page in pages:
+    if not isinstance(page, list):
+        raise SystemExit(2)
+    items.extend(item for item in page if isinstance(item, dict))
+print("yes" if any(item.get("tag_name") == os.environ["VERSION"] for item in items) else "no")
+PY
+) || return 2
+    if [[ $exists == yes ]]; then return 1; fi
+    [[ $exists == no ]] || return 2
+    return 0
 }
 
 mark_private_state_complete() {
@@ -460,6 +474,7 @@ fi
 
 reconcile_private_state() {
     local state_base state_dir release_file result rc action reason archive
+    local -a reconcile_args
     state_base=${HOME:?}/.local/state/otast-release
     state_dir=$state_base/$VERSION
     if [[ -L $state_base ]]; then
