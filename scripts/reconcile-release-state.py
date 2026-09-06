@@ -60,11 +60,13 @@ class LocalState:
 
 
 def _require_private_dir(path: Path, *, allow_missing: bool = False) -> None:
+    if path.is_symlink():
+        raise ReconcileError(f"private state path is unsafe: {path}")
     if not path.exists():
         if allow_missing:
             return
         raise ReconcileError(f"private state path is missing: {path}")
-    if path.is_symlink() or not path.is_dir():
+    if not path.is_dir():
         raise ReconcileError(f"private state path is unsafe: {path}")
 
 
@@ -83,6 +85,8 @@ def _decode_simple_value(raw: str, *, label: str, pattern: re.Pattern[str] | Non
 
 def _scan_state_payload(state_dir: Path) -> tuple[bool, bool]:
     """Return (has_any_file, has_file_other_than_state_env), validating symlinks."""
+    if state_dir.is_symlink():
+        raise ReconcileError(f"private state path is unsafe: {state_dir}")
     if not state_dir.exists():
         return False, False
     has_payload = False
@@ -106,6 +110,8 @@ def _scan_state_payload(state_dir: Path) -> tuple[bool, bool]:
 
 
 def load_local_state(state_dir: Path) -> LocalState:
+    if state_dir.is_symlink():
+        raise ReconcileError(f"private state path is unsafe: {state_dir}")
     if not state_dir.exists():
         return LocalState(False)
     _require_private_dir(state_dir)
@@ -216,7 +222,7 @@ def archive_state(state_dir: Path, *, state_base: Path, version: str, local: Loc
     _require_private_dir(state_base)
     _require_private_dir(state_dir)
     history = state_base / ".history"
-    if history.exists():
+    if history.exists() or history.is_symlink():
         _require_private_dir(history)
     else:
         history.mkdir(mode=0o700)
@@ -229,13 +235,11 @@ def archive_state(state_dir: Path, *, state_base: Path, version: str, local: Loc
     stem = f"{version}-{stamp}-{_archive_token(local)}"
     destination = history / stem
     suffix = 0
-    while destination.exists():
+    while destination.exists() or destination.is_symlink():
         suffix += 1
         if suffix > 99:
             raise ReconcileError("cannot allocate a unique private history path")
         destination = history / f"{stem}-{suffix}"
-    if destination.is_symlink():
-        raise ReconcileError(f"private history destination is unsafe: {destination}")
 
     try:
         state_dir.rename(destination)
