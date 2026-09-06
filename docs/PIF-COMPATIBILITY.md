@@ -74,9 +74,20 @@ Malformed, path-mismatched or contradictory historical state fails closed.
 
 ## Upstream review state
 
-The monitored acceptance baseline remains `b994391970b51a2dfefed0e1d420dd6b017756e8`.
+The monitored and distribution acceptance baseline is `2f8199a90a150ad98921438608e1e0e951ba2d5f` on `KOWX712/PlayIntegrityFix@inject_s`.
 
-The `inject_s` head `2f8199a90a150ad98921438608e1e0e951ba2d5f` was re-inspected for this lifecycle work. PIF shell/profile lifecycle behavior remains unchanged from the reviewed baseline, but the delta includes native/build dependency changes. It therefore remains review-required and is not promoted merely to make monitoring green.
+The prior reviewed baseline `b994391970b51a2dfefed0e1d420dd6b017756e8` was compared with `2f8199a90a150ad98921438608e1e0e951ba2d5f` using immutable successful upstream CI artifacts. The source delta is review-significant because it changes Android/Gradle build dependencies, so it was correctly classified as `NATIVE_DEPENDENCY_CHANGED` rather than automatically accepted.
+
+The built-output review established runtime equivalence for this delta:
+
+- both CI packages contain the same 32 packaged paths;
+- 30/32 packaged files are byte-for-byte identical, including all shell/profile/module/runtime files managed or observed by OTAST;
+- only `zygisk/arm64-v8a.so` and `zygisk/armeabi-v7a.so` differ;
+- each native library differs in exactly one contiguous 20-byte GNU build-ID field and nowhere else;
+- ELF class/machine, file size, program headers, PT_LOAD offsets/sizes/flags/alignment, SONAME, Android note and `DT_NEEDED` dependencies are unchanged;
+- arm64 PT_LOAD alignment remains 16 KiB and armeabi-v7a remains 4 KiB.
+
+PR #33 therefore advanced the reviewed baseline without changing OTAST transforms or managed-file hashes. Future movement beyond `2f8199a90a150ad98921438608e1e0e951ba2d5f` remains subject to the normal semantic impact classification and review gate.
 
 ## Regression requirements
 
