@@ -196,13 +196,13 @@
       "monitor": {
         "repository": "KOWX712/PlayIntegrityFix",
         "branch": "inject_s",
-        "expected_head": "b994391970b51a2dfefed0e1d420dd6b017756e8"
+        "expected_head": "2f8199a90a150ad98921438608e1e0e951ba2d5f"
       },
       "distribution_identity": {
         "source_type": "BRANCH_BUILD",
         "repository": "KOWX712/PlayIntegrityFix",
         "ref": "inject_s",
-        "reviewed_commit": "b994391970b51a2dfefed0e1d420dd6b017756e8",
+        "reviewed_commit": "2f8199a90a150ad98921438608e1e0e951ba2d5f",
         "module_id": "playintegrityfix"
       },
       "impact_policy": {
@@ -279,7 +279,7 @@
         },
         {
           "commit": "2f8199a90a150ad98921438608e1e0e951ba2d5f",
-          "ref": "inject_s lifecycle revalidated 2026-09-05; shell/profile lifecycle unchanged from b994391, but native/build dependency movement remains review-required"
+          "ref": "inject_s native/build dependency delta reviewed 2026-09-06; baseline/current CI packages are byte-identical except GNU build IDs in the two Zygisk libraries; ELF layout, dependencies, ABI and LOAD alignment are unchanged"
         }
       ],
       "strategy": "PIF custom and module-local pif.prop are separate mutable custom/fallback configuration layers and are not OTAST-managed or mirrored. OTAST exact-hash manages only reviewed AutoPIF/self-update/security-patch writer surfaces plus OTA-derived PIF system.prop. AutoPIF profile refresh remains functional; executable self-update is review-gated; profile SPL can never become OTA platform or TrickyStore SPL authority."
