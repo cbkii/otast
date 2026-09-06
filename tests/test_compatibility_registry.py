@@ -153,6 +153,7 @@ class CompatibilityRegistryTests(unittest.TestCase):
         cases = (
             (pif, [".github/workflows/test.yml"], "DOCS_OR_CI_ONLY"),
             (pif, ["module/action.sh"], "PRESERVED_SURFACE_CHANGED"),
+            (yurikey, ["key"], "PRESERVED_SURFACE_CHANGED"),
             (pif, ["gradle/libs.versions.toml"], "NATIVE_DEPENDENCY_CHANGED"),
             (yurikey, ["action.sh"], "MANAGED_WHOLE_FILE_CHANGED"),
             (pif, ["module/autopif.sh"], "STRUCTURE_SENSITIVE_CHANGED"),

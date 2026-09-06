@@ -499,13 +499,13 @@
       "monitor": {
         "repository": "Yurii0307/yurikey",
         "branch": "main",
-        "expected_head": "5330b77c0b797e580c582d43e91ceae5b450dce6"
+        "expected_head": "310d99ddc11f92379c18099194492ffb29c553f8"
       },
       "distribution_identity": {
         "source_type": "BRANCH_SOURCE_WITH_VERSION_RANGE",
         "repository": "Yurii0307/yurikey",
         "ref": "main",
-        "reviewed_commit": "5330b77c0b797e580c582d43e91ceae5b450dce6",
+        "reviewed_commit": "310d99ddc11f92379c18099194492ffb29c553f8",
         "module_id": "Yurikey",
         "version_prefixes": [
           "3.0.",
@@ -536,7 +536,8 @@
         ],
         "preserved_surface": [
           "webroot/**",
-          "README.md"
+          "README.md",
+          "key"
         ],
         "docs_ci": [
           ".github/**",
@@ -556,6 +557,10 @@
         {
           "commit": "5330b77c0b797e580c582d43e91ceae5b450dce6",
           "ref": "current upstream reviewed 2026-08-29"
+        },
+        {
+          "commit": "310d99ddc11f92379c18099194492ffb29c553f8",
+          "ref": "upstream remote keybox payload rotation reviewed 2026-09-06; Module tree unchanged at 4fedee5292ed56665938c117225c0405650a4b42; active key material remains external and Yurikey unattended updater remains neutralized by OTAST"
         }
       ],
       "strategy": "Yurikey 3.0.x whole-file high-risk writers are neutralized by module identity + reviewed version range + safe path checks, not brittle source-file hashes; exact original bytes/mode are preserved for Restore"
