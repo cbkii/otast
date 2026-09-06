@@ -129,15 +129,28 @@ jobs:
         run: |
           monitor="$GITHUB_WORKSPACE/reports/release-target-monitor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           rm -rf -- "$monitor"
-          if python3 scripts/otast-maintenance.py monitor --output "$monitor" --no-cleanup; then
+          monitor_rc=0
+          python3 scripts/otast-maintenance.py monitor --output "$monitor" --no-cleanup || monitor_rc=$?
+          if ((monitor_rc == 0)); then
             printf 'FRESH TARGET MONITOR: SUPPORTED\n' >>"$GITHUB_STEP_SUMMARY"
-          else
-            rc=$?
-            if [[ -f $monitor/target-monitor.md ]]; then
-              cat "$monitor/target-monitor.md" >>"$GITHUB_STEP_SUMMARY"
+          elif ((monitor_rc == 10)); then
+            [[ ! -f $monitor/target-monitor.md ]] || cat "$monitor/target-monitor.md" >>"$GITHUB_STEP_SUMMARY"
+            gate_rc=0
+            python3 scripts/release-target-gate.py \
+              --repo-root "$GITHUB_WORKSPACE" \
+              --monitor-json "$monitor/target-monitor.json" \
+              --output "$monitor" || gate_rc=$?
+            [[ ! -f $monitor/release-target-gate.md ]] || cat "$monitor/release-target-gate.md" >>"$GITHUB_STEP_SUMMARY"
+            if ((gate_rc == 0)); then
+              printf 'FRESH TARGET MONITOR: RELEASE-SAFE; PINNED RELEASE ARTIFACTS VERIFIED\n' >>"$GITHUB_STEP_SUMMARY"
+            else
+              printf 'Fresh target/dependency gate blocked release qualification (status %s).\n' "$gate_rc" >&2
+              exit "$gate_rc"
             fi
-            printf 'Fresh target/dependency monitor blocked release qualification (status %s).\n' "$rc" >&2
-            exit "$rc"
+          else
+            [[ ! -f $monitor/target-monitor.md ]] || cat "$monitor/target-monitor.md" >>"$GITHUB_STEP_SUMMARY"
+            printf 'Fresh target/dependency monitor failed (status %s).\n' "$monitor_rc" >&2
+            exit "$monitor_rc"
           fi
 
       - name: Upload target-monitor evidence

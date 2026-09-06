@@ -298,15 +298,71 @@ if os.environ.get("EXPECTED_HEAD"):
     if exact: items=exact
 items.sort(key=lambda r:r.get("createdAt", ""), reverse=True); print(items[0]["databaseId"] if items else "")' <<<"$json"
 }
-watch_run() { local run_id status conclusion attempt json; run_id=$1; for ((attempt=1; attempt<=240; attempt+=1)); do json=$(gh run view "$run_id" -R "$REPO_SLUG" --json status,conclusion 2>/dev/null) || { ((attempt % 6 == 0)) && warn "cannot read workflow state yet ($attempt/240)"; sleep 10; continue; }; status=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' <<<"$json"); conclusion=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("conclusion") or "")' <<<"$json"); if [[ $status == completed ]]; then [[ $conclusion == success ]] && return 0; gh run view "$run_id" -R "$REPO_SLUG" --log-failed 2>/dev/null || true; warn "GitHub Release workflow concluded ${conclusion:-unknown}"; return 1; fi; ((attempt % 6 == 0)) && info "Waiting for GitHub Release workflow ($status)"; sleep 10; done; warn 'GitHub Release workflow did not complete within 40 minutes'; return 1; }
-dispatch_release_workflow() { local operation head title run_id attempt dispatch_try dispatch_at; operation=$1; head=$(remote_main_sha 2>/dev/null) || head=; title="Release $operation $VERSION"; for ((dispatch_try=1; dispatch_try<=2; dispatch_try+=1)); do info "Dispatching GitHub Actions from latest main: $title"; dispatch_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1; gh workflow run "$WORKFLOW" -R "$REPO_SLUG" --ref main -f "operation=$operation" -f "version=$VERSION" >/dev/null 2>&1 || { warn "cannot dispatch Release workflow (attempt $dispatch_try/2)"; sleep 3; continue; }; run_id=; for ((attempt=1; attempt<=30; attempt+=1)); do run_id=$(workflow_run_id "$title" "$head" "$dispatch_at") || run_id=; [[ -n $run_id ]] && break; sleep 4; done; if [[ -n $run_id ]]; then info "Watching workflow run $run_id"; watch_run "$run_id" && return 0; fi; warn "Release workflow attempt $dispatch_try did not complete successfully"; done; return 1; }
+watch_run() {
+    local run_id status conclusion attempt json failed_log
+    run_id=$1
+    for ((attempt=1; attempt<=240; attempt+=1)); do
+        json=$(gh run view "$run_id" -R "$REPO_SLUG" --json status,conclusion 2>/dev/null) || {
+            ((attempt % 6 == 0)) && warn "cannot read workflow state yet ($attempt/240)"
+            sleep 10
+            continue
+        }
+        status=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' <<<"$json")
+        conclusion=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("conclusion") or "")' <<<"$json")
+        if [[ $status == completed ]]; then
+            [[ $conclusion == success ]] && return 0
+            failed_log=$(gh run view "$run_id" -R "$REPO_SLUG" --log-failed 2>/dev/null || true)
+            [[ -z $failed_log ]] || printf '%s\n' "$failed_log"
+            if grep -Eq 'Fresh target/dependency .*status 10' <<<"$failed_log"; then
+                warn 'GitHub Release workflow stopped for deterministic compatibility review; not retrying the identical workflow.'
+                return 10
+            fi
+            warn "GitHub Release workflow concluded ${conclusion:-unknown}"
+            return 1
+        fi
+        ((attempt % 6 == 0)) && info "Waiting for GitHub Release workflow ($status)"
+        sleep 10
+    done
+    warn 'GitHub Release workflow did not complete within 40 minutes'
+    return 1
+}
+dispatch_release_workflow() {
+    local operation head title run_id attempt dispatch_try dispatch_at watch_rc
+    operation=$1
+    head=$(remote_main_sha 2>/dev/null) || head=
+    title="Release $operation $VERSION"
+    for ((dispatch_try=1; dispatch_try<=2; dispatch_try+=1)); do
+        info "Dispatching GitHub Actions from latest main: $title"
+        dispatch_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1
+        gh workflow run "$WORKFLOW" -R "$REPO_SLUG" --ref main -f "operation=$operation" -f "version=$VERSION" >/dev/null 2>&1 || {
+            warn "cannot dispatch Release workflow (attempt $dispatch_try/2)"
+            sleep 3
+            continue
+        }
+        run_id=
+        for ((attempt=1; attempt<=30; attempt+=1)); do
+            run_id=$(workflow_run_id "$title" "$head" "$dispatch_at") || run_id=
+            [[ -n $run_id ]] && break
+            sleep 4
+        done
+        if [[ -n $run_id ]]; then
+            info "Watching workflow run $run_id"
+            watch_run "$run_id"
+            watch_rc=$?
+            ((watch_rc == 0)) && return 0
+            ((watch_rc == 10)) && return 10
+        fi
+        warn "Release workflow attempt $dispatch_try did not complete successfully"
+    done
+    return 1
+}
 
 release_json() { gh release view "$VERSION" -R "$REPO_SLUG" --json isDraft,tagName,targetCommitish,assets 2>/dev/null; }
 release_has_proof_asset() { local json; json=$1; PROOF_ASSET=$PROOF_NAME python3 -c 'import json,os,sys; value=json.load(sys.stdin); print("yes" if any(a.get("name")==os.environ["PROOF_ASSET"] for a in value.get("assets", [])) else "no")' <<<"$json"; }
 delete_draft_best_effort() { info "Removing stale/incomplete draft $VERSION so latest main can be rebuilt."; gh release delete "$VERSION" -R "$REPO_SLUG" --cleanup-tag --yes >/dev/null 2>&1 && return 0; gh release delete "$VERSION" -R "$REPO_SLUG" --yes >/dev/null 2>&1 || return 1; gh api -X DELETE "repos/$REPO_SLUG/git/refs/tags/$VERSION" >/dev/null 2>&1 || true; return 0; }
 
 ensure_draft() {
-    local json draft tag target latest has_proof
+    local json draft tag target latest has_proof dispatch_rc
     json=$(release_json) || json=
     if [[ -n $json ]]; then
         draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$json"); tag=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<<"$json"); target=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("targetCommitish") or "")' <<<"$json")
@@ -316,7 +372,16 @@ ensure_draft() {
         if [[ $PHASE == START && $has_proof != yes && -n $latest && -n $target && $target != "$latest" ]]; then warn 'Existing draft was built from an older main and has no valid current proof; rebuilding it automatically.'; delete_draft_best_effort || { fatal 'cannot replace stale draft release'; return 1; }; json=; else SOURCE_SHA=$target; return 0; fi
     fi
     if [[ -z $json ]]; then
-        dispatch_release_workflow draft || { json=$(release_json) || json=; [[ -n $json ]] || { fatal 'cannot create or find draft release after retries'; return 1; }; }
+        dispatch_release_workflow draft
+        dispatch_rc=$?
+        if ((dispatch_rc == 10)); then
+            fatal 'release is blocked by a deterministic compatibility review; resolve the reported target before retrying this same command'
+            return 10
+        fi
+        if ((dispatch_rc != 0)); then
+            json=$(release_json) || json=
+            [[ -n $json ]] || { fatal 'cannot create or find draft release after workflow failure'; return 1; }
+        fi
         json=$(release_json) || { fatal 'draft release was not created'; return 1; }; draft=$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["isDraft"]).lower())' <<<"$json"); [[ $draft == true ]] || { fatal 'new release is not a draft'; return 1; }; SOURCE_SHA=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("targetCommitish") or "")' <<<"$json")
     fi
     save_state || return 1; return 0
@@ -338,7 +403,26 @@ download_and_verify_draft() {
     MODULE_SHA256=$zip_sha; RUNTIME_DIGEST=$embedded_runtime; [[ -n $embedded_source ]] && SOURCE_SHA=$embedded_source; save_state || return 1
     info "Locked release asset SHA-256: $MODULE_SHA256"; info "Locked runtime digest: $RUNTIME_DIGEST"; return 0
 }
-prepare_draft_assets() { ensure_draft; local rc=$?; ((rc == 20)) && return 20; ((rc == 0)) || return "$rc"; if download_and_verify_draft; then return 0; fi; if [[ $PHASE == START ]]; then warn 'Draft assets are missing/corrupt before device proof; rebuilding draft from latest main once.'; delete_draft_best_effort || return 1; dispatch_release_workflow draft || return 1; ensure_draft || return $?; download_and_verify_draft || { fatal 'rebuilt draft assets still fail integrity checks'; return 1; }; return 0; fi; fatal 'locked draft asset integrity failed during an active proof; refusing to substitute another ZIP'; return 1; }
+prepare_draft_assets() {
+    local rc dispatch_rc
+    ensure_draft
+    rc=$?
+    ((rc == 20)) && return 20
+    ((rc == 0)) || return "$rc"
+    if download_and_verify_draft; then return 0; fi
+    if [[ $PHASE == START ]]; then
+        warn 'Draft assets are missing/corrupt before device proof; rebuilding draft from latest main once.'
+        delete_draft_best_effort || return 1
+        dispatch_release_workflow draft
+        dispatch_rc=$?
+        ((dispatch_rc == 0)) || return "$dispatch_rc"
+        ensure_draft || return $?
+        download_and_verify_draft || { fatal 'rebuilt draft assets still fail integrity checks'; return 1; }
+        return 0
+    fi
+    fatal 'locked draft asset integrity failed during an active proof; refusing to substitute another ZIP'
+    return 1
+}
 
 wait_for_module_runtime() { local attempt; for ((attempt=1; attempt<=30; attempt+=1)); do su -c 'test -f /data/adb/modules/otast/runtime/entry.sh' >/dev/null 2>&1 && return 0; sleep 2; done; return 1; }
 verify_installed_draft() { local module_prop release_props installed_version installed_source installed_runtime; wait_for_module_runtime || return 1; module_prop=$(su -c 'cat /data/adb/modules/otast/module.prop' 2>/dev/null) || return 1; release_props=$(su -c 'cat /data/adb/modules/otast/release.properties' 2>/dev/null) || return 1; installed_version=$(sed -n 's/^version=//p' <<<"$module_prop" | sed -n '1p'); installed_source=$(sed -n 's/^commit_sha=//p' <<<"$release_props" | sed -n '1p'); installed_runtime=$(sed -n 's/^runtime_digest=//p' <<<"$release_props" | sed -n '1p'); [[ $installed_version == "$VERSION" && $installed_runtime == "$RUNTIME_DIGEST" ]] || return 1; [[ -n $installed_source ]] && SOURCE_SHA=$installed_source; su -c 'test -e /data/adb/modules/otast/disable' >/dev/null 2>&1 && return 1; save_state || return 1; return 0; }
