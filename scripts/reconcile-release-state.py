@@ -16,8 +16,6 @@ import argparse
 import json
 import os
 import re
-import shutil
-import stat
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,6 +40,7 @@ PHASES = {
 }
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+SIMPLE_VALUE = re.compile(r"^[A-Za-z0-9._+-]+$")
 SAFE_VERSION = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?$")
 
 
@@ -57,6 +56,7 @@ class LocalState:
     module_sha256: str = ""
     runtime_digest: str = ""
     has_payload: bool = False
+    has_auxiliary_payload: bool = False
 
 
 def _require_private_dir(path: Path, *, allow_missing: bool = False) -> None:
@@ -72,18 +72,21 @@ def _decode_simple_value(raw: str, *, label: str, pattern: re.Pattern[str] | Non
     value = raw.strip()
     if value in {"", "''", '""'}:
         return ""
-    # The lifecycle writes these fields with printf %q. For the candidate-binding
-    # fields accepted here, valid non-empty values never need shell escaping.
-    if any(ch in value for ch in "\\'\"$` \\t\\r\\n"):
+    # The lifecycle writes these fields with printf %q. Valid candidate-binding
+    # fields never require shell escaping, so accept only canonical simple tokens.
+    if not SIMPLE_VALUE.fullmatch(value):
         raise ReconcileError(f"private state {label} is not in canonical simple form")
     if pattern is not None and not pattern.fullmatch(value):
         raise ReconcileError(f"private state {label} is malformed: {value!r}")
     return value
 
 
-def _state_payload_exists(state_dir: Path) -> bool:
+def _scan_state_payload(state_dir: Path) -> tuple[bool, bool]:
+    """Return (has_any_file, has_file_other_than_state_env), validating symlinks."""
     if not state_dir.exists():
-        return False
+        return False, False
+    has_payload = False
+    has_auxiliary = False
     for root, dirs, files in os.walk(state_dir, followlinks=False):
         root_path = Path(root)
         for name in dirs:
@@ -94,19 +97,22 @@ def _state_payload_exists(state_dir: Path) -> bool:
             candidate = root_path / name
             if candidate.is_symlink():
                 raise ReconcileError(f"private state contains a file symlink: {candidate}")
-            if candidate.is_file():
-                return True
-    return False
+            if not candidate.is_file():
+                raise ReconcileError(f"private state contains a non-regular file: {candidate}")
+            has_payload = True
+            if candidate != state_dir / "state.env":
+                has_auxiliary = True
+    return has_payload, has_auxiliary
 
 
 def load_local_state(state_dir: Path) -> LocalState:
     if not state_dir.exists():
         return LocalState(False)
     _require_private_dir(state_dir)
-    has_payload = _state_payload_exists(state_dir)
+    has_payload, has_auxiliary = _scan_state_payload(state_dir)
     state_file = state_dir / "state.env"
     if not state_file.exists():
-        return LocalState(True, has_payload=has_payload)
+        return LocalState(True, has_payload=has_payload, has_auxiliary_payload=has_auxiliary)
     if state_file.is_symlink() or not state_file.is_file():
         raise ReconcileError(f"private release state file is unsafe: {state_file}")
     if state_file.stat().st_size > 64 * 1024:
@@ -132,7 +138,7 @@ def load_local_state(state_dir: Path) -> LocalState:
     source = _decode_simple_value(wanted.get("SOURCE_SHA", ""), label="SOURCE_SHA", pattern=HEX40)
     module_sha = _decode_simple_value(wanted.get("MODULE_SHA256", ""), label="MODULE_SHA256", pattern=HEX64)
     runtime = _decode_simple_value(wanted.get("RUNTIME_DIGEST", ""), label="RUNTIME_DIGEST", pattern=HEX64)
-    return LocalState(True, phase, source, module_sha, runtime, has_payload)
+    return LocalState(True, phase, source, module_sha, runtime, has_payload, has_auxiliary)
 
 
 def _release_asset_has_proof(release: dict[str, Any], proof_name: str) -> bool:
@@ -164,7 +170,6 @@ def load_release(path: Path | None, *, release_absent: bool, proof_name: str) ->
     target = value.get("targetCommitish")
     if not isinstance(target, str) or not HEX40.fullmatch(target):
         raise ReconcileError(f"hosted release targetCommitish is not an exact commit: {target!r}")
-    # Validate assets now so malformed remote state cannot be treated as no proof.
     _release_asset_has_proof(value, proof_name)
     return value
 
@@ -174,7 +179,13 @@ def reconciliation_reason(local: LocalState, release: dict[str, Any] | None, pro
         return None
 
     if release is None:
-        if local.phase != "START" or local.source_sha or local.module_sha256 or local.runtime_digest:
+        if (
+            local.phase != "START"
+            or local.source_sha
+            or local.module_sha256
+            or local.runtime_digest
+            or local.has_auxiliary_payload
+        ):
             return "local qualification state is bound to a candidate that no longer has a hosted release"
         return None
 
@@ -189,8 +200,8 @@ def reconciliation_reason(local: LocalState, release: dict[str, Any] | None, pro
             return f"local qualification source {local.source_sha} differs from hosted draft source {target}"
         return None
 
-    if local.phase != "START" or local.module_sha256 or local.runtime_digest:
-        return "local qualification state is active but has no exact hosted-draft source binding"
+    if local.phase != "START" or local.module_sha256 or local.runtime_digest or local.has_auxiliary_payload:
+        return "local qualification state/evidence exists without an exact hosted-draft source binding"
     return None
 
 
@@ -231,9 +242,8 @@ def archive_state(state_dir: Path, *, state_base: Path, version: str, local: Loc
         state_dir.mkdir(mode=0o700)
         state_dir.chmod(0o700)
     except OSError as exc:
-        # If rename succeeded but recreation failed, keep the archive intact and
-        # report a controlled STOP. The lifecycle must not run without a known
-        # private state root.
+        # If rename succeeded but recreation failed, the archive remains intact.
+        # Stop rather than run the lifecycle without a known current-state root.
         raise ReconcileError(f"cannot archive/recreate private release state: {exc}") from exc
     return destination
 
@@ -256,7 +266,7 @@ def reconcile(
         return {
             "schema_version": 1,
             "action": "PRESERVE" if local.exists else "NONE",
-            "reason": "state is unbound/empty or matches the hosted candidate",
+            "reason": "state is empty/default or matches the hosted candidate",
             "local_phase": local.phase,
             "local_source_commit": local.source_sha or None,
             "hosted_source_commit": target,
@@ -288,7 +298,6 @@ def main() -> int:
     try:
         state_base = args.state_base.expanduser().absolute()
         state_dir = args.state_dir.expanduser().absolute()
-        # Keep all archive/recreate operations strictly under the declared base.
         if state_dir.parent != state_base:
             raise ReconcileError("state directory is not an immediate child of the private state base")
         release = load_release(args.release_json, release_absent=args.release_absent, proof_name=args.proof_name)
