@@ -4,6 +4,126 @@ All notable user-visible changes are recorded here.
 
 ## v1.0.3
 
+- compat: correct TA UTL v4.4 release asset digest
+- release: do not retry deterministic compatibility blockers
+- test: require deterministic compatibility failures to avoid redispatch
+- release: distinguish pinned artifacts from branch drift
+- test: cover pinned-artifact release gating
+- release: gate pinned artifacts separately from branch drift
+- Accept reviewed Yurikey remote key rotation (#35)
+- docs: record accepted PIF native-equivalent baseline
+- compat: accept PIF build-only native-equivalent head
+- test: remove vacuous upgrade scenario booleans
+- test: verify restore preserves original managed modes
+- test: prove candidate-bound proof provenance
+- fix: validate proof provenance from exact candidate ZIP
+- fix: bind proof registry provenance to exact candidate ZIP
+- test: match resolved git provenance path
+- test: bind physical wrapper to GitHub-main provenance
+- test: prove upgrade state and backup modes survive
+- test: make upgrade qualification assertions explicit
+- test: prove native reviews cannot be accepted
+- fix: validate authority against selected repository
+- test: exercise production PIF profile date validator
+- test: pin target monitor cadence contract
+- test: harden physical proof negative coverage
+- fix: bind TA UTL release artifact provenance
+- fix: contain platform paths and bind workflow artifacts
+- fix: distinguish committed apply from state migration failure
+- fix: collect native evidence for physical proof flow
+- fix: make release monitor path valid and current
+- fix: bind reusable proofs to current qualification
+- fix: bind release properties to module identity
+- fix: require complete linear upstream comparisons
+- fix: bound and validate native evidence inventory
+- fix: fail closed on incomplete device evidence
+- fix: require runtime authority fingerprint
+- fix: fail closed on unsafe PIF profile state
+- fix: harden qualification provenance validation
+- fix: bind authority parsing to selected repository
+- fix: canonicalize runtime digest ZIP inputs
+- fix: harden compatibility status rendering
+- fix: reject incomplete target path evidence
+- ci: use Node 24 upload-artifact pin
+- test: cover PIF refresh reset and WebUI lifecycle
+- test: qualify retired PIF profile ownership across upgrades
+- fix: restore generated compatibility status link
+- fix: retain managed target role for PIF registry
+- fix: separate PIF profile ownership from platform authority
+- test: preserve predecessor backups while allowing new managed surfaces
+- test: run published predecessor upgrade when history is available
+- test: qualify upgrade from published v1.0.2 runtime
+- docs: link repository governance contract
+- docs: define repository protection and review contract
+- docs: align release summary with mandatory stable gates
+- docs: make stable Pixel proof requirement explicit
+- docs: document current stable release qualification gates
+- test: bind runtime-equivalent proof reuse to both source commits
+- test: match Dependabot action update configuration
+- test: align public release contract with stable qualification gates
+- test: assert transactional upgrade rehydration contract
+- test: model transactional self-file rehydration on upgrade
+- fix: transactionally rehydrate self-managed system.prop after upgrade
+- test: enforce immutable action and release gate contracts
+- release: gate stable publication on fresh monitor and physical proof
+- ci: avoid secondary artifact failure after skipped build
+- ci: pin branch-build actions to immutable SHAs
+- test: cover predecessor-to-candidate fake-root upgrades
+- test: make predecessor identity version-agnostic
+- test: add deterministic fake-root upgrade qualification
+- test: make maintenance classifier coverage hermetic
+- test: align runtime contract assertions with current ownership model
+- Add maintainable updates for pinned Actions
+- Pin CI actions and retain exact release evidence
+- Run daily pinned upstream target monitoring
+- Bind native runtime evidence into physical qualification
+- Align vendor SPL assertion with fail-closed wording
+- Make source-compare test independent of local gh auth
+- Add runtime equivalence and qualification registry tests
+- Update physical proof tests for runtime-bound schema
+- Expose runtime and qualification validation commands
+- Generalize physical lifecycle and bind qualification evidence
+- Expand device proof to runtime-bound evidence schema
+- Add read-only physical qualification collector
+- Validate qualification and runtime provenance in repository gate
+- Make release manifest runtime-provenance aware
+- Bind module builds to canonical runtime digest
+- Add qualification registry and attribution contracts
+- Add physical qualification evidence registry
+- Add canonical runtime payload digest
+- Bind physical release proof to compatibility release reference
+- Align compatibility model with semantic acceptance
+- Document semantic target maintenance workflow
+- Document platform and observed-environment configuration boundaries
+- Document managed target compatibility bases
+- Document platform-profile compatibility architecture
+- Document evidence-based Pixel compatibility model
+- Test native runtime evidence boundaries
+- Add read-only native runtime compatibility evidence collector
+- Test semantic maintenance review contract
+- Integrate semantic upstream impact into maintenance review
+- Add compatibility architecture regression suite
+- Align Pixel scope tests with qualification tiers
+- Align runtime contracts with platform profiles
+- Regenerate compatibility status
+- Harden compatibility registry validation and impact precedence
+- Tighten support qualification and artefact identity
+- Expand platform authority regression coverage
+- Document evidence-based compatibility architecture
+- Add generated compatibility status
+- Validate installer against reviewed platform profile
+- Source reviewed platform contract in runtime entry
+- Require platform profile and independent vendor SPL at runtime
+- Validate compatibility registry in repository verification
+- Bind host authority parsing to platform profiles
+- Add PIF native dependency regression fixture
+- Add generated compatibility documentation helper
+- Add semantic upstream impact CLI
+- Add BusyBox Android platform runtime mirror
+- Add compatibility registry validation and impact classifier
+- Refactor compatibility registry to schema v5
+- Add Android 16 compatibility platform profile
+- Harden detector diagnostics and release auth (#27)
 - Bound release helper network calls and resume cleanly (#26)
 - Relax brittle Yurikey source-hash gates (#25)
 - Neutralize TA UTL WebUI direct VBMeta writer (#24)
