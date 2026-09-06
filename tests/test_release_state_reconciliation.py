@@ -173,6 +173,45 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
             self.assertEqual(result["action"], "ARCHIVED")
             self.assertIn("no exact hosted-draft source binding", result["reason"])
 
+    def test_unbound_start_state_with_old_evidence_is_archived(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
+            base = Path(raw) / "otast-release"
+            state = base / VERSION
+            base.mkdir(mode=0o700)
+            self.write_state(state, phase="START")
+            (state / "external-acceptance.json").write_text('{"stale":true}\n', encoding="utf-8")
+
+            result = self.module.reconcile(
+                state_dir=state,
+                state_base=base,
+                version=VERSION,
+                release=self.release(NEW_SOURCE),
+                proof_name=PROOF_NAME,
+            )
+
+            self.assertEqual(result["action"], "ARCHIVED")
+            archive = Path(result["archive"])
+            self.assertTrue((archive / "external-acceptance.json").is_file())
+            self.assertIn("state/evidence exists", result["reason"])
+
+    def test_empty_default_start_state_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
+            base = Path(raw) / "otast-release"
+            state = base / VERSION
+            base.mkdir(mode=0o700)
+            self.write_state(state, phase="START")
+
+            result = self.module.reconcile(
+                state_dir=state,
+                state_base=base,
+                version=VERSION,
+                release=self.release(NEW_SOURCE),
+                proof_name=PROOF_NAME,
+            )
+
+            self.assertEqual(result["action"], "PRESERVE")
+            self.assertFalse((base / ".history").exists())
+
     def test_symlinked_state_component_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
             base = Path(raw) / "otast-release"
