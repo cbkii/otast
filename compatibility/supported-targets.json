@@ -315,7 +315,7 @@
         "reviewed_source_commit": "5d852b6ae087758178c42e56f98a4cde9c696f49",
         "reviewed_generated_commit": "03375e62b0c6e8fee95d401c7b1fd84aa38af24f",
         "release_asset_name": "TrickyAddonModule-v4.4.zip",
-        "release_asset_sha256": "b4a5f0399d766cabc8ac052afadfc9c069396f3e4f6451c05857e209d44a5b5d",
+        "release_asset_sha256": "b4a5f0397ce1dd06102223456c959e73d610cace58959b1afdca73ab7cdc0b10",
         "module_ids": [
           "TA_utl",
           ".TA_utl"
@@ -356,7 +356,7 @@
           "ref": "v4.4 workflow artifact source; generated boot_hash-C0kIcwCH.js SHA-256 bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"
         }
       ],
-      "reviewed_ref": "v4.4 source and generated WebUI writer reviewed 2026-08-31; prop.sh and boot_hash-C0kIcwCH.js are both exact-hash managed",
+      "reviewed_ref": "v4.4 source and generated WebUI writer reviewed 2026-08-31; prop.sh and boot_hash-C0kIcwCH.js are both exact-hash managed; GitHub release-asset digest corrected against release metadata 2026-09-06",
       "strategy": "exact v4.4 transformations: remove the reviewed prop.sh competing VBMeta block and make the reviewed WebUI Boot Hash save backend a no-op; exact hashes remain necessary because these are structure-sensitive surgical transforms"
     },
     "trickystore": {
