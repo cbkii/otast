@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,8 +21,13 @@ def load_module():
     spec = importlib.util.spec_from_file_location("otast_release_state_reconcile_test", SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def stat_mode(path: Path) -> int:
+    return path.stat().st_mode & 0o777
 
 
 class ReleaseStateReconciliationTests(unittest.TestCase):
@@ -35,15 +39,19 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
         state_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "assets").mkdir(exist_ok=True)
         (state_dir / "logs").mkdir(exist_ok=True)
+        empty = "''"
+        source_value = source or empty
+        zip_value = zip_sha or empty
+        runtime_value = runtime or empty
         (state_dir / "state.env").write_text(
             "\n".join(
                 [
                     f"PHASE={phase}",
-                    f"MODULE_SHA256={zip_sha or "''"}",
-                    f"RUNTIME_DIGEST={runtime or "''"}",
+                    f"MODULE_SHA256={zip_value}",
+                    f"RUNTIME_DIGEST={runtime_value}",
                     "BOOT_BEFORE=''",
                     "BASELINE_RESULT=NOT_REQUIRED",
-                    f"SOURCE_SHA={source or "''"}",
+                    f"SOURCE_SHA={source_value}",
                     "SETTLE_RETRIES=0",
                     "RESTORE_RETRIES=0",
                     "FIRST_APPLY_NOOP=0",
@@ -190,10 +198,6 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
         self.assertIn("reconcile-release-state.py", text)
         self.assertIn("Reconciled orphaned local qualification state", text)
         self.assertLess(text.index("reconcile-release-state.py"), text.index("Entering bounded, resumable physical-device qualification."))
-
-
-def stat_mode(path: Path) -> int:
-    return path.stat().st_mode & 0o777
 
 
 if __name__ == "__main__":
