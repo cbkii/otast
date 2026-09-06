@@ -231,12 +231,36 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
                     proof_name=PROOF_NAME,
                 )
 
-    def test_wrapper_queries_source_and_invokes_reconciler_before_lifecycle(self) -> None:
+    def test_dangling_state_root_symlink_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
+            base = Path(raw) / "otast-release"
+            base.mkdir(mode=0o700)
+            state = base / VERSION
+            state.symlink_to(Path(raw) / "missing", target_is_directory=True)
+
+            with self.assertRaisesRegex(self.module.ReconcileError, "unsafe"):
+                self.module.reconcile(
+                    state_dir=state,
+                    state_base=base,
+                    version=VERSION,
+                    release=self.release(NEW_SOURCE),
+                    proof_name=PROOF_NAME,
+                )
+
+    def test_wrapper_reconciles_only_normal_release_flow(self) -> None:
         text = WRAPPER.read_text(encoding="utf-8")
         self.assertIn("isDraft,assets,targetCommitish", text)
         self.assertIn("reconcile-release-state.py", text)
         self.assertIn("Reconciled orphaned local qualification state", text)
+        self.assertIn("if ((STATUS_ONLY || RESET_ONLY)); then", text)
+        self.assertLess(text.index("if ((STATUS_ONLY || RESET_ONLY)); then"), text.index("reconcile_private_state || exit $?"))
         self.assertLess(text.index("reconcile-release-state.py"), text.index("Entering bounded, resumable physical-device qualification."))
+
+    def test_release_absence_check_inventories_drafts(self) -> None:
+        text = WRAPPER.read_text(encoding="utf-8")
+        self.assertIn("api --paginate --slurp", text)
+        self.assertIn('releases?per_page=100', text)
+        self.assertNotIn('releases/tags/$VERSION', text)
 
 
 if __name__ == "__main__":
