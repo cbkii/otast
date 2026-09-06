@@ -17,6 +17,8 @@ REQUESTED_VERSION=
 USER_NO_PUBLISH=0
 YES=0
 SHOW_HELP=0
+STATUS_ONLY=0
+RESET_ONLY=0
 PASSTHROUGH_ARGS=()
 ORIGINAL_ARGS=("$@")
 WRAPPER_REEXECED=${OTAST_RELEASE_WRAPPER_REEXECED:-0}
@@ -49,14 +51,15 @@ Options:
   --yes               Approve reboot and final publication prompts.
   --no-reboot         Never reboot automatically; print the required boundary.
   --no-publish        Upload PASS physical proof but leave the release as draft.
-  --status            Show private resumable state.
-  --reset             Remove only this wizard's current private state for the candidate.
+  --status            Show private resumable state without reconciling it.
+  --reset             Explicitly remove this wizard's current private state.
   -h, --help          Show this help without device or network access.
 
-Network/GitHub calls are bounded. Before qualification, private resumable state is
-bound to the exact hosted draft source commit. Orphaned state from an older draft
-is archived intact under ~/.local/state/otast-release/.history and a fresh physical
-qualification begins. Live /data/adb state is never changed by that reconciliation.
+Network/GitHub calls are bounded. Before normal qualification, private resumable
+state is bound to the exact hosted draft source commit. Orphaned state from an older
+draft is archived intact under ~/.local/state/otast-release/.history and a fresh
+physical qualification begins. Live /data/adb state is never changed by that
+reconciliation. Explicit --status and --reset bypass automatic reconciliation.
 EOF_HELP
 }
 
@@ -76,7 +79,17 @@ while (($#)); do
             PASSTHROUGH_ARGS+=(--yes)
             shift
             ;;
-        --no-reboot|--status|--reset)
+        --no-reboot)
+            PASSTHROUGH_ARGS+=("$1")
+            shift
+            ;;
+        --status)
+            STATUS_ONLY=1
+            PASSTHROUGH_ARGS+=("$1")
+            shift
+            ;;
+        --reset)
+            RESET_ONLY=1
             PASSTHROUGH_ARGS+=("$1")
             shift
             ;;
@@ -262,6 +275,14 @@ if [[ -z $AUTO_PUBLISH ]]; then
     if ((USER_NO_PUBLISH)); then AUTO_PUBLISH=0; else AUTO_PUBLISH=1; fi
 fi
 case $AUTO_PUBLISH in 0|1) ;; *) fatal "invalid OTAST_RELEASE_WRAPPER_AUTOPUBLISH: $AUTO_PUBLISH"; exit 2 ;; esac
+
+# Explicit state inspection/reset must not trigger automatic archival or
+# publication logic before the lifecycle handles the requested operation.
+if ((STATUS_ONLY || RESET_ONLY)); then
+    state_args=("${PASSTHROUGH_ARGS[@]}" --version "$VERSION" --no-publish)
+    OTAST_RELEASE_REEXECED=1 bash "$LIFECYCLE_SCRIPT" "${state_args[@]}"
+    exit $?
+fi
 
 proof_name="otast-${VERSION}-device-proof.json"
 release_state() {
