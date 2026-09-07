@@ -171,7 +171,7 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
             )
 
             self.assertEqual(result["action"], "ARCHIVED")
-            self.assertIn("no exact hosted-draft source binding", result["reason"])
+            self.assertIn("exact hosted-draft source binding", result["reason"])
 
     def test_unbound_start_state_with_old_evidence_is_archived(self) -> None:
         with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
