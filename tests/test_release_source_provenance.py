@@ -12,15 +12,15 @@ from tools.otastctl.build import build_module
 from tools.otastctl.qualification import registry_provenance
 
 ROOT = Path(__file__).resolve().parents[1]
-WRAPPER = ROOT / "scripts/release-device.sh"
+WRAPPER_CORE = ROOT / "scripts/release-device-core.sh"
 VALIDATOR = ROOT / "scripts/validate-device-release-proof.py"
 QUALIFICATION = ROOT / "tools/otastctl/qualification.py"
 TEST_COMMIT = "4" * 40
 
 
 class ReleaseSourceProvenanceTests(unittest.TestCase):
-    def test_wrapper_uses_github_main_metadata_not_dirty_local_identity(self) -> None:
-        text = WRAPPER.read_text(encoding="utf-8")
+    def test_wrapper_core_uses_github_main_metadata_not_dirty_local_identity(self) -> None:
+        text = WRAPPER_CORE.read_text(encoding="utf-8")
         self.assertIn("fetch_remote_file update.json", text)
         self.assertIn("fetch_remote_file module/module.prop", text)
         self.assertIn('"$REAL_GIT" -C "$REPO_ROOT" show "origin/main:$path"', text)
