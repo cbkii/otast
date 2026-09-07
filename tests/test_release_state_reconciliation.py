@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -8,7 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/reconcile-release-state.py"
-WRAPPER = ROOT / "scripts/release-device.sh"
+ENTRY_WRAPPER = ROOT / "scripts/release-device.sh"
+WRAPPER_CORE = ROOT / "scripts/release-device-core.sh"
 VERSION = "v1.0.3"
 OLD_SOURCE = "1" * 40
 NEW_SOURCE = "2" * 40
@@ -247,8 +250,8 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
                     proof_name=PROOF_NAME,
                 )
 
-    def test_wrapper_reconciles_only_normal_release_flow(self) -> None:
-        text = WRAPPER.read_text(encoding="utf-8")
+    def test_wrapper_core_reconciles_only_normal_release_flow(self) -> None:
+        text = WRAPPER_CORE.read_text(encoding="utf-8")
         self.assertIn("isDraft,assets,targetCommitish", text)
         self.assertIn("reconcile-release-state.py", text)
         self.assertIn("Reconciled orphaned local qualification state", text)
@@ -257,10 +260,38 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
         self.assertLess(text.index("reconcile-release-state.py"), text.index("Entering bounded, resumable physical-device qualification."))
 
     def test_release_absence_check_inventories_drafts(self) -> None:
-        text = WRAPPER.read_text(encoding="utf-8")
+        text = WRAPPER_CORE.read_text(encoding="utf-8")
         self.assertIn("api --paginate --slurp", text)
         self.assertIn('releases?per_page=100', text)
         self.assertNotIn('releases/tags/$VERSION', text)
+
+    def test_public_entry_rejects_symlinked_state_base_before_reset(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-release-entry-") as raw:
+            root = Path(raw)
+            home = root / "home"
+            target = root / "outside-state"
+            (home / ".local/state").mkdir(parents=True)
+            target.mkdir()
+            marker = target / "must-survive"
+            marker.write_text("keep\n", encoding="utf-8")
+            (home / ".local/state/otast-release").symlink_to(target, target_is_directory=True)
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+
+            result = subprocess.run(
+                ["bash", str(ENTRY_WRAPPER), "--reset", "--version", VERSION],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("private release state base is a symlink", result.stderr)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "keep\n")
 
 
 if __name__ == "__main__":
