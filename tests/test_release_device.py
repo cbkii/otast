@@ -19,6 +19,7 @@ from tools.otastctl.util import sha256_file
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts/validate-device-release-proof.py"
 RELEASE_SCRIPT = ROOT / "scripts/release-device.sh"
+RELEASE_CORE = ROOT / "scripts/release-device-core.sh"
 LIFECYCLE_SCRIPT = ROOT / "scripts/release-device-lifecycle.sh"
 TEST_COMMIT = "1" * 40
 
@@ -274,7 +275,7 @@ class ReleaseDeviceTests(unittest.TestCase):
                 module.validate_proof(proof, module_zip, version=str(expected["version"]))
 
     def test_release_wizard_uses_canonical_versioning_and_single_workflow_api(self) -> None:
-        text = RELEASE_SCRIPT.read_text(encoding="utf-8")
+        text = RELEASE_CORE.read_text(encoding="utf-8")
         self.assertIn("resolve_release_identity", text)
         self.assertIn('LIFECYCLE_SCRIPT="$SCRIPT_DIR/release-device-lifecycle.sh"', text)
         self.assertIn("operation=draft", text)

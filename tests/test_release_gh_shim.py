@@ -7,11 +7,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WRAPPER = ROOT / "scripts/release-device.sh"
+WRAPPER_CORE = ROOT / "scripts/release-device-core.sh"
 
 
 def extract_gh_shim() -> str:
-    text = WRAPPER.read_text(encoding="utf-8")
+    text = WRAPPER_CORE.read_text(encoding="utf-8")
     begin = 'cat >"$SHIM_DIR/gh" <<\'SHIM\'\n'
     start = text.index(begin) + len(begin)
     end = text.index("\nSHIM\n", start)
