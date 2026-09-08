@@ -4,10 +4,14 @@
 This is host-only state management. It never reads or mutates /data/adb.
 
 The physical lifecycle may resume only when its private state is bound to the
-same hosted draft source commit. If a previous candidate is orphaned or a new
-unproven draft replaced it, preserve the entire old state directory in private
-history and restart host state from a clean START boundary. Exact ZIP/runtime
-checks remain the lifecycle's responsibility once the source binding matches.
+same hosted draft source commit and, once a ZIP has been locked, the same exact
+hosted module ZIP SHA-256. A locked START state is deliberately not resumable:
+it is still pre-proof, so archive it intact and establish a fresh lock in the
+current invocation rather than allowing the lifecycle to overwrite an old lock.
+If a previous candidate is orphaned or a new unproven draft replaced it, preserve
+the entire old state directory in private history and restart host state from a
+clean START boundary. Runtime checks remain the lifecycle's responsibility after
+exact candidate identity has been reconciled.
 """
 
 from __future__ import annotations
@@ -154,6 +158,23 @@ def _release_asset_has_proof(release: dict[str, Any], proof_name: str) -> bool:
     return any(isinstance(item, dict) and item.get("name") == proof_name for item in assets)
 
 
+def _hosted_zip_sha256(release: dict[str, Any], version: str) -> str:
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise ReconcileError("GitHub release asset inventory is malformed")
+    zip_name = f"otast-{version}.zip"
+    matches = [item for item in assets if isinstance(item, dict) and item.get("name") == zip_name]
+    if len(matches) != 1:
+        raise ReconcileError(f"hosted draft must contain exactly one {zip_name} asset")
+    digest = matches[0].get("digest")
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        raise ReconcileError(f"hosted draft {zip_name} asset has no canonical SHA-256 digest")
+    value = digest.removeprefix("sha256:")
+    if not HEX64.fullmatch(value):
+        raise ReconcileError(f"hosted draft {zip_name} SHA-256 digest is malformed")
+    return value
+
+
 def load_release(path: Path | None, *, release_absent: bool, proof_name: str) -> dict[str, Any] | None:
     if release_absent:
         if path is not None:
@@ -180,7 +201,12 @@ def load_release(path: Path | None, *, release_absent: bool, proof_name: str) ->
     return value
 
 
-def reconciliation_reason(local: LocalState, release: dict[str, Any] | None, proof_name: str) -> str | None:
+def reconciliation_reason(
+    local: LocalState,
+    release: dict[str, Any] | None,
+    proof_name: str,
+    version: str,
+) -> str | None:
     if not local.exists or not local.has_payload:
         return None
 
@@ -204,6 +230,18 @@ def reconciliation_reason(local: LocalState, release: dict[str, Any] | None, pro
     if local.source_sha:
         if local.source_sha != target:
             return f"local qualification source {local.source_sha} differs from hosted draft source {target}"
+        if local.module_sha256:
+            hosted_zip = _hosted_zip_sha256(release, version)
+            if local.module_sha256 != hosted_zip:
+                return (
+                    f"local qualification ZIP {local.module_sha256} differs from hosted draft ZIP "
+                    f"{hosted_zip} despite matching source {target}"
+                )
+            if local.phase == "START":
+                return "pre-proof START state contains a ZIP lock; restarting to establish a fresh exact-candidate lock"
+            return None
+        if local.phase != "START" or local.runtime_digest or local.has_auxiliary_payload:
+            return "local qualification state/evidence exists without an exact hosted-draft ZIP binding"
         return None
 
     if local.phase != "START" or local.module_sha256 or local.runtime_digest or local.has_auxiliary_payload:
@@ -264,15 +302,16 @@ def reconcile(
         raise ReconcileError(f"unsafe release version: {version!r}")
     _require_private_dir(state_base)
     local = load_local_state(state_dir)
-    reason = reconciliation_reason(local, release, proof_name)
+    reason = reconciliation_reason(local, release, proof_name, version)
     target = None if release is None else release.get("targetCommitish")
     if reason is None:
         return {
             "schema_version": 1,
             "action": "PRESERVE" if local.exists else "NONE",
-            "reason": "state is empty/default or matches the hosted candidate",
+            "reason": "state is empty/default or matches the exact hosted candidate",
             "local_phase": local.phase,
             "local_source_commit": local.source_sha or None,
+            "local_zip_sha256": local.module_sha256 or None,
             "hosted_source_commit": target,
             "archive": None,
         }
@@ -283,6 +322,7 @@ def reconcile(
         "reason": reason,
         "local_phase": local.phase,
         "local_source_commit": local.source_sha or None,
+        "local_zip_sha256": local.module_sha256 or None,
         "hosted_source_commit": target,
         "archive": str(archive),
     }
