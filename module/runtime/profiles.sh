@@ -156,7 +156,7 @@ otast_plan_pif() {
 
     _otast_plan_transformed_file pif-security-patch-$role playintegrityfix "$dir/security_patch.sh" 0755 \
       otast_transform_pif_security_patch \
-      'a21fa1444ad870ad2ba09cb2a45a0576361df6062369d13f05fbf0db78f29476' || return 1
+      'a21fa1444ad870ad2ba09cb2a45a0576361df6062369d13f05fbf0db78f29476,f24517231c21856c4603f14e9d1ad8d38af5e6753a8060837320e66337ed5012' || return 1
   done
 }
 
