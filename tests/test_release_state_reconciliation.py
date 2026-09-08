@@ -145,6 +145,29 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
             self.assertEqual((state / "state.env").read_bytes(), before)
             self.assertFalse((base / ".history").exists())
 
+    def test_matching_locked_start_state_is_archived_before_fresh_lock(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
+            base = Path(raw) / "otast-release"
+            state = base / VERSION
+            base.mkdir(mode=0o700)
+            self.write_state(state, phase="START", source=NEW_SOURCE, zip_sha=OLD_ZIP, runtime=RUNTIME)
+            before = (state / "state.env").read_bytes()
+
+            result = self.module.reconcile(
+                state_dir=state,
+                state_base=base,
+                version=VERSION,
+                release=self.release(NEW_SOURCE, zip_sha=OLD_ZIP),
+                proof_name=PROOF_NAME,
+            )
+
+            self.assertEqual(result["action"], "ARCHIVED")
+            self.assertIn("pre-proof START state contains a ZIP lock", result["reason"])
+            archive = Path(result["archive"])
+            self.assertEqual((archive / "state.env").read_bytes(), before)
+            self.assertTrue(state.is_dir())
+            self.assertEqual(list(state.iterdir()), [])
+
     def test_matching_source_but_different_hosted_zip_archives_stale_state(self) -> None:
         with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
             base = Path(raw) / "otast-release"
