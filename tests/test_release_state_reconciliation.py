@@ -17,7 +17,9 @@ OLD_SOURCE = "1" * 40
 NEW_SOURCE = "2" * 40
 OLD_ZIP = "3" * 64
 RUNTIME = "4" * 64
+NEW_ZIP = "5" * 64
 PROOF_NAME = f"otast-{VERSION}-device-proof.json"
+ZIP_NAME = f"otast-{VERSION}.zip"
 
 
 def load_module():
@@ -68,8 +70,10 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
         )
 
     @staticmethod
-    def release(source: str, *, proof: bool = False) -> dict[str, object]:
+    def release(source: str, *, proof: bool = False, zip_sha: str = "") -> dict[str, object]:
         assets: list[dict[str, str]] = []
+        if zip_sha:
+            assets.append({"name": ZIP_NAME, "digest": f"sha256:{zip_sha}"})
         if proof:
             assets.append({"name": PROOF_NAME})
         return {"isDraft": True, "targetCommitish": source, "assets": assets}
@@ -120,7 +124,7 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
             self.assertEqual(result["hosted_source_commit"], NEW_SOURCE)
             self.assertIn("differs from hosted draft source", result["reason"])
 
-    def test_matching_draft_source_preserves_resumable_state(self) -> None:
+    def test_matching_draft_source_and_zip_preserves_resumable_state(self) -> None:
         with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
             base = Path(raw) / "otast-release"
             state = base / VERSION
@@ -132,12 +136,57 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
                 state_dir=state,
                 state_base=base,
                 version=VERSION,
-                release=self.release(NEW_SOURCE),
+                release=self.release(NEW_SOURCE, zip_sha=OLD_ZIP),
                 proof_name=PROOF_NAME,
             )
 
             self.assertEqual(result["action"], "PRESERVE")
+            self.assertEqual(result["local_zip_sha256"], OLD_ZIP)
             self.assertEqual((state / "state.env").read_bytes(), before)
+            self.assertFalse((base / ".history").exists())
+
+    def test_matching_source_but_different_hosted_zip_archives_stale_state(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
+            base = Path(raw) / "otast-release"
+            state = base / VERSION
+            base.mkdir(mode=0o700)
+            self.write_state(state, phase="INSTALL_REBOOT", source=NEW_SOURCE, zip_sha=OLD_ZIP, runtime=RUNTIME)
+            before = (state / "state.env").read_bytes()
+
+            result = self.module.reconcile(
+                state_dir=state,
+                state_base=base,
+                version=VERSION,
+                release=self.release(NEW_SOURCE, zip_sha=NEW_ZIP),
+                proof_name=PROOF_NAME,
+            )
+
+            self.assertEqual(result["action"], "ARCHIVED")
+            self.assertIn(OLD_ZIP, result["reason"])
+            self.assertIn(NEW_ZIP, result["reason"])
+            self.assertIn("despite matching source", result["reason"])
+            archive = Path(result["archive"])
+            self.assertEqual((archive / "state.env").read_bytes(), before)
+            self.assertTrue(state.is_dir())
+            self.assertEqual(list(state.iterdir()), [])
+
+    def test_matching_locked_source_requires_canonical_hosted_zip_digest(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-reconcile-") as raw:
+            base = Path(raw) / "otast-release"
+            state = base / VERSION
+            base.mkdir(mode=0o700)
+            self.write_state(state, phase="INSTALL_REBOOT", source=NEW_SOURCE, zip_sha=OLD_ZIP, runtime=RUNTIME)
+
+            with self.assertRaisesRegex(self.module.ReconcileError, "canonical SHA-256 digest"):
+                self.module.reconcile(
+                    state_dir=state,
+                    state_base=base,
+                    version=VERSION,
+                    release=self.release(NEW_SOURCE),
+                    proof_name=PROOF_NAME,
+                )
+
+            self.assertTrue((state / "state.env").is_file())
             self.assertFalse((base / ".history").exists())
 
     def test_remote_physical_proof_never_discards_local_state(self) -> None:
