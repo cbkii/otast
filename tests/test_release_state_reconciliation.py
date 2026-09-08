@@ -177,7 +177,7 @@ class ReleaseStateReconciliationTests(unittest.TestCase):
             base.mkdir(mode=0o700)
             self.write_state(state, phase="INSTALL_REBOOT", source=NEW_SOURCE, zip_sha=OLD_ZIP, runtime=RUNTIME)
 
-            with self.assertRaisesRegex(self.module.ReconcileError, "canonical SHA-256 digest"):
+            with self.assertRaisesRegex(self.module.ReconcileError, r"hosted draft.*otast-v1\.0\.3\.zip"):
                 self.module.reconcile(
                     state_dir=state,
                     state_base=base,
