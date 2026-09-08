@@ -5,10 +5,13 @@ This is host-only state management. It never reads or mutates /data/adb.
 
 The physical lifecycle may resume only when its private state is bound to the
 same hosted draft source commit and, once a ZIP has been locked, the same exact
-hosted module ZIP SHA-256. If a previous candidate is orphaned or a new unproven
-draft replaced it, preserve the entire old state directory in private history and
-restart host state from a clean START boundary. Runtime checks remain the
-lifecycle's responsibility after exact candidate identity has been reconciled.
+hosted module ZIP SHA-256. A locked START state is deliberately not resumable:
+it is still pre-proof, so archive it intact and establish a fresh lock in the
+current invocation rather than allowing the lifecycle to overwrite an old lock.
+If a previous candidate is orphaned or a new unproven draft replaced it, preserve
+the entire old state directory in private history and restart host state from a
+clean START boundary. Runtime checks remain the lifecycle's responsibility after
+exact candidate identity has been reconciled.
 """
 
 from __future__ import annotations
@@ -234,6 +237,8 @@ def reconciliation_reason(
                     f"local qualification ZIP {local.module_sha256} differs from hosted draft ZIP "
                     f"{hosted_zip} despite matching source {target}"
                 )
+            if local.phase == "START":
+                return "pre-proof START state contains a ZIP lock; restarting to establish a fresh exact-candidate lock"
             return None
         if local.phase != "START" or local.runtime_digest or local.has_auxiliary_payload:
             return "local qualification state/evidence exists without an exact hosted-draft ZIP binding"
