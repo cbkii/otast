@@ -4,6 +4,9 @@ All notable user-visible changes are recorded here.
 
 ## v1.0.3
 
+- Review PIF resetprop rebuild compatibility (#40)
+- Bind resumable release state to exact hosted ZIP (#39)
+- Recover safely from orphaned physical-release state (#38)
 - compat: correct TA UTL v4.4 release asset digest
 - release: do not retry deterministic compatibility blockers
 - test: require deterministic compatibility failures to avoid redispatch
