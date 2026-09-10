@@ -29,6 +29,7 @@ OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 . "$MODDIR/ta.sh" || exit 70
 . "$MODDIR/profiles.sh" || exit 70
 . "$MODDIR/architecture-v2.sh" || exit 70
+. "$MODDIR/pif-migration-v2.sh" || exit 70
 . "$MODDIR/report.sh" || exit 70
 [ ! -f "$MODDIR/../otast.conf" ] || . "$MODDIR/../otast.conf" || exit 70
 
@@ -77,6 +78,11 @@ _otast_apply() {
   retirement_failed=0
   otast_recover_transactions || result=1
   [ "$result" -ne 0 ] || otast_pif_inspect_legacy_profile_state || result=1
+  # A legacy pif-prop-{active,staged} record and a v2 pif-mirror-* record may
+  # refer to the same fallback path during migration. Seed the v2 record from
+  # the verified legacy original before planning so Restore never adopts an
+  # already-managed v1 value as the true original. This changes metadata only.
+  [ "$result" -ne 0 ] || otast_pif_prepare_v2_mirror_state || result=1
   [ "$result" -ne 0 ] || otast_plan_all || result=1
   [ "$result" -ne 0 ] || otast_plan_strict_runtime_identity || result=1
   plan_count=${OTAST_PLAN_COUNT:-0}
@@ -85,9 +91,8 @@ _otast_apply() {
   # The managed-file transaction is already committed when otast_apply_plan
   # returns success. Legacy PIF ownership retirement is a separate, idempotent
   # metadata migration. If that later step fails, never report the managed-file
-  # transaction itself as rolled back/atomic-failed: leave the validated legacy
-  # record in place, return a distinct retryable status, and let the next Apply
-  # finish only the pending retirement.
+  # transaction itself as rolled back/atomic-failed: leave validated state in
+  # place, return a distinct retryable status, and let the next Apply finish it.
   if [ "$result" -eq 0 ]; then
     if ! otast_pif_retire_legacy_profile_state; then
       retirement_failed=1
