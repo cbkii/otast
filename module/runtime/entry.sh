@@ -28,6 +28,7 @@ OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 . "$MODDIR/trickystore.sh" || exit 70
 . "$MODDIR/ta.sh" || exit 70
 . "$MODDIR/profiles.sh" || exit 70
+. "$MODDIR/architecture-v2.sh" || exit 70
 . "$MODDIR/report.sh" || exit 70
 [ ! -f "$MODDIR/../otast.conf" ] || . "$MODDIR/../otast.conf" || exit 70
 
