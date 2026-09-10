@@ -35,83 +35,57 @@ class ProfileTests(unittest.TestCase):
     def test_reviewed_writer_fixtures_match_allowlists(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         checks = (
-            ("playintegrityfix", "autopif.sh", "pif-autopif-ea93222c.sh"),
-            ("playintegrityfix", "autopif.sh", "pif-autopif-8b4a00ce.sh"),
-            ("playintegrityfix", "autopif_ota.sh", "pif-autopif-ota-ea93222c.sh"),
-            ("playintegrityfix", "security_patch.sh", "pif-security-patch-ea93222c.sh"),
-            ("ta-utl", "prop.sh", "ta-utl-prop-v4.4.sh"),
-            ("ta-utl", "webui/assets/boot_hash-C0kIcwCH.js", "ta-utl-boot-hash-v4.4.js"),
+            ("playintegrityfix", "security_patch.sh", "pif-security-patch-ea93222c.sh", "accepted_hashes"),
+            ("playintegrityfix", "autopif.sh", "pif-autopif-ea93222c.sh", "observed_only_hashes"),
+            ("playintegrityfix", "autopif.sh", "pif-autopif-8b4a00ce.sh", "observed_only_hashes"),
+            ("playintegrityfix", "autopif_ota.sh", "pif-autopif-ota-ea93222c.sh", "observed_only_hashes"),
+            ("ta-utl", "prop.sh", "ta-utl-prop-v4.4.sh", "accepted_hashes"),
+            ("ta-utl", "webui/assets/boot_hash-C0kIcwCH.js", "ta-utl-boot-hash-v4.4.js", "accepted_hashes"),
         )
-        for target, name, fixture_name in checks:
+        for target, name, fixture_name, category in checks:
             digest = hashlib.sha256((FIXTURES / fixture_name).read_bytes()).hexdigest()
-            self.assertIn(digest, manifest["targets"][target]["accepted_hashes"][name])
+            self.assertIn(digest, manifest["targets"][target][category][name])
 
-    def test_pif_autopif_transform_preserves_profile_refresh_and_removes_competing_tail(self) -> None:
-        pif_runtime = ROOT / "module/runtime/pif.sh"
-        for fixture_name in ("pif-autopif-ea93222c.sh", "pif-autopif-8b4a00ce.sh"):
-            with self.subTest(fixture=fixture_name), tempfile.TemporaryDirectory(prefix="otast-pif-auto-") as raw:
-                work = Path(raw)
-                source = FIXTURES / fixture_name
-                first = work / "first.sh"
-                second = work / "second.sh"
-                command = f'''
-                    . "{pif_runtime}" || exit 1
-                    otast_transform_pif_autopif "{source}" "{first}" || exit 2
-                    otast_transform_pif_autopif "{first}" "{second}" || exit 3
-                '''
-                subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
-                text = first.read_text(encoding="utf-8")
-                self.assertIn("# --- otast pif refresh authority BEGIN ---", text)
-                self.assertIn("cat <<EOF | tee pif.prop", text)
-                self.assertIn('cat "$TEMPDIR/pif.prop" > /data/adb/pif.prop', text)
-                self.assertIn('sh "$MODDIR/security_patch.sh"', text)
-                self.assertNotIn("rm -f $MODDIR/system.prop", text)
-                self.assertNotIn("# --- otast pif final identity BEGIN ---", text)
-                self.assertEqual(first.read_bytes(), second.read_bytes())
+    def test_pif_autopif_executables_are_preserved_not_transformed(self) -> None:
+        arch = (ROOT / "module/runtime/architecture-v2.sh").read_text(encoding="utf-8")
+        planner = arch.split("otast_plan_pif()", 1)[1].split("otast_plan_strict_runtime_identity()", 1)[0]
+        self.assertNotIn("otast_transform_pif_autopif", planner)
+        self.assertNotIn("otast_transform_pif_ota", planner)
+        self.assertNotIn("autopif.sh", planner)
+        self.assertNotIn("autopif_ota.sh", planner)
+        self.assertIn("pif_autopif_lifecycle=UPSTREAM_PRESERVED", arch)
+        self.assertIn("pif_autopif_self_update_policy=UPSTREAM_PRESERVED", arch)
 
-    def test_pif_autopif_ota_transform_gates_moving_executable_update_before_body(self) -> None:
+    def test_pif_security_patch_transform_preserves_controls_and_removes_competing_writes(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
-        fixture = FIXTURES / "pif-autopif-ota-ea93222c.sh"
-        with tempfile.TemporaryDirectory(prefix="otast-pif-ota-") as raw:
-            work = Path(raw)
-            first = work / "first.sh"
-            second = work / "second.sh"
-            command = f'''
-                . "{pif_runtime}" || exit 1
-                otast_transform_pif_ota "{fixture}" "{first}" || exit 2
-                otast_transform_pif_ota "{first}" "{second}" || exit 3
-            '''
-            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
-            lines = first.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(lines[1], "# otast managed: AutoPIF executable self-update gate")
-            self.assertEqual(lines[4], "exit 0")
-            self.assertIn("fetch_autopif", first.read_text(encoding="utf-8"))
-            self.assertEqual(first.read_bytes(), second.read_bytes())
-
-    def test_pif_security_patch_adapter_preserves_marker_controls_without_profile_spl_writes(self) -> None:
-        pif_runtime = ROOT / "module/runtime/pif.sh"
+        arch_runtime = ROOT / "module/runtime/architecture-v2.sh"
         fixture = FIXTURES / "pif-security-patch-ea93222c.sh"
         with tempfile.TemporaryDirectory(prefix="otast-pif-security-") as raw:
             work = Path(raw)
             first = work / "first.sh"
             second = work / "second.sh"
             command = f'''
+                otast_stop() {{ printf '%s\\n' "$*" >&2; }}
+                otast_valid_date() {{ return 0; }}
                 . "{pif_runtime}" || exit 1
-                otast_transform_pif_security_patch "{fixture}" "{first}" || exit 2
-                otast_transform_pif_security_patch "{first}" "{second}" || exit 3
+                . "{arch_runtime}" || exit 2
+                otast_transform_pif_security_patch "{fixture}" "{first}" || exit 3
+                otast_transform_pif_security_patch "{first}" "{second}" || exit 4
             '''
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
             text = first.read_text(encoding="utf-8")
-            self.assertIn("# otast managed: PIF auto-security-patch compatibility adapter", text)
+            self.assertIn("# --- otast pif patch-domain boundary BEGIN ---", text)
             self.assertIn("--enable", text)
             self.assertIn("--disable", text)
             self.assertIn('touch "$AUTO_FLAG"', text)
             self.assertIn('rm -f "$AUTO_FLAG"', text)
-            self.assertNotIn('rm -f "$AUTO_FLAG" "$MODDIR/system.prop"', "\n".join(text.splitlines()[:35]))
-            self.assertNotIn("resetprop -n", "\n".join(text.splitlines()[:35]))
+            self.assertNotIn('> "$TARGET_FILE"', text)
+            self.assertNotIn('> $TARGET_FILE', text)
+            self.assertNotIn("cat << EOF > $MODDIR/system.prop", text)
+            self.assertNotIn("resetprop -n", text)
             self.assertEqual(first.read_bytes(), second.read_bytes())
 
-    def test_pif_profile_validator_accepts_distinct_valid_profiles_and_rejects_duplicate_keys(self) -> None:
+    def test_pif_profile_validator_accepts_valid_profiles_and_rejects_duplicate_keys(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
         with tempfile.TemporaryDirectory(prefix="otast-pif-validator-") as raw:
             work = Path(raw)
@@ -137,12 +111,23 @@ class ProfileTests(unittest.TestCase):
             '''
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
 
-    def test_pif_manifest_models_profile_data_as_observed_not_managed(self) -> None:
+    def test_pif_manifest_models_canonical_source_and_conditional_mirrors(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         pif = manifest["targets"]["playintegrityfix"]
-        self.assertNotIn("pif.prop", pif["managed_paths"])
-        self.assertIn("pif.prop", pif["observed_paths"])
-        self.assertIn("PIF_OWNED_MUTABLE_CONFIGURATION", pif["profile_ownership"])
+        self.assertEqual(pif["managed_paths"], ["security_patch.sh"])
+        self.assertEqual(pif["conditional_managed_paths"], ["pif.prop"])
+        self.assertIn("/data/adb/pif.prop", pif["observed_paths"])
+        self.assertIn("autopif.sh", pif["observed_paths"])
+        self.assertIn("autopif_ota.sh", pif["observed_paths"])
+        self.assertEqual(
+            pif["canonical_profile_precedence"],
+            [
+                "/data/adb/pif.prop",
+                "/data/adb/modules/playintegrityfix/pif.prop",
+                "/data/adb/modules_update/playintegrityfix/pif.prop",
+            ],
+        )
+        self.assertEqual(pif["profile_ownership"], "CANONICAL_SOURCE_WITH_TRANSACTIONAL_FALLBACK_MIRRORS")
 
     def test_ta_v44_transform_disables_only_vbmeta_block(self) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
@@ -226,6 +211,7 @@ class ProfileTests(unittest.TestCase):
             "pif.sh",
             "policy.sh",
             "profiles.sh",
+            "architecture-v2.sh",
             "report.sh",
             "ta.sh",
             "trickystore.sh",
