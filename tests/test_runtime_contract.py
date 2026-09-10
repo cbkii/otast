@@ -18,50 +18,53 @@ class RuntimeContractTests(unittest.TestCase):
     def test_pif_managed_surface_is_minimal(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         pif = manifest["targets"]["playintegrityfix"]
+        self.assertEqual(set(pif["managed_paths"]), {"security_patch.sh"})
+        self.assertEqual(set(pif["conditional_managed_paths"]), {"pif.prop"})
         self.assertEqual(
-            set(pif["managed_paths"]),
-            {"autopif.sh", "autopif_ota.sh", "security_patch.sh", "system.prop"},
+            set(pif["observed_paths"]),
+            {"/data/adb/pif.prop", "autopif.sh", "autopif_ota.sh"},
         )
-        self.assertEqual(set(pif["observed_paths"]), {"/data/adb/pif.prop", "pif.prop"})
-        profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
-        pif_block = profiles.split("otast_plan_pif()", 1)[1].split("otast_plan_ta_utl()", 1)[0]
+        arch = (ROOT / "module/runtime/architecture-v2.sh").read_text(encoding="utf-8")
+        pif_block = arch.split("otast_plan_pif()", 1)[1].split("otast_plan_strict_runtime_identity()", 1)[0]
         self.assertIn("otast_effective_module_dirs playintegrityfix", pif_block)
-        for path in ("autopif.sh", "autopif_ota.sh", "security_patch.sh"):
-            self.assertIn(f'"$dir/{path}"', pif_block)
-        self.assertIn('otast_validate_pif_profile_file "$dir/pif.prop"', pif_block)
-        self.assertNotIn("pif-global-prop", pif_block)
-        self.assertNotIn("pif-prop-$role", pif_block)
-        for observed in ("action.sh", "post-fs-data.sh", "service.sh", "common_func.sh"):
-            self.assertNotIn(f'"$dir/{observed}"', pif_block)
+        self.assertIn('"$dir/security_patch.sh"', pif_block)
+        self.assertIn('"$dir/pif.prop" != "$OTAST_PIF_CANONICAL_PATH"', pif_block)
+        self.assertIn('"pif-mirror-$role"', pif_block)
+        self.assertNotIn("autopif.sh", pif_block)
+        self.assertNotIn("autopif_ota.sh", pif_block)
         self.assertFalse((ROOT / "module/runtime/templates/pif").exists())
 
     def test_pif_manifest_and_runtime_writer_allowlists_match(self) -> None:
         manifest = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         pif = manifest["targets"]["playintegrityfix"]
-        profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
-        pif_block = profiles.split("otast_plan_pif()", 1)[1].split("otast_plan_ta_utl()", 1)[0]
-        for name in ("autopif.sh", "autopif_ota.sh", "security_patch.sh"):
-            for digest in pif["accepted_hashes"][name]:
-                self.assertIn(digest, pif_block, f"{name}:{digest}")
+        arch = (ROOT / "module/runtime/architecture-v2.sh").read_text(encoding="utf-8")
+        for digest in pif["accepted_hashes"]["security_patch.sh"]:
+            self.assertIn(digest, arch)
+        self.assertNotIn("autopif.sh", pif["accepted_hashes"])
+        self.assertNotIn("autopif_ota.sh", pif["accepted_hashes"])
+        self.assertIn("autopif.sh", pif["observed_only_hashes"])
+        self.assertIn("autopif_ota.sh", pif["observed_only_hashes"])
 
     def test_legacy_governor_and_pif_auto_patch_contract(self) -> None:
         common = (ROOT / "module/runtime/common.sh").read_text(encoding="utf-8")
         entry = (ROOT / "module/runtime/entry.sh").read_text(encoding="utf-8")
-        profiles = (ROOT / "module/runtime/profiles.sh").read_text(encoding="utf-8")
-        pif = (ROOT / "module/runtime/pif.sh").read_text(encoding="utf-8")
+        arch = (ROOT / "module/runtime/architecture-v2.sh").read_text(encoding="utf-8")
+        migration = (ROOT / "module/runtime/pif-migration-v2.sh").read_text(encoding="utf-8")
         upstream_autopif = (ROOT / "tests/fixtures/upstream/pif-autopif-ea93222c.sh").read_text(encoding="utf-8")
 
         self.assertIn("otast_require_no_legacy_governors()", common)
         self.assertGreaterEqual(entry.count("otast_require_no_legacy_governors"), 4)
         self.assertIn("pif_auto_security_patch", upstream_autopif)
         self.assertIn('sh "$MODDIR/security_patch.sh"', upstream_autopif)
-        self.assertIn("pif_auto_security_patch", profiles)
-        self.assertIn("OTAST preserves the preference", profiles)
-        self.assertIn("PIF automatic security-patch flag is not a safe regular file", profiles)
-        self.assertIn("otast_transform_pif_security_patch", profiles)
-        self.assertIn("PIF auto-security-patch compatibility adapter", pif)
-        self.assertIn("AutoPIF executable self-update gate", pif)
-        self.assertIn("PIF profile refresh remains PIF-owned", pif)
+        self.assertIn("pif_auto_security_patch", arch)
+        self.assertIn("marker is preserved", arch)
+        self.assertIn("PIF automatic security-patch flag is not a safe regular file", arch)
+        self.assertIn("otast_transform_pif_security_patch", arch)
+        self.assertIn("patch-domain boundary BEGIN", arch)
+        self.assertIn("pif_autopif_lifecycle=UPSTREAM_PRESERVED", arch)
+        self.assertIn("pif_autopif_self_update_policy=UPSTREAM_PRESERVED", arch)
+        self.assertIn("otast_pif_prepare_v2_mirror_state", migration)
+        self.assertIn("verified legacy original", entry)
 
     def test_runtime_authority_is_pixel_family_not_model_pinned(self) -> None:
         authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")
