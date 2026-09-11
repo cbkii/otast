@@ -139,7 +139,7 @@ class PifRefreshLifecycleTests(unittest.TestCase):
             apply = _run(entry, adb_root, "apply", expect=1)
             self.assertIn("managed target drift detected", apply.stdout)
             restore = _run(entry, adb_root, "restore", expect=1)
-            self.assertIn("managed target drift detected", restore.stdout)
+            self.assertIn("restore blocked by target drift", restore.stdout)
 
             active.write_bytes(managed)
             active.chmod(0o644)
