@@ -64,7 +64,14 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("pif_autopif_lifecycle=UPSTREAM_PRESERVED", arch)
         self.assertIn("pif_autopif_self_update_policy=UPSTREAM_PRESERVED", arch)
         self.assertIn("otast_pif_prepare_v2_mirror_state", migration)
-        self.assertIn("verified legacy original", entry)
+
+        apply_block = entry.split("_otast_apply()", 1)[1].split("_otast_verify()", 1)[0]
+        provisional_plan = apply_block.index("OTAST_PIF_PROVISIONAL_PLAN=1")
+        ordinary_plan = apply_block.index("otast_plan_all", provisional_plan)
+        topology_commit = apply_block.index("otast_pif_commit_role_transitions", ordinary_plan)
+        legacy_adoption = apply_block.index("otast_pif_prepare_v2_mirror_state", topology_commit)
+        self.assertLess(ordinary_plan, topology_commit)
+        self.assertLess(topology_commit, legacy_adoption)
 
     def test_runtime_authority_is_pixel_family_not_model_pinned(self) -> None:
         authority = (ROOT / "module/runtime/authority.sh").read_text(encoding="utf-8")

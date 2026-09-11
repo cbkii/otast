@@ -75,6 +75,10 @@ otast_validate_pif_profiles_current() {
   found=0
 
   if [ -e "$global" ] || [ -L "$global" ]; then
+    if [ -L "$global" ]; then
+      otast_stop "PIF profile is not a safe regular file: $global"
+      return 1
+    fi
     otast_assert_no_symlink_path "$global" || return 1
     otast_validate_pif_profile_file "$global" || return 1
   fi
