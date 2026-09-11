@@ -26,18 +26,21 @@ class PifAutoPatchFlagTests(unittest.TestCase):
             expected_mode = stat.S_IMODE(flag.stat().st_mode)
 
             preflight = _run(entry, adb_root, "preflight")
-            self.assertIn("OTAST preserves the preference", preflight.stdout)
+            self.assertIn("marker is preserved", preflight.stdout)
 
             _run(entry, adb_root, "apply")
             self.assertFalse(flag.is_symlink())
             self.assertTrue(flag.is_file())
             self.assertEqual(flag.read_bytes(), expected_bytes)
             self.assertEqual(stat.S_IMODE(flag.stat().st_mode), expected_mode)
+
             writer = adb_root / "modules/playintegrityfix/security_patch.sh"
-            self.assertIn(
-                "# otast managed: PIF auto-security-patch compatibility adapter",
-                writer.read_text(encoding="utf-8"),
-            )
+            text = writer.read_text(encoding="utf-8")
+            self.assertIn("# --- otast pif patch-domain boundary BEGIN ---", text)
+            self.assertIn('touch "$AUTO_FLAG"', text)
+            self.assertIn('rm -f "$AUTO_FLAG"', text)
+            self.assertNotIn("cat << EOF > $MODDIR/system.prop", text)
+            self.assertNotIn("resetprop -n", text)
 
             _run(entry, adb_root, "restore")
             self.assertFalse(flag.is_symlink())

@@ -10,7 +10,6 @@ from pathlib import Path, PurePosixPath
 
 from .build import build_module
 from .fake_root import (
-    _assert_originals,
     _extract_exact_zip,
     _new_root,
     _run,
@@ -28,6 +27,14 @@ LEGACY_PIF_PROFILE_STATE_IDS = (
     "pif-global-prop",
     "pif-prop-active",
     "pif-prop-staged",
+)
+LEGACY_PIF_WRITER_STATE_IDS = (
+    "pif-autopif-active",
+    "pif-autopif-staged",
+    "pif-autopif-ota-active",
+    "pif-autopif-ota-staged",
+    "pif-runtime-system-prop-active",
+    "pif-runtime-system-prop-staged",
 )
 
 
@@ -68,14 +75,6 @@ def _state_snapshot(adb_root: Path) -> dict[str, str]:
 
 
 def _backup_snapshot(adb_root: Path) -> dict[str, str]:
-    """Snapshot durable original backups independently of active ownership records.
-
-    Candidate migrations may intentionally retire an old state record while retaining
-    its original backup as historical evidence. Scanning the bounded OTAST backup
-    directory directly proves those bytes still exist instead of treating retirement
-    of the referencing state record as backup deletion.
-    """
-
     backups = adb_root / "otast/backups"
     if not backups.exists():
         return {}
@@ -113,10 +112,7 @@ def _assert_originals_except_pif_profiles(adb_root: Path, originals: dict[str, b
             raise OtastError(f"Restore did not recover original fixture bytes: {relative}")
 
 
-def _assert_predecessor_backups_preserved(
-    predecessor: dict[str, str],
-    current: dict[str, str],
-) -> None:
+def _assert_predecessor_backups_preserved(predecessor: dict[str, str], current: dict[str, str]) -> None:
     for key, digest in predecessor.items():
         observed = current.get(key)
         if observed is None:
@@ -255,17 +251,22 @@ def _build_published_predecessor(
     return predecessor, commit
 
 
+def _assert_profile_mirrors_equal(adb_root: Path, canonical: bytes) -> None:
+    for relative in (
+        "modules/playintegrityfix/pif.prop",
+        "modules_update/playintegrityfix/pif.prop",
+    ):
+        path = adb_root / relative
+        if path.exists() and path.read_bytes() != canonical:
+            raise OtastError(f"PIF fallback was not reconciled to canonical source: {relative}")
+
+
 def qualify_published_predecessor(
     repo_root: Path,
     output_dir: Path,
     ref: str = PUBLISHED_PREDECESSOR_REF,
 ) -> dict[str, object]:
-    """Qualify the actual published predecessor runtime into the candidate.
-
-    The predecessor module tree is reconstructed from the pinned Git tag. No
-    network request or vendored release binary is used. This qualification is
-    intentionally available only when the repository history contains the tag.
-    """
+    """Qualify the published v1 ownership model into canonical-mirror v2."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
     candidate_zip = build_module(repo_root, output_dir / "candidate")
@@ -283,13 +284,19 @@ def qualify_published_predecessor(
 
         records = adb_root / "otast/records"
         legacy_profile_state_ids = tuple(
-            state_id
-            for state_id in LEGACY_PIF_PROFILE_STATE_IDS
+            state_id for state_id in LEGACY_PIF_PROFILE_STATE_IDS
+            if (records / f"{state_id}.state").is_file()
+        )
+        legacy_writer_state_ids = tuple(
+            state_id for state_id in LEGACY_PIF_WRITER_STATE_IDS
             if (records / f"{state_id}.state").is_file()
         )
         if not legacy_profile_state_ids:
             raise OtastError("published predecessor created no legacy PIF profile ownership state")
         pre_candidate_profiles = _pif_profile_snapshot(adb_root)
+        canonical_before = pre_candidate_profiles.get("pif.prop")
+        if canonical_before is None:
+            raise OtastError("published predecessor fixture has no global canonical PIF profile")
         predecessor_backups = _backup_snapshot(adb_root)
         if not predecessor_backups:
             raise OtastError("published predecessor created no original backup evidence")
@@ -300,52 +307,83 @@ def qualify_published_predecessor(
         _simulate_managed_boot(adb_root)
         _run(candidate_entry, adb_root, "verify")
 
-        post_candidate_profiles = _pif_profile_snapshot(adb_root)
-        if post_candidate_profiles != pre_candidate_profiles:
-            raise OtastError("candidate rewrote PIF-owned profile bytes while retiring predecessor ownership")
+        if (adb_root / "pif.prop").read_bytes() != canonical_before:
+            raise OtastError("candidate rewrote canonical PIF profile during ownership migration")
+        _assert_profile_mirrors_equal(adb_root, canonical_before)
 
-        retired_root = adb_root / "otast/retired/pif-profile-ownership-v1"
-        if retired_root.is_symlink() or not retired_root.is_dir():
-            raise OtastError("candidate did not create safe retired PIF ownership evidence")
+        retired_profile_root = adb_root / "otast/retired/pif-profile-ownership-v1"
+        if retired_profile_root.is_symlink() or not retired_profile_root.is_dir():
+            raise OtastError("candidate did not create safe retired PIF profile ownership evidence")
         for state_id in legacy_profile_state_ids:
             if (records / f"{state_id}.state").exists():
-                raise OtastError(f"candidate left legacy PIF ownership active: {state_id}")
-            retired = retired_root / f"{state_id}.state"
+                raise OtastError(f"candidate left legacy PIF profile ownership active: {state_id}")
+            retired = retired_profile_root / f"{state_id}.state"
             if retired.is_symlink() or not retired.is_file():
-                raise OtastError(f"candidate did not retain retired PIF ownership evidence: {state_id}")
+                raise OtastError(f"candidate did not retain retired PIF profile evidence: {state_id}")
+
+        if legacy_writer_state_ids:
+            retired_writer_root = adb_root / "otast/retired/pif-writer-ownership-v2"
+            if retired_writer_root.is_symlink() or not retired_writer_root.is_dir():
+                raise OtastError("candidate did not create safe retired PIF writer ownership evidence")
+            for state_id in legacy_writer_state_ids:
+                if (records / f"{state_id}.state").exists():
+                    raise OtastError(f"candidate left deprecated PIF writer ownership active: {state_id}")
+                retired = retired_writer_root / f"{state_id}.state"
+                if retired.is_symlink() or not retired.is_file():
+                    raise OtastError(f"candidate did not retain retired PIF writer evidence: {state_id}")
+
+        for role in ("modules", "modules_update"):
+            for name in ("autopif.sh", "autopif_ota.sh"):
+                relative = f"{role}/playintegrityfix/{name}"
+                path = adb_root / relative
+                if path.exists() and path.read_bytes() != originals[relative]:
+                    raise OtastError(f"candidate did not restore upstream-owned PIF executable: {relative}")
 
         candidate_backups = _backup_snapshot(adb_root)
         _assert_predecessor_backups_preserved(predecessor_backups, candidate_backups)
 
-        # After ownership retirement, simulate legitimate PIF/WebUI/module update
-        # writes to every currently-present profile layer. Candidate Apply and
-        # Restore must leave these bytes untouched.
-        for relative in tuple(post_candidate_profiles):
-            path = adb_root / relative
-            with path.open("ab") as handle:
-                handle.write(b"# simulated PIF-owned refresh after ownership retirement\n")
-        refreshed_profiles = _pif_profile_snapshot(adb_root)
-        if refreshed_profiles == post_candidate_profiles:
-            raise OtastError("PIF-owned refresh fixture did not change profile bytes")
+        # A legitimate PIF refresh changes only the canonical source. Verify must
+        # expose stale mirrors; explicit Apply reconciles them transactionally.
+        global_profile = adb_root / "pif.prop"
+        refreshed = canonical_before + b"# simulated PIF-owned refresh after v2 migration\n"
+        global_profile.write_bytes(refreshed)
+        global_profile.chmod(0o600)
+        stale_verify = _run(candidate_entry, adb_root, "verify", expect=1)
+        if "PIF fallback profile is not synchronized" not in stale_verify.stdout:
+            raise OtastError("published-upgrade refresh did not expose stale PIF mirror state")
+        before_reconcile = _transaction_count(adb_root)
+        reconcile_apply = _run(candidate_entry, adb_root, "apply")
+        after_reconcile = _transaction_count(adb_root)
+        if after_reconcile != before_reconcile + 1:
+            raise OtastError("PIF refresh reconciliation did not use exactly one transaction")
+        _assert_profile_mirrors_equal(adb_root, refreshed)
+        _simulate_managed_boot(adb_root)
+        _run(candidate_entry, adb_root, "verify")
 
         before_noop = _transaction_count(adb_root)
         second_apply = _run(candidate_entry, adb_root, "apply")
         after_noop = _transaction_count(adb_root)
         if after_noop != before_noop:
             raise OtastError("published-predecessor upgrade did not settle to a no-op second Apply")
-        if _pif_profile_snapshot(adb_root) != refreshed_profiles:
-            raise OtastError("candidate Apply rolled back PIF-owned profile refresh bytes")
 
         _run(candidate_entry, adb_root, "restore")
-        if _pif_profile_snapshot(adb_root) != refreshed_profiles:
-            raise OtastError("candidate Restore rolled back PIF-owned profile refresh bytes")
+        if global_profile.read_bytes() != refreshed:
+            raise OtastError("Restore rolled back the current canonical PIF source")
+        for relative in (
+            "modules/playintegrityfix/pif.prop",
+            "modules_update/playintegrityfix/pif.prop",
+        ):
+            if relative in originals:
+                path = adb_root / relative
+                if not path.is_file() or path.read_bytes() != originals[relative]:
+                    raise OtastError(f"Restore did not recover true pre-OTAST fallback bytes: {relative}")
         _simulate_managed_boot(adb_root)
         _assert_originals_except_pif_profiles(adb_root, originals)
         if records.exists() and any(records.iterdir()):
             raise OtastError("Restore after published-predecessor upgrade left managed state records")
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "result": "PASS",
         "predecessor_ref": ref,
         "predecessor_commit": predecessor_commit,
@@ -353,11 +391,16 @@ def qualify_published_predecessor(
             "published_predecessor_preflight_apply_verify": True,
             "candidate_preflight_apply_verify": True,
             "legacy_pif_profile_state_retired": bool(legacy_profile_state_ids),
-            "pif_profile_bytes_preserved_during_ownership_retirement": post_candidate_profiles == pre_candidate_profiles,
+            "legacy_pif_writer_state_retired": bool(legacy_writer_state_ids),
+            "canonical_pif_source_preserved_during_migration": True,
+            "fallbacks_reconciled_to_canonical": True,
             "predecessor_original_backups_preserved": True,
-            "candidate_may_add_new_first_time_backups": len(candidate_backups) >= len(predecessor_backups),
+            "candidate_may_add_v2_mirror_backups": len(candidate_backups) >= len(predecessor_backups),
+            "pif_refresh_requires_explicit_reconcile": stale_verify.returncode == 1,
+            "pif_refresh_reconciled_transactionally": reconcile_apply.returncode == 0,
             "second_apply_noop": second_apply.returncode == 0 and after_noop == before_noop,
-            "pif_profile_refresh_survives_noop_apply_and_restore": True,
+            "canonical_refresh_survives_restore": True,
+            "candidate_restore_recovers_true_fallback_originals": True,
             "candidate_restore_recovers_non_pif_pre_otast_bytes": True,
             "managed_state_removed_after_restore": True,
         },
@@ -365,13 +408,7 @@ def qualify_published_predecessor(
 
 
 def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]:
-    """Exercise managed-state upgrade/reinstall boundaries against a fake Magisk root.
-
-    The synthetic predecessor uses candidate runtime bytes with an older module
-    identity. This isolates transaction continuity from runtime migration. The
-    separate published-predecessor qualification above covers the actual v1.0.2
-    runtime-to-candidate transition when repository history is available.
-    """
+    """Exercise v2 managed-state upgrade/reinstall boundaries on a fake root."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
     module_zip = build_module(repo_root, output_dir)
@@ -386,9 +423,9 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
         _simulate_managed_boot(adb_root)
         _run(predecessor_entry, adb_root, "verify")
 
-        staged_record = adb_root / "otast/records/pif-autopif-staged.state"
+        staged_record = adb_root / "otast/records/pif-mirror-staged.state"
         if not staged_record.is_file():
-            raise OtastError("predecessor did not create managed state for modules_update")
+            raise OtastError("v2 predecessor did not create managed mirror state for modules_update")
         before_upgrade = _state_snapshot(adb_root)
 
         candidate_entry = _install_candidate(module_zip, adb_root)
@@ -397,9 +434,9 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
         upgrade_apply = _run(candidate_entry, adb_root, "apply")
         transactions_after = _transaction_count(adb_root)
         if transactions_after != transactions_before + 1:
-            raise OtastError("candidate upgrade did not use exactly one rehydration transaction")
+            raise OtastError("candidate upgrade did not use exactly one self-rehydration transaction")
         if _state_snapshot(adb_root) != before_upgrade:
-            raise OtastError("candidate upgrade rewrote predecessor state or original backups")
+            raise OtastError("candidate upgrade rewrote existing managed-state/original contracts")
 
         before_noop = _transaction_count(adb_root)
         no_op_apply = _run(candidate_entry, adb_root, "apply")
@@ -413,22 +450,22 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
         reinstall_apply = _run(reinstalled_entry, adb_root, "apply")
         after_reinstall = _transaction_count(adb_root)
         if after_reinstall != before_reinstall + 1:
-            raise OtastError("candidate reinstall did not use exactly one rehydration transaction")
+            raise OtastError("candidate reinstall did not use exactly one self-rehydration transaction")
         if _state_snapshot(adb_root) != before_upgrade:
-            raise OtastError("candidate reinstall rewrote managed state or original backups")
+            raise OtastError("candidate reinstall rewrote managed-state/original contracts")
 
-        staged_path = adb_root / "modules_update/playintegrityfix/autopif.sh"
+        staged_path = adb_root / "modules_update/playintegrityfix/pif.prop"
         staged_bytes = staged_path.read_bytes()
-        staged_path.write_text("contradictory staged drift\n", encoding="utf-8")
-        staged_path.chmod(0o755)
+        staged_path.write_text("FINGERPRINT=drift\nSECURITY_PATCH=2026-08-05\n", encoding="utf-8")
+        staged_path.chmod(0o644)
         before_reject = _state_snapshot(adb_root)
         disagreement = _run(reinstalled_entry, adb_root, "apply", expect=1)
         if _state_snapshot(adb_root) != before_reject:
-            raise OtastError("active/staged disagreement changed managed state before failing")
+            raise OtastError("fallback mirror drift changed managed state before failing")
         staged_path.write_bytes(staged_bytes)
-        staged_path.chmod(0o755)
+        staged_path.chmod(0o644)
 
-        state = adb_root / "otast/records/pif-autopif-active.state"
+        state = adb_root / "otast/records/pif-mirror-active.state"
         original_state = state.read_bytes()
         state.write_bytes(original_state.replace(b"version=1\n", b"version=999\n", 1))
         corrupt = _run(reinstalled_entry, adb_root, "apply", expect=1)
@@ -436,17 +473,17 @@ def qualify_upgrade_path(repo_root: Path, output_dir: Path) -> dict[str, object]
             raise OtastError("corrupt-state scenario unexpectedly rewrote the invalid record")
 
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "result": "PASS",
             "scenarios": {
                 "synthetic_stable_to_candidate": upgrade_apply.returncode == 0,
                 "self_managed_system_prop_rehydrated_transactionally": transactions_after == transactions_before + 1,
-                "existing_managed_state_adopted": True,
-                "modules_update_state_preserved": True,
+                "existing_v2_managed_state_adopted": True,
+                "modules_update_mirror_state_preserved": True,
                 "original_backups_preserved": True,
                 "second_apply_noop": no_op_apply.returncode == 0 and after_noop == before_noop,
                 "candidate_reinstall_safe": reinstall_apply.returncode == 0 and after_reinstall == before_reinstall + 1,
-                "active_staged_disagreement_rejected": disagreement.returncode == 1,
+                "fallback_mirror_drift_rejected": disagreement.returncode == 1,
                 "contradictory_state_rejected": corrupt.returncode == 1,
             },
         }

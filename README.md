@@ -1,73 +1,90 @@
 # OTAST — OTA Source of Truth
 
-OTAST is a transactional Magisk module for the reviewed **Google Pixel / Android 16 (SDK 36)** platform contract. It treats `/data/adb/ota.prop` as the sole authority for OTA-derived platform identity and coordinates a reviewed set of interacting integrity modules without silently replacing user-selected attestation-profile configuration.
+OTAST is a transactional Magisk module for the reviewed **Google Pixel / Android 16 (SDK 36)** platform contract. `/data/adb/ota.prop` is the sole authority for the installed OTA/platform identity. OTAST coordinates a reviewed set of interacting integrity modules while keeping the installed platform, raw boot evidence, PIF attestation profile and Tricky Store local-attestation state as separate ownership domains.
 
-**`https://github.com/cbkii/otast` is the only supported OTAST repository and module source.** Older similarly named OTA-governor repositories/modules are deprecated and must not be installed or used. OTAST retains legacy-trace detection only so coexistence or an incomplete migration fails closed.
+**`https://github.com/cbkii/otast` is the only supported OTAST repository and module source.** Older similarly named OTA-governor repositories/modules are deprecated and must not coexist. Legacy-trace handling exists only to fail closed or perform bounded migration of known OTAST state.
 
-This repository is the complete public source tree. It includes the Magisk module, deterministic release tooling, a fake-Magisk-root lifecycle harness, private device-fixture tooling, CI, target monitoring, bounded read-only diagnostics, and public-repository initialization checks.
+The repository includes the Magisk module, deterministic release tooling, fake-root lifecycle qualification, private device-fixture tooling, CI, target monitoring and bounded read-only diagnostics.
 
-> **Release status:** use this repository's GitHub Releases page and stable Magisk `update.json` channel for the current published version. Release candidates and development source may intentionally be ahead of that stable channel.
+> **Release status:** use GitHub Releases and stable `update.json` for the published version. Development source may intentionally be ahead of that channel.
 
 ## Compatibility scope
 
-Runtime validation is Pixel-model-independent inside an explicitly supported platform profile, but **family-level architectural compatibility is not physical qualification of every Pixel**. The machine-readable registry distinguishes `DESIGN_COMPATIBLE`, `FIXTURE_QUALIFIED`, `DEVICE_VALIDATED`, `RELEASE_QUALIFIED`, and `UNQUALIFIED` evidence levels.
+Runtime validation is Pixel-model-independent inside an explicitly supported platform profile, but family architecture is not physical qualification of every Pixel. The registry distinguishes `DESIGN_COMPATIBLE`, `FIXTURE_QUALIFIED`, `DEVICE_VALIDATED`, `RELEASE_QUALIFIED` and `UNQUALIFIED`.
 
-Current repository evidence is summarized in [Compatibility status](docs/COMPATIBILITY-STATUS.md):
+Current evidence is summarized in [Compatibility status](docs/COMPATIBILITY-STATUS.md):
 
-- Pixel 9a / `tegu` / `CP1A.260305.018`: `DEVICE_VALIDATED`; it remains below `RELEASE_QUALIFIED` until the current release artefact completes the physical release gate.
-- Pixel 8 / `shiba`: `DESIGN_COMPATIBLE`; generic Pixel identity/runtime contracts are covered, but the repository holds no exact fixture or physical qualification proof for a Pixel 8 build.
-- undeclared Pixel models/builds: `UNQUALIFIED`, even though the Google Pixel / Android 16 architecture is designed to validate them fail-closed when later qualified.
+- Pixel 9a / `tegu` / `CP1A.260305.018`: `DEVICE_VALIDATED`;
+- Pixel 8 / `shiba`: `DESIGN_COMPATIBLE`, with no exact physical-build qualification recorded;
+- undeclared Pixel models/builds: `UNQUALIFIED` until separately qualified.
 
-Device-specific OTA identity must always come from `/data/adb/ota.prop` and agree with the live device. Another model's captured identity is never interchangeable.
+Device-specific OTA identity must come from `/data/adb/ota.prop` and agree with the live device. Another model's captured identity is never interchangeable.
 
-See [Compatibility model](docs/COMPATIBILITY-MODEL.md) for the machine-readable contract and qualification semantics.
+## Ownership model
+
+Consistency means one clear owner per state/contract, not forcing all identity namespaces to be identical.
+
+- **Installed OTA/platform:** `ota.prop`, static build evidence and official system/vendor SPL.
+- **Raw boot evidence:** bootconfig/bootloader/libavb evidence; OTAST reads but does not normalize it.
+- **PIF attestation profile:** PIF/user-selected identity. It may intentionally differ from the installed OTA.
+- **Tricky Store local attestation:** Tricky Store owns key/TEE behavior; OTAST owns only its reviewed external patch metadata contract.
+
+For PIF Inject (`playintegrityfix`), OTAST selects one canonical profile in `global > active > staged` order. The selected source is never rewritten to OTA identity and is never OTAST Restore-owned. Non-source active/staged module fallbacks are transactional mirrors of that canonical source.
+
+`autopif.sh` and `autopif_ota.sh` remain upstream-owned, so normal AutoPIF profile/executable refresh is preserved. `security_patch.sh` remains exact-hash/anchor gated because it crosses domains; OTAST surgically suppresses only its Tricky Store, PIF `system.prop` and runtime SPL writes while preserving marker/profile-selection behavior.
+
+See [PIF compatibility](docs/PIF-COMPATIBILITY.md).
 
 ## Managed contracts
 
-OTAST currently supports reviewed managed profiles for:
+OTAST currently coordinates:
 
-- PIF Inject (`playintegrityfix`): separates the selected process-local attestation profile from platform identity. In `preserve` mode profile fingerprint/model/`SECURITY_PATCH` and unrelated spoof options remain user-selected, while reviewed global `system.prop` SPL values are reconciled to OTA authority and the competing automatic `security_patch.sh` runtime writer is neutralized. Structure-sensitive transforms remain exact-hash/anchor gated.
-- Tricky Store OSS (`tricky_store`): the exact reviewed v3.1.0 release asset uses OTA-aligned `security_patch.txt` as the managed patch contract. Existing targets and active keybox remain user/upstream data.
-- Yurikey (`Yurikey`): reviewed 3.0.x whole-file high-risk writers are neutralized through module identity + reviewed version range + path safety rather than irrelevant historical byte identity; exact original bytes/modes remain restorable.
-- Tricky Addon Update Target List (`TA_utl` or `.TA_utl`): reviewed `prop.sh` and generated WebUI Boot Hash transforms remain structure-sensitive and exact-hash/anchor gated.
-- Android VBMeta Fixer (`vbmeta-fixer`): the reviewed writer is neutralized only under its exact reviewed-artifact contract. It has **not** been broadened to a version range without proof.
+- **PIF Inject:** canonical profile/fallback coherence plus the surgical `security_patch.sh` boundary described above;
+- **Tricky Store OSS:** exact reviewed v3.1.0 release asset; OTA-aligned `security_patch.txt` is managed while target/keybox/TEE data remain external;
+- **Yurikey:** reviewed 3.0.x high-risk writers are neutralized under the existing version-range/path-safety contract, with exact originals restorable;
+- **Tricky Addon Update Target List:** reviewed `prop.sh` and generated WebUI Boot Hash transformations remain exact-hash/anchor gated;
+- **Android VBMeta Fixer:** the reviewed writer remains neutralized under its existing exact-artifact contract.
 
-The same registry separately declares read-only **observed dependencies** such as Magisk, Zygisk Next, Vector, Inline Hook Invalidate, and PIF's preserved native/Zygisk surface. OTAST does not manage or rewrite their settings. Conflicting/legacy integrations are represented separately with machine-readable reasons and severity.
+This PIF ownership change does not broaden or remove the existing TA/Yurikey/VBMeta Fixer contracts.
 
-Unknown target hashes, unsafe links, authority/source mismatch, active deprecated OTA-governor traces, unsafe PIF auto-patch marker types, managed drift, malformed state, and incomplete transaction recovery all fail closed.
+The registry separately declares read-only observed dependencies such as Magisk, Zygisk Next, Vector, Inline Hook Invalidate and PIF's native/Zygisk surface.
+
+Unknown writer hashes, unsafe paths/links, authority mismatch, managed drift, malformed state, incomplete transaction recovery and contradictory verified-boot presentation fail closed.
 
 ## Android platform authority
 
-Android-version assumptions live in explicit platform profiles under `compatibility/platforms/`. Only `android-16` / SDK 36 is currently supported. Unknown SDK/platform versions fail closed; Android 17 is not claimed and requires its own reviewed profile before support can be added.
+Only `android-16` / SDK 36 is currently supported. Android 17 is not inferred from Android 16.
 
-For official Pixel authority, system and vendor security patch levels are independent required evidence. `ro.vendor.build.security_patch` is never silently substituted from the system SPL. The platform-visible OTA identity remains separate from PIF's process-local attestation profile.
+Official system and vendor SPL are independent required authority values. OTAST's own `system.prop` contains only those two installed-platform values:
 
-`ota.prop` may contain `ro.boot.vbmeta.size` derived from official OTA/factory artifacts. That value is retained as **artifact provenance**, not assumed identical to bootloader/libavb runtime size, and OTAST never `resetprop`s runtime VBMeta size. Runtime/source validation compares the OTA-derived VBMeta digest and AVB version with `/proc/bootconfig` when available.
+```text
+ro.build.version.security_patch=<OTA system SPL>
+ro.vendor.build.security_patch=<OTA vendor SPL>
+```
+
+OTAST no longer writes synthetic `ro.boot.flash.locked`, `ro.boot.vbmeta.device_state`, `ro.boot.verifiedbootstate`, `ro.boot.veritymode` or vendor locked/green values. Runtime boot-state properties and raw bootconfig evidence are reported separately. `Verify` rejects `ro.boot.verifiedbootstate=green` when `ro.boot.verifiedbooterror` or `ro.boot.verifyerrorpart` still exposes a verification error.
+
+`ro.boot.vbmeta.size` in `ota.prop` remains OTA/factory artifact provenance, not a runtime correction target. VBMeta digest/version evidence is compared with `/proc/bootconfig` where available.
 
 ## Safety boundary
 
 OTAST:
 
-- reads authority from `/data/adb/ota.prop`;
-- separates official OTA/platform identity, the selected PIF attestation profile, and Tricky Store local-attestation state;
-- keeps PIF attestation-profile selection preserve-first unless explicit OTA takeover is requested;
-- makes platform-visible system/vendor SPL and the reviewed Tricky Store security-patch contract follow OTA authority;
-- records original bytes before the first mutation;
-- writes through a journaled transaction;
-- verifies every managed hash and mode;
-- blocks Apply and Restore when target drift is detected;
-- recovers an interrupted transaction during `post-fs-data`;
-- does not run a polling service;
-- never scans unrelated module trees during normal runtime operation;
-- never uses Yurikey Action as an implicit multi-subsystem mutation trigger;
-- does not rewrite raw bootloader/libavb evidence or claim software property changes alter hardware-backed RootOfTrust;
-- does not configure Zygisk Next, Vector, Inline Hook Invalidate, or detector-hiding settings.
-
-The strict exclusions listed in `compatibility/supported-targets.json` are policy/test sentinels. Runtime discovery never traverses arbitrary installed modules to infer support.
+- inspects authority and live state before mutation;
+- uses explicit Apply/Restore transactions with original-byte backups and drift rejection;
+- reconciles only declared paths;
+- never rewrites the selected canonical PIF profile to OTA identity;
+- mirrors only non-source PIF fallbacks;
+- leaves AutoPIF executables upstream-owned;
+- keeps OTA system/vendor SPL separate from PIF profile SPL;
+- restores verified original bytes when retiring superseded OTAST PIF writer ownership;
+- recovers interrupted transactions during `post-fs-data`;
+- does not poll or automatically Apply;
+- does not claim software property changes alter hardware-backed RootOfTrust.
 
 ## Local setup in Termux
 
-Keep the repository in Termux private storage, not `/storage/emulated/0`:
+Keep the repository in Termux private storage:
 
 ```bash
 cd "$HOME/repos/otast"
@@ -75,13 +92,13 @@ bash scripts/bootstrap-termux.sh
 bash scripts/test.sh --full
 ```
 
-Build the deterministic Magisk release bundle:
+Build the deterministic release bundle:
 
 ```bash
 bash scripts/build-release.sh
 ```
 
-`dist/` receives the Magisk ZIP, portable `.sha256` sidecar and `release-manifest.json`. The ZIP contains `release.properties` binding its embedded release identity and source commit.
+`dist/` receives the Magisk ZIP, portable `.sha256` sidecar and `release-manifest.json`.
 
 ## Fake Magisk root
 
@@ -91,7 +108,7 @@ Run the exact built ZIP through synthetic lifecycle qualification:
 bash scripts/fake-magisk-root.sh
 ```
 
-The harness covers active/staged targets, Apply, Verify, no-op Apply, authority rollover, interrupted-transaction recovery, drift rejection, complete Restore, symlink containment, identity mismatch, unknown hashes and strict-exclusion preservation.
+The harness covers active/staged targets, Apply/Verify/no-op Apply, authority rollover, interrupted-transaction recovery, drift rejection, Restore, symlink containment, identity mismatch, unknown hashes and strict-exclusion preservation. PIF-specific regression tests additionally cover canonical precedence/mirroring, AutoPIF ownership, surgical writer suppression and verified-boot contradiction handling.
 
 For a private device-derived fixture:
 
@@ -111,8 +128,6 @@ Raw and sanitized device fixtures stay outside Git.
 
 See [Installation](docs/INSTALLATION.md) and [Configuration](docs/CONFIGURATION.md).
 
-After installation and reboot, use the Magisk module Action or run the runtime entrypoint as root:
-
 ```sh
 sh /data/adb/modules/otast/runtime/entry.sh report
 sh /data/adb/modules/otast/runtime/entry.sh preflight
@@ -121,30 +136,22 @@ sh /data/adb/modules/otast/runtime/entry.sh apply
 sh /data/adb/modules/otast/runtime/entry.sh restore
 ```
 
-`Report`, `Preflight` and `Verify` are read-only. The Action menu defaults to `Report` on timeout/no selection. Run `preflight` before the first Apply and after any target-module update.
+`Report`, `Preflight` and `Verify` are read-only. Run `preflight` before the first Apply and after target-module updates.
 
 ## Read-only diagnostics
-
-For detector attribution, the bounded root-exposure doctor inspects one running process without cleanup/property/module changes:
 
 ```bash
 python3 scripts/root-exposure-doctor.py \
   --package com.example.detector \
   --output "$HOME/otast-root-doctor.json"
-```
 
-For native/runtime compatibility evidence, a separate collector reads only dependency module IDs explicitly declared by the registry and records runtime page size, ABI, Magisk/Zygisk identity, native-library inventory and ELF `PT_LOAD` alignment evidence:
-
-```bash
 python3 scripts/runtime-compatibility-evidence.py \
   --output "$HOME/otast-runtime-compatibility.json"
 ```
 
-Both diagnostics are read-only. Detector cleanliness is not an OTAST mutation requirement and neither tool reconfigures Zygisk Next, Vector or Inline Hook Invalidate.
+These diagnostics do not reconfigure target or observed dependency modules.
 
 ## Upstream maintenance
-
-The canonical workflow is:
 
 ```bash
 otast maintain
@@ -152,11 +159,9 @@ otast review TARGET
 otast accept TARGET
 ```
 
-`otast review` now classifies changed source paths semantically. Only a complete `DOCS_OR_CI_ONLY` source delta whose immutable installable module tree is also byte/mode-identical is acceptance-ready. Native, preserved, managed, structure-sensitive, module-identity and unknown changes remain review-required even when they do not immediately alter OTAST's managed shell writers.
+`otast review` classifies source movement semantically. For PIF, `security_patch.sh` remains structure-sensitive while `autopif.sh`/`autopif_ota.sh` are preserved surfaces. Only a complete `DOCS_OR_CI_ONLY` delta with byte/mode-identical installable module evidence is acceptance-ready automatically.
 
 ## Public GitHub initialization
-
-The downloadable repository ZIP contains no Git history or remote. After full validation:
 
 ```bash
 bash scripts/init-public-repo.sh

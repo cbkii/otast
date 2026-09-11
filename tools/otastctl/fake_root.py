@@ -77,7 +77,6 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
     if staged_pif:
         pif_trees.append(adb_root / "modules_update/playintegrityfix")
     for index, pif in enumerate(pif_trees):
-        # These lifecycle entrypoints are observed-only and must remain unchanged.
         for name in ("action.sh", "post-fs-data.sh", "service.sh"):
             target(pif / name, f"#!/system/bin/sh\n# preserved upstream lifecycle {index} {name}\nexit 0\n")
         target_bytes(pif / "autopif.sh", fixture_root / "pif-autopif-ea93222c.sh")
@@ -88,31 +87,17 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
             pif / "pif.prop",
             "# PIF packaged fallback\n"
             "FINGERPRINT=google/oriole_beta/oriole:CANARY/ZP11.260618.005/15760424:user/release-keys\n"
-            "MANUFACTURER=Google\n"
-            "MODEL=Pixel 6\n"
-            "SECURITY_PATCH=2026-07-05\n"
-            "CUSTOM_OPTION=keep-me\n"
-            "spoofBuild=true\n"
-            "spoofProps=false\n",
+            "MANUFACTURER=Google\nMODEL=Pixel 6\nSECURITY_PATCH=2026-07-05\n"
+            "CUSTOM_OPTION=keep-me\nspoofBuild=true\nspoofProps=false\n",
             0o644,
         )
 
-    # PIF native runtime prefers this mutable custom profile over the packaged
-    # module fallback. The deliberate identity difference models the observed
-    # Pixel 9a state and must never be treated as OTAST drift.
     target(
         adb_root / "pif.prop",
         "FINGERPRINT=google/tegu_beta/tegu:CANARY/ZP11.260717.006/16004061:user/release-keys\n"
-        "MANUFACTURER=Google\n"
-        "MODEL=Pixel 9a\n"
-        "SECURITY_PATCH=2026-08-05\n"
-        "spoofBuild=true\n"
-        "spoofProps=false\n"
-        "spoofProvider=false\n"
-        "spoofSignature=false\n"
-        "spoofVendingBuild=true\n"
-        "spoofVendingSdk=false\n"
-        "DEBUG=false\n",
+        "MANUFACTURER=Google\nMODEL=Pixel 9a\nSECURITY_PATCH=2026-08-05\n"
+        "spoofBuild=true\nspoofProps=false\nspoofProvider=false\nspoofSignature=false\n"
+        "spoofVendingBuild=true\nspoofVendingSdk=false\nDEBUG=false\n",
         0o600,
     )
 
@@ -120,11 +105,8 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
     target(
         tricky / "module.prop",
         _synthetic_module_prop(
-            "tricky_store",
-            "Tricky Store OSS",
-            "v3.1.0 (172-41383f5-release)",
-            author="beakthoven",
-            version_code="172",
+            "tricky_store", "Tricky Store OSS", "v3.1.0 (172-41383f5-release)",
+            author="beakthoven", version_code="172",
         ),
         0o644,
     )
@@ -143,23 +125,13 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
     ta = adb_root / "modules/TA_utl"
     target(ta / "module.prop", _synthetic_module_prop("TA_utl", "TA UTL", "v4.4"), 0o644)
     target_bytes(ta / "prop.sh", fixture_root / "ta-utl-prop-v4.4.sh")
-    target_bytes(
-        ta / "webui/assets/boot_hash-C0kIcwCH.js",
-        fixture_root / "ta-utl-boot-hash-v4.4.js",
-        0o644,
-    )
+    target_bytes(ta / "webui/assets/boot_hash-C0kIcwCH.js", fixture_root / "ta-utl-boot-hash-v4.4.js", 0o644)
 
     yuri = adb_root / "modules/Yurikey"
     for name in (
-        "action.sh",
-        "service.sh",
-        "Yuri/target_txt.sh",
-        "Yuri/boot_hash.sh",
-        "Yuri/security_patch.sh",
-        "Yuri/pif.sh",
-        "Yuri/clear_all_detection_traces.sh",
-        "webroot/common/boot_hash.sh",
-        "webroot/common/pif2.sh",
+        "action.sh", "service.sh", "Yuri/target_txt.sh", "Yuri/boot_hash.sh",
+        "Yuri/security_patch.sh", "Yuri/pif.sh", "Yuri/clear_all_detection_traces.sh",
+        "webroot/common/boot_hash.sh", "webroot/common/pif2.sh",
     ):
         target(yuri / name, f"#!/system/bin/sh\n# synthetic Yurikey {name}\nexit 0\n")
     target_bytes(yuri / "Yuri/yuri_keybox.sh", fixture_root / "yurikey-keybox-3.0.6.sh")
@@ -169,10 +141,7 @@ def _synthetic_target(adb_root: Path, *, staged_pif: bool = True) -> dict[str, b
     target(vbmeta / "service.sh", "#!/system/bin/sh\n# synthetic vbmeta writer\nexit 0\n")
     target(vbmeta / "module.prop", _synthetic_module_prop("vbmeta-fixer", "VBMeta Fixer", "1.2.0"), 0o644)
 
-    # This contract is intentionally the vbmeta digest, not boot.img.sha256.
     target(adb_root / "boot_hash", "2" * 64 + "\n", 0o644)
-
-    # Synthetic sentinels prove that strict exclusions are not read or changed.
     target(adb_root / "modules/AshLooper/sentinel.bin", "ASHLOOPER-UNCHANGED\n", 0o600)
     target(adb_root / "modules/BetterKnownInstalled/sentinel.bin", "BKI-UNCHANGED\n", 0o600)
     return originals
@@ -206,28 +175,29 @@ def _live_text(
     *,
     build_id: str = "TEST",
     managed_vbmeta_current: bool = True,
+    verification_error: bool = False,
 ) -> str:
-    return "\n".join(
-        (
-            "ro.build.fingerprint=google/tegu/tegu:16/TEST/1:user/release-keys",
-            f"ro.build.id={build_id}",
-            "ro.build.version.sdk=36",
-            f"ro.build.version.security_patch={system_patch}",
-            f"ro.vendor.build.security_patch={vendor_patch}",
-            "ro.product.device=tegu",
-            "ro.boot.flash.locked=1",
-            "ro.boot.vbmeta.device_state=locked",
-            "ro.boot.verifiedbootstate=green",
-            "ro.boot.veritymode=enforcing",
-            "vendor.boot.vbmeta.device_state=locked",
-            "vendor.boot.verifiedbootstate=green",
-            "ro.boot.vbmeta.digest=" + ("2" * 64 if managed_vbmeta_current else "3" * 64),
-            "ro.boot.vbmeta.size=" + ("21888" if managed_vbmeta_current else "4096"),
-            "ro.boot.vbmeta.avb_version=" + ("1.3" if managed_vbmeta_current else "1.0"),
-            "ro.boot.avb_version=" + ("1.3" if managed_vbmeta_current else "1.0"),
-            "",
-        )
-    )
+    lines = [
+        "ro.build.fingerprint=google/tegu/tegu:16/TEST/1:user/release-keys",
+        f"ro.build.id={build_id}",
+        "ro.build.version.sdk=36",
+        f"ro.build.version.security_patch={system_patch}",
+        f"ro.vendor.build.security_patch={vendor_patch}",
+        "ro.product.device=tegu",
+        "ro.boot.flash.locked=1",
+        "ro.boot.vbmeta.device_state=locked",
+        "ro.boot.verifiedbootstate=green",
+        "ro.boot.veritymode=enforcing",
+        "vendor.boot.vbmeta.device_state=locked",
+        "vendor.boot.verifiedbootstate=green",
+        "ro.boot.vbmeta.digest=" + ("2" * 64 if managed_vbmeta_current else "3" * 64),
+        "ro.boot.vbmeta.size=" + ("21888" if managed_vbmeta_current else "4096"),
+        "ro.boot.vbmeta.avb_version=" + ("1.3" if managed_vbmeta_current else "1.0"),
+        "ro.boot.avb_version=" + ("1.3" if managed_vbmeta_current else "1.0"),
+    ]
+    if verification_error:
+        lines.extend(("ro.boot.verifiedbooterror=ERROR_VERIFICATION", "ro.boot.verifyerrorpart=init_boot,init_boot"))
+    return "\n".join((*lines, ""))
 
 
 def _shell_command() -> list[str]:
@@ -263,9 +233,7 @@ def _run(
         check=False,
     )
     if result.returncode != expect:
-        raise OtastError(
-            f"fake-root action {action!r} returned {result.returncode}, expected {expect}:\n{result.stdout}"
-        )
+        raise OtastError(f"fake-root action {action!r} returned {result.returncode}, expected {expect}:\n{result.stdout}")
     return result
 
 
@@ -292,31 +260,31 @@ def _assert_originals(adb_root: Path, originals: dict[str, bytes]) -> None:
 
 
 def _simulate_interrupted_transaction(adb_root: Path, managed_path: Path) -> None:
-    state = adb_root / "otast/records/pif-autopif-active.state"
+    state = adb_root / "otast/records/pif-mirror-active.state"
     if not state.is_file():
-        raise OtastError("interruption scenario is missing managed state")
+        raise OtastError("interruption scenario is missing PIF mirror managed state")
     tx = adb_root / "otast/transactions/simulated-interruption"
     tx.mkdir(parents=True)
     _write(tx / "status", "IN_PROGRESS\n", 0o600)
-    _write(tx / "journal.tsv", f"pif-autopif-active\t{managed_path}\n", 0o600)
-    (tx / "before.pif-autopif-active").write_bytes(managed_path.read_bytes())
-    (tx / "before.pif-autopif-active").chmod(0o600)
-    _write(tx / "before-meta.pif-autopif-active", "1\t0755\n", 0o600)
-    (tx / "state.pif-autopif-active").write_bytes(state.read_bytes())
-    (tx / "state.pif-autopif-active").chmod(0o600)
+    _write(tx / "journal.tsv", f"pif-mirror-active\t{managed_path}\n", 0o600)
+    (tx / "before.pif-mirror-active").write_bytes(managed_path.read_bytes())
+    (tx / "before.pif-mirror-active").chmod(0o600)
+    _write(tx / "before-meta.pif-mirror-active", "1\t0644\n", 0o600)
+    (tx / "state.pif-mirror-active").write_bytes(state.read_bytes())
+    (tx / "state.pif-mirror-active").chmod(0o600)
     managed_path.write_text("interrupted-write\n", encoding="utf-8")
-    managed_path.chmod(0o755)
+    managed_path.chmod(0o644)
 
 
 def _simulate_managed_boot(adb_root: Path) -> None:
-    authority = {}
+    authority: dict[str, str] = {}
     for line in (adb_root / "ota.prop").read_text(encoding="utf-8").splitlines():
         if "=" in line:
             key, value = line.split("=", 1)
             authority[key] = value
     live_path = adb_root / "live.prop"
-    live = {}
-    order = []
+    live: dict[str, str] = {}
+    order: list[str] = []
     for line in live_path.read_text(encoding="utf-8").splitlines():
         if "=" not in line:
             continue
@@ -324,35 +292,18 @@ def _simulate_managed_boot(adb_root: Path) -> None:
         if key not in live:
             order.append(key)
         live[key] = value
-
-    authority_pairs = {
+    for live_key, authority_key in {
         "ro.boot.vbmeta.digest": "ro.boot.vbmeta.digest",
         "ro.boot.vbmeta.avb_version": "ro.boot.vbmeta.avb_version",
         "ro.boot.avb_version": "ro.boot.avb_version",
         "ro.build.version.security_patch": "ro.build.version.security_patch",
         "ro.vendor.build.security_patch": "ro.vendor.build.security_patch",
-    }
-    for live_key, authority_key in authority_pairs.items():
+    }.items():
         if authority_key not in authority:
             raise OtastError(f"authority missing managed runtime key: {authority_key}")
         if live_key not in live:
             order.append(live_key)
         live[live_key] = authority[authority_key]
-
-    fixed = {
-        "ro.boot.flash.locked": "1",
-        "ro.boot.vbmeta.device_state": "locked",
-        "ro.boot.verifiedbootstate": "green",
-        "ro.boot.veritymode": "enforcing",
-        "vendor.boot.vbmeta.device_state": "locked",
-        "vendor.boot.verifiedbootstate": "green",
-    }
-    for key, value in fixed.items():
-        if key not in live:
-            order.append(key)
-        live[key] = value
-
-    # Runtime libavb size deliberately differs from artifact provenance.
     if "ro.boot.vbmeta.size" not in live:
         order.append("ro.boot.vbmeta.size")
     live["ro.boot.vbmeta.size"] = "21888"
@@ -371,8 +322,11 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             "AshLooper": _file_digest(adb_root / "modules/AshLooper/sentinel.bin"),
             "BetterKnownInstalled": _file_digest(adb_root / "modules/BetterKnownInstalled/sentinel.bin"),
         }
-        pif_profile_before = {
-            rel: data for rel, data in originals.items() if rel == "pif.prop" or rel.endswith("playintegrityfix/pif.prop")
+        global_original = (adb_root / "pif.prop").read_bytes()
+        autopif_originals = {
+            (role, name): (adb_root / role / "playintegrityfix" / name).read_bytes()
+            for role in ("modules", "modules_update")
+            for name in ("autopif.sh", "autopif_ota.sh")
         }
 
         preflight = _run(entry, adb_root, "preflight")
@@ -384,45 +338,59 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         if "reclaimed stale OTAST lock" not in first_apply.stdout:
             raise OtastError("Apply did not identify and reclaim the synthetic stale lock")
         logs.append("## first apply\n" + first_apply.stdout)
+
         if (adb_root / "boot_hash").read_text(encoding="utf-8") != "2" * 64 + "\n":
             raise OtastError("boot_hash does not contain the authoritative vbmeta digest")
+        if (adb_root / "pif.prop").read_bytes() != global_original:
+            raise OtastError("OTAST rewrote the canonical global PIF profile")
         for role in ("modules", "modules_update"):
             pif_dir = adb_root / role / "playintegrityfix"
             if not pif_dir.is_dir():
                 continue
-            for observed in ("action.sh", "post-fs-data.sh", "service.sh"):
-                rel = (pif_dir / observed).relative_to(adb_root).as_posix()
-                if (pif_dir / observed).read_bytes() != originals[rel]:
-                    raise OtastError(f"OTAST changed observed-only PIF lifecycle entrypoint: {rel}")
-            rel = (pif_dir / "pif.prop").relative_to(adb_root).as_posix()
-            if (pif_dir / "pif.prop").read_bytes() != pif_profile_before[rel]:
-                raise OtastError(f"OTAST changed PIF-owned fallback profile: {rel}")
-            system_prop = (pif_dir / "system.prop").read_text(encoding="utf-8")
-            if "ro.build.version.security_patch=2026-03-05" not in system_prop:
-                raise OtastError("PIF global system.prop did not converge to OTA system SPL")
-            if "ro.vendor.build.security_patch=2026-03-05" not in system_prop:
-                raise OtastError("PIF global system.prop did not converge to OTA vendor SPL")
-            auto_ota = (pif_dir / "autopif_ota.sh").read_text(encoding="utf-8").splitlines()
-            if len(auto_ota) < 5 or auto_ota[1] != "# otast managed: AutoPIF executable self-update gate" or auto_ota[4] != "exit 0":
-                raise OtastError("AutoPIF executable self-update is not gated before the reviewed upstream body")
-        if (adb_root / "pif.prop").read_bytes() != pif_profile_before["pif.prop"]:
-            raise OtastError("OTAST changed the PIF-owned global custom profile")
+            if (pif_dir / "pif.prop").read_bytes() != global_original:
+                raise OtastError(f"OTAST did not mirror canonical PIF profile into {role}")
+            for name in ("autopif.sh", "autopif_ota.sh"):
+                if (pif_dir / name).read_bytes() != autopif_originals[(role, name)]:
+                    raise OtastError(f"OTAST changed upstream-owned PIF executable: {role}/{name}")
+            writer = (pif_dir / "security_patch.sh").read_text(encoding="utf-8")
+            if "# --- otast pif patch-domain boundary BEGIN ---" not in writer:
+                raise OtastError("PIF security-patch writer lacks surgical OTAST boundary")
+            if "resetprop -n" in writer or "cat << EOF > $MODDIR/system.prop" in writer:
+                raise OtastError("PIF security-patch writer still exports profile SPL")
+            if (pif_dir / "system.prop").exists():
+                raise OtastError("OTAST unexpectedly created PIF system.prop")
+
+        otast_system_prop = (adb_root / "modules/otast/system.prop").read_text(encoding="utf-8")
+        if "ro.build.version.security_patch=2026-03-05" not in otast_system_prop:
+            raise OtastError("OTAST system.prop lacks OTA system SPL")
+        if "ro.vendor.build.security_patch=2026-03-05" not in otast_system_prop:
+            raise OtastError("OTAST system.prop lacks OTA vendor SPL")
+        for forbidden in (
+            "ro.boot.flash.locked=", "ro.boot.vbmeta.device_state=", "ro.boot.verifiedbootstate=",
+            "ro.boot.veritymode=", "vendor.boot.vbmeta.device_state=", "vendor.boot.verifiedbootstate=",
+        ):
+            if forbidden in otast_system_prop:
+                raise OtastError(f"OTAST system.prop still synthesizes boot state: {forbidden}")
 
         profile_report = _run(entry, adb_root, "report")
-        if "pif_effective_profile_role=CUSTOM" not in profile_report.stdout:
-            raise OtastError("Report did not identify the global PIF custom profile as effective")
-        if "pif_profiles_relation=DISTINCT_EXPECTED" not in profile_report.stdout:
-            raise OtastError("Report did not classify the custom/fallback identity difference as expected")
+        if "pif_canonical_profile_role=GLOBAL_CUSTOM" not in profile_report.stdout:
+            raise OtastError("Report did not identify global PIF profile as canonical")
+        if "pif_active_profile_relation=MIRROR_CURRENT" not in profile_report.stdout:
+            raise OtastError("Report did not identify active PIF fallback as current mirror")
+        if "pif_staged_profile_relation=MIRROR_CURRENT" not in profile_report.stdout:
+            raise OtastError("Report did not identify staged PIF fallback as current mirror")
+        if "pif_autopif_self_update_policy=UPSTREAM_PRESERVED" not in profile_report.stdout:
+            raise OtastError("Report does not expose upstream-owned AutoPIF updater policy")
 
         yuri_keybox = adb_root / "modules/Yurikey/Yuri/yuri_keybox.sh"
         if "automatic keybox replacement is disabled" not in yuri_keybox.read_text(encoding="utf-8"):
             raise OtastError("Yurikey unattended keybox writer was not neutralized")
-
         ta_text = (adb_root / "modules/TA_utl/prop.sh").read_text(encoding="utf-8")
         if "# --- otast vbmeta ownership BEGIN ---" not in ta_text:
             raise OtastError("TA UTL vbmeta writer was not narrowly neutralised")
         if 'check_reset_prop "ro.boot.verifiedbootstate" "green"' not in ta_text:
             raise OtastError("TA UTL non-vbmeta behaviour was not preserved")
+
         pre_reboot_verify = _run(entry, adb_root, "verify", expect=1)
         if "reboot after Apply before Verify" not in pre_reboot_verify.stdout:
             raise OtastError("pre-reboot Verify failed for the wrong reason")
@@ -431,36 +399,50 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         logs.append("## pre-reboot verify rejection\n" + pre_reboot_verify.stdout)
         logs.append("## post-reboot verify\n" + verify_one.stdout)
 
-        # A PIF-sanctioned custom profile refresh is external configuration, not
-        # managed-file drift and not platform SPL authority.
         tricky_before_refresh = (adb_root / "tricky_store/security_patch.txt").read_bytes()
-        _write(
-            adb_root / "pif.prop",
+        refreshed = (
             "FINGERPRINT=google/shiba_beta/shiba:CANARY/ZP11.260717.006/16004061:user/release-keys\n"
             "MANUFACTURER=Google\nMODEL=Pixel 8\nSECURITY_PATCH=2026-08-05\n"
             "spoofBuild=true\nspoofProps=false\nspoofProvider=false\nspoofSignature=false\n"
-            "spoofVendingBuild=true\nspoofVendingSdk=false\nDEBUG=false\n",
-            0o600,
+            "spoofVendingBuild=true\nspoofVendingSdk=false\nDEBUG=false\n"
         )
-        profile_refresh_verify = _run(entry, adb_root, "verify")
+        _write(adb_root / "pif.prop", refreshed, 0o600)
+        refresh_verify = _run(entry, adb_root, "verify", expect=1)
+        if "PIF fallback profile is not synchronized" not in refresh_verify.stdout:
+            raise OtastError("PIF refresh did not expose stale fallback mirrors")
+        refresh_report = _run(entry, adb_root, "report")
+        if "MIRROR_UPDATE_REQUIRED" not in refresh_report.stdout:
+            raise OtastError("Report did not expose PIF mirror reconciliation requirement")
+        refresh_apply = _run(entry, adb_root, "apply")
+        for role in ("modules", "modules_update"):
+            path = adb_root / role / "playintegrityfix/pif.prop"
+            if path.is_file() and path.read_text(encoding="utf-8") != refreshed:
+                raise OtastError(f"Apply did not reconcile refreshed canonical profile into {role}")
+        _run(entry, adb_root, "verify")
         if (adb_root / "tricky_store/security_patch.txt").read_bytes() != tricky_before_refresh:
             raise OtastError("PIF profile refresh changed OTAST-owned TrickyStore patch metadata")
-        logs.append("## PIF custom profile refresh\n" + profile_refresh_verify.stdout)
+        logs.append("## PIF canonical refresh and mirror reconcile\n" + refresh_verify.stdout + refresh_apply.stdout)
 
-        # PIF's own reset path may delete the global custom profile. Native
-        # runtime then falls back to the active module profile; OTAST must not
-        # recreate or roll the custom file back.
         (adb_root / "pif.prop").unlink()
-        fallback_verify = _run(entry, adb_root, "verify")
+        fallback_preflight = _run(entry, adb_root, "preflight")
+        fallback_apply = _run(entry, adb_root, "apply")
         fallback_report = _run(entry, adb_root, "report")
-        if "pif_effective_profile_role=ACTIVE_FALLBACK" not in fallback_report.stdout:
-            raise OtastError("PIF global reset did not expose the active module fallback in Report")
+        if "pif_canonical_profile_role=ACTIVE_FALLBACK" not in fallback_report.stdout:
+            raise OtastError("PIF global reset did not promote active fallback to canonical source")
         if (adb_root / "pif.prop").exists():
-            raise OtastError("OTAST recreated a PIF custom profile after PIF reset")
-        logs.append("## PIF fallback reset\n" + fallback_verify.stdout + fallback_report.stdout)
-        _write(adb_root / "pif.prop", pif_profile_before["pif.prop"].decode("utf-8"), 0o600)
+            raise OtastError("OTAST recreated a PIF global custom profile after reset")
+        _run(entry, adb_root, "verify")
+        logs.append("## PIF global reset\n" + fallback_preflight.stdout + fallback_apply.stdout + fallback_report.stdout)
 
-        # Semantic runtime drift must fail even when managed file hashes remain CURRENT.
+        # The active fallback was released from mirror ownership when it became
+        # canonical. If a global source later reappears, re-acquiring the active
+        # path as a mirror must use this current PIF-owned value as the new
+        # Restore baseline, not the ancient pre-v1 packaged fallback.
+        active_reacquire_original = (adb_root / "modules/playintegrityfix/pif.prop").read_bytes()
+        _write(adb_root / "pif.prop", global_original.decode("utf-8"), 0o600)
+        _run(entry, adb_root, "apply")
+        originals["modules/playintegrityfix/pif.prop"] = active_reacquire_original
+
         semantic_live = adb_root / "live.prop"
         semantic_original = semantic_live.read_text(encoding="utf-8")
         semantic_live.write_text(
@@ -474,6 +456,14 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         semantic_live.write_text(semantic_original, encoding="utf-8")
         semantic_live.chmod(0o600)
 
+        contradiction_root, contradiction_entry, _ = _new_root(base / "boot-contradiction", module_zip, staged_pif=False)
+        _run(contradiction_entry, contradiction_root, "apply")
+        _write(contradiction_root / "live.prop", _live_text(verification_error=True), 0o600)
+        contradiction = _run(contradiction_entry, contradiction_root, "verify", expect=1)
+        if "contradictory verified-boot presentation" not in contradiction.stdout:
+            raise OtastError("green plus verified-boot-error evidence failed for the wrong reason")
+        logs.append("## verified-boot contradiction rejection\n" + contradiction.stdout)
+
         transactions_before = len(list((adb_root / "otast/transactions").glob("*")))
         second_apply = _run(entry, adb_root, "apply")
         transactions_after = len(list((adb_root / "otast/transactions").glob("*")))
@@ -483,9 +473,11 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
 
         _write(adb_root / "ota.prop", _authority_text("2026-04-05", "2026-04-05"), 0o600)
         _write(adb_root / "live.prop", _live_text("2026-04-05", "2026-04-05"), 0o600)
-        staged_pif = adb_root / "modules_update/playintegrityfix/pif.prop"
-        staged_before = staged_pif.read_bytes()
-        global_before = (adb_root / "pif.prop").read_bytes()
+        pif_before_authority = {
+            role: (adb_root / role / "playintegrityfix/pif.prop").read_bytes()
+            for role in ("modules", "modules_update")
+        }
+        global_before_authority = (adb_root / "pif.prop").read_bytes()
         authority_update = _run(entry, adb_root, "apply")
         _simulate_managed_boot(adb_root)
         verify_two = _run(entry, adb_root, "verify")
@@ -493,26 +485,29 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         patch_value = (adb_root / "tricky_store/security_patch.txt").read_text(encoding="utf-8")
         if "boot=2026-04-05" not in patch_value or "vendor=2026-04-05" not in patch_value:
             raise OtastError("authority update did not reach the TrickyStore contract")
-        if staged_pif.read_bytes() != staged_before or (adb_root / "pif.prop").read_bytes() != global_before:
-            raise OtastError("OTA authority update incorrectly rewrote PIF-owned profile data")
+        if (adb_root / "pif.prop").read_bytes() != global_before_authority:
+            raise OtastError("OTA authority update rewrote canonical PIF profile")
+        for role, expected in pif_before_authority.items():
+            if (adb_root / role / "playintegrityfix/pif.prop").read_bytes() != expected:
+                raise OtastError("OTA authority update rewrote coherent PIF mirror")
 
-        managed_autopif = adb_root / "modules/playintegrityfix/autopif.sh"
-        managed_bytes = managed_autopif.read_bytes()
-        _simulate_interrupted_transaction(adb_root, managed_autopif)
+        managed_profile = adb_root / "modules/playintegrityfix/pif.prop"
+        managed_bytes = managed_profile.read_bytes()
+        _simulate_interrupted_transaction(adb_root, managed_profile)
         recovery = _run(entry, adb_root, "boot-recover")
-        if managed_autopif.read_bytes() != managed_bytes:
-            raise OtastError("boot recovery did not restore interrupted bytes")
+        if managed_profile.read_bytes() != managed_bytes:
+            raise OtastError("boot recovery did not restore interrupted PIF mirror bytes")
         _run(entry, adb_root, "verify")
         logs.append("## interrupted recovery\n" + recovery.stdout)
 
-        managed_autopif.write_text("drift\n", encoding="utf-8")
-        managed_autopif.chmod(0o755)
+        managed_profile.write_text("drift\n", encoding="utf-8")
+        managed_profile.chmod(0o644)
         drift_verify = _run(entry, adb_root, "verify", expect=1)
         drift_apply = _run(entry, adb_root, "apply", expect=1)
         drift_restore = _run(entry, adb_root, "restore", expect=1)
         logs.append("## drift rejection\n" + drift_verify.stdout + drift_apply.stdout + drift_restore.stdout)
-        managed_autopif.write_bytes(managed_bytes)
-        managed_autopif.chmod(0o755)
+        managed_profile.write_bytes(managed_bytes)
+        managed_profile.chmod(0o644)
 
         restore = _run(entry, adb_root, "restore")
         final_report = _run(entry, adb_root, "report")
@@ -527,7 +522,6 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("a strict-exclusion sentinel changed")
         logs.append("## restore\n" + restore.stdout + final_report.stdout)
 
-        # A second root proves unknown exact hashes are rejected without the fake-only override.
         reject_root, reject_entry, _ = _new_root(base / "unknown-hash", module_zip, staged_pif=False)
         unknown = _run(reject_entry, reject_root, "preflight", expect=1, test_mode=False)
         if "unsupported exact-replacement hash" not in unknown.stdout:
@@ -536,7 +530,6 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("unknown-hash rejection created managed state")
         logs.append("## unknown hash rejection\n" + unknown.stdout)
 
-        # Live identity mismatch must stop before target planning.
         mismatch_root, mismatch_entry, _ = _new_root(base / "identity-mismatch", module_zip, staged_pif=False)
         _write(mismatch_root / "live.prop", _live_text(build_id="DIFFERENT"), 0o600)
         mismatch = _run(mismatch_entry, mismatch_root, "preflight", expect=1)
@@ -544,7 +537,6 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("identity mismatch scenario failed for the wrong reason")
         logs.append("## identity mismatch rejection\n" + mismatch.stdout)
 
-        # A symlinked external-contract parent must never be followed.
         symlink_root, symlink_entry, _ = _new_root(base / "symlink-attack", module_zip, staged_pif=False)
         outside = base / "outside"
         outside.mkdir()
@@ -557,7 +549,6 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("symlink attack modified an outside path")
         logs.append("## symlink rejection\n" + symlink.stdout)
 
-        # PIF-owned profiles are still required to be safe regular files.
         profile_link_root, profile_link_entry, _ = _new_root(base / "pif-profile-symlink", module_zip, staged_pif=False)
         outside_profile = base / "outside-pif-profile"
         outside_profile.write_text("FINGERPRINT=outside\nSECURITY_PATCH=2026-08-05\n", encoding="utf-8")
@@ -570,7 +561,6 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("unsafe PIF profile validation modified the symlink target")
         logs.append("## PIF profile symlink rejection\n" + profile_link.stdout)
 
-        # A live lock owner must not be displaced.
         locked_root, locked_entry, _ = _new_root(base / "active-lock", module_zip, staged_pif=False)
         active_lock = locked_root / "otast/lock"
         active_lock.mkdir(parents=True)
@@ -580,15 +570,13 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("active-lock scenario did not fail closed")
         logs.append("## active lock rejection\n" + locked.stdout)
 
-        # A missing reviewed writer path must stop even in fake fixture mode.
         missing_root, missing_entry, _ = _new_root(base / "missing-required", module_zip, staged_pif=False)
-        (missing_root / "modules/playintegrityfix/autopif.sh").unlink()
+        (missing_root / "modules/playintegrityfix/security_patch.sh").unlink()
         missing = _run(missing_entry, missing_root, "preflight", expect=1)
         if "required reviewed target path is missing" not in missing.stdout:
             raise OtastError("missing-required scenario failed for the wrong reason")
         logs.append("## missing required writer rejection\n" + missing.stdout)
 
-        # Legacy governors must block all normal operations until removed.
         legacy_root, legacy_entry, _ = _new_root(base / "legacy-governor", module_zip, staged_pif=False)
         legacy_dir = legacy_root / "modules/otasst"
         legacy_dir.mkdir(parents=True)
@@ -598,36 +586,28 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("legacy-governor scenario failed for the wrong reason")
         logs.append("## legacy governor rejection\n" + legacy.stdout)
 
-        # PIF's Auto Security Patch flag remains user/PIF configuration. OTAST's
-        # adapter preserves marker semantics but does not promote profile SPL.
         auto_root, auto_entry, auto_originals = _new_root(base / "pif-auto-generator", module_zip, staged_pif=False)
         auto_flag = auto_root / "tricky_store/pif_auto_security_patch"
-        _write(auto_flag, "", 0o600)
+        _write(auto_flag, "enabled-by-user\n", 0o640)
         auto_preflight = _run(auto_entry, auto_root, "preflight")
-        if "OTAST preserves the preference" not in auto_preflight.stdout:
-            raise OtastError("PIF auto-patch flag was accepted without explicit authority evidence")
+        if "marker is preserved" not in auto_preflight.stdout:
+            raise OtastError("PIF auto-patch marker was not explicitly preserved")
         auto_apply = _run(auto_entry, auto_root, "apply")
         auto_writer = auto_root / "modules/playintegrityfix/security_patch.sh"
         auto_writer_text = auto_writer.read_text(encoding="utf-8")
-        if "# otast managed: PIF auto-security-patch compatibility adapter" not in auto_writer_text:
-            raise OtastError("PIF automatic security-patch writer was not adapted on Apply")
-        if "rm -f \"$AUTO_FLAG\" \"$MODDIR/system.prop\"" not in auto_writer_text:
-            raise OtastError("reviewed upstream security-patch body was not retained as unreachable audit evidence")
-        if not auto_flag.is_file() or auto_flag.is_symlink():
-            raise OtastError("PIF auto-patch user flag was not preserved during Apply")
+        if "# --- otast pif patch-domain boundary BEGIN ---" not in auto_writer_text:
+            raise OtastError("PIF automatic security-patch writer lacks surgical boundary")
+        if "resetprop -n" in auto_writer_text or "cat << EOF > $MODDIR/system.prop" in auto_writer_text:
+            raise OtastError("PIF automatic security-patch writer retains competing SPL writes")
+        if auto_flag.read_bytes() != b"enabled-by-user\n" or stat.S_IMODE(auto_flag.stat().st_mode) != 0o640:
+            raise OtastError("PIF auto-patch user marker bytes/mode changed during Apply")
         auto_restore = _run(auto_entry, auto_root, "restore")
         if auto_writer.read_bytes() != auto_originals["modules/playintegrityfix/security_patch.sh"]:
-            raise OtastError("Restore did not recover the original PIF security-patch writer")
-        if not auto_flag.is_file() or auto_flag.is_symlink():
-            raise OtastError("PIF auto-patch user flag was not preserved through Restore")
-        logs.append(
-            "## PIF automatic generator ownership\n"
-            + auto_preflight.stdout
-            + auto_apply.stdout
-            + auto_restore.stdout
-        )
+            raise OtastError("Restore did not recover original PIF security-patch writer")
+        if auto_flag.read_bytes() != b"enabled-by-user\n" or stat.S_IMODE(auto_flag.stat().st_mode) != 0o640:
+            raise OtastError("PIF auto-patch user marker changed through Restore")
+        logs.append("## PIF automatic generator ownership\n" + auto_preflight.stdout + auto_apply.stdout + auto_restore.stdout)
 
-        # The compatibility exception applies only to a safe regular marker.
         auto_link_root, auto_link_entry, _ = _new_root(base / "pif-auto-generator-symlink", module_zip, staged_pif=False)
         outside_auto_flag = base / "outside-auto-flag"
         outside_auto_flag.write_text("unchanged\n", encoding="utf-8")
@@ -639,7 +619,6 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("unsafe PIF auto-patch marker modified its symlink target")
         logs.append("## PIF automatic generator unsafe marker rejection\n" + auto_link.stdout)
 
-        # Targeted Tricky Store OSS may not verify cleanly with a broken active keybox.
         keybox_root, keybox_entry, _ = _new_root(base / "broken-keybox", module_zip, staged_pif=False)
         _run(keybox_entry, keybox_root, "apply")
         _simulate_managed_boot(keybox_root)
@@ -649,7 +628,6 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
             raise OtastError("broken targeted keybox scenario failed for the wrong reason")
         logs.append("## broken Tricky Store keybox rejection\n" + keybox_verify.stdout)
 
-        # Tampered state may never redirect Restore outside ADB_ROOT.
         state_root, state_entry, _ = _new_root(base / "state-tamper", module_zip, staged_pif=False)
         _run(state_entry, state_root, "apply")
         state_file = state_root / "otast/records/boot-hash.state"
@@ -666,7 +644,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         logs.append("## state tamper rejection\n" + tampered.stdout)
 
         evidence = {
-            "schema_version": 4,
+            "schema_version": 5,
             "result": "PASS",
             "module_zip": module_zip.name,
             "module_sha256": sha256_file(module_zip),
@@ -676,9 +654,9 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "preflight": preflight.returncode,
                 "first_apply": first_apply.returncode,
                 "stale_lock_recovered": True,
-                "identical_external_contract_adopted": True,
                 "verify": verify_one.returncode,
                 "semantic_runtime_spl_drift_rejected": semantic_verify.returncode == 1,
+                "verified_boot_contradiction_rejected": contradiction.returncode == 1,
                 "idempotent_apply_without_transaction": True,
                 "authority_update": authority_update.returncode,
                 "verify_updated": verify_two.returncode,
@@ -692,13 +670,13 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "legacy_governor_rejected": True,
                 "pif_auto_flag_preserved": True,
                 "pif_auto_flag_unsafe_symlink_rejected": True,
-                "pif_lifecycle_entrypoints_preserved": True,
-                "pif_global_custom_profile_preserved": True,
-                "pif_module_fallback_profiles_preserved": True,
-                "pif_distinct_profiles_expected": True,
-                "pif_custom_profile_refresh_accepted": profile_refresh_verify.returncode == 0,
-                "pif_global_reset_uses_active_fallback": fallback_verify.returncode == 0,
-                "pif_autopif_self_update_review_gated": True,
+                "pif_autopif_executables_preserved": True,
+                "pif_canonical_global_source_preserved": True,
+                "pif_fallback_mirrors_reconciled": True,
+                "pif_custom_profile_refresh_requires_reconcile": refresh_verify.returncode == 1,
+                "pif_global_reset_promotes_active_source": True,
+                "pif_mirror_reacquire_uses_current_source_baseline": True,
+                "pif_security_patch_surgical_boundary": True,
                 "ta_non_vbmeta_behaviour_preserved": True,
                 "yurikey_keybox_writer_neutralized": True,
                 "trickystore_targeted_broken_keybox_rejected": True,
@@ -725,12 +703,7 @@ def clone_fixture_root(
     allowed_root: Path,
     module_zip: Path | None = None,
 ) -> dict[str, object]:
-    """Reset a private sanitized fixture and install one exact candidate ZIP.
-
-    Release qualification supplies the deterministic ZIP it already built.
-    Rebuilding here would change ``release.properties`` commit binding and prove
-    a different artifact.
-    """
+    """Reset a private sanitized fixture and install one exact candidate ZIP."""
 
     from .fixture import reset_fixture
 

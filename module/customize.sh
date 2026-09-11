@@ -28,7 +28,7 @@ if [ ! -f /data/adb/ota.prop ] || [ -L /data/adb/ota.prop ]; then
   ui_print '! Missing or unsafe authority: /data/adb/ota.prop'
   _otast_install_failed=1
 fi
-for _otast_required in action.sh post-fs-data.sh service.sh uninstall.sh runtime/entry.sh runtime/common.sh runtime/platform.sh runtime/authority.sh runtime/transaction.sh runtime/profiles.sh runtime/pif.sh runtime/ta.sh runtime/report.sh; do
+for _otast_required in action.sh post-fs-data.sh service.sh uninstall.sh runtime/entry.sh runtime/common.sh runtime/platform.sh runtime/authority.sh runtime/transaction.sh runtime/profiles.sh runtime/pif.sh runtime/ta.sh runtime/architecture-v2.sh runtime/pif-migration-v2.sh runtime/report.sh; do
   if [ ! -f "$MODPATH/$_otast_required" ] || [ -L "$MODPATH/$_otast_required" ]; then
     ui_print "! Missing or unsafe package file: $_otast_required"
     _otast_install_failed=1

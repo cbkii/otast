@@ -16,10 +16,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class UpgradeQualificationTests(unittest.TestCase):
     def test_managed_upgrade_and_reinstall_are_transactionally_safe(self) -> None:
-        # qualify_upgrade_path raises a scenario-specific OtastError at the point of
-        # failure. A successful return is therefore the actual no-exception
-        # qualification assertion; only the evidence schema/key contract is checked
-        # here rather than re-asserting hard-coded True values.
         with tempfile.TemporaryDirectory() as raw:
             evidence = qualify_upgrade_path(ROOT, Path(raw))
         self.assertEqual(evidence["result"], "PASS")
@@ -28,12 +24,12 @@ class UpgradeQualificationTests(unittest.TestCase):
             {
                 "synthetic_stable_to_candidate",
                 "self_managed_system_prop_rehydrated_transactionally",
-                "existing_managed_state_adopted",
-                "modules_update_state_preserved",
+                "existing_v2_managed_state_adopted",
+                "modules_update_mirror_state_preserved",
                 "original_backups_preserved",
                 "second_apply_noop",
                 "candidate_reinstall_safe",
-                "active_staged_disagreement_rejected",
+                "fallback_mirror_drift_rejected",
                 "contradictory_state_rejected",
             },
         )
@@ -43,8 +39,6 @@ class UpgradeQualificationTests(unittest.TestCase):
             self.skipTest(
                 f"{PUBLISHED_PREDECESSOR_REF} Git history is unavailable in this source export"
             )
-        # As above, the qualification implementation raises at the exact failing
-        # lifecycle stage. Do not duplicate those guards with vacuous True checks.
         with tempfile.TemporaryDirectory() as raw:
             evidence = qualify_published_predecessor(ROOT, Path(raw))
         self.assertEqual(evidence["result"], "PASS")
@@ -56,11 +50,16 @@ class UpgradeQualificationTests(unittest.TestCase):
                 "published_predecessor_preflight_apply_verify",
                 "candidate_preflight_apply_verify",
                 "legacy_pif_profile_state_retired",
-                "pif_profile_bytes_preserved_during_ownership_retirement",
+                "legacy_pif_writer_state_retired",
+                "canonical_pif_source_preserved_during_migration",
+                "fallbacks_reconciled_to_canonical",
                 "predecessor_original_backups_preserved",
-                "candidate_may_add_new_first_time_backups",
+                "candidate_may_add_v2_mirror_backups",
+                "pif_refresh_requires_explicit_reconcile",
+                "pif_refresh_reconciled_transactionally",
                 "second_apply_noop",
-                "pif_profile_refresh_survives_noop_apply_and_restore",
+                "canonical_refresh_survives_restore",
+                "candidate_restore_recovers_true_fallback_originals",
                 "candidate_restore_recovers_non_pif_pre_otast_bytes",
                 "managed_state_removed_after_restore",
             },

@@ -57,7 +57,7 @@
   "compatibility_policy": {
     "whole_file_neutralizers": "when a target has a reviewed version-range contract, module identity + compatible version + safe regular-file/path validation replace brittle source-hash gating; exact original bytes/mode are still restored transactionally",
     "structure_sensitive_transforms": "exact reviewed source hashes plus transformation anchors remain mandatory where OTAST preserves or surgically edits upstream logic",
-    "restore": "every managed file still records and restores exact original bytes and mode transactionally; PIF custom/fallback profile data is intentionally outside current Restore ownership",
+    "restore": "every managed file still records and restores exact original bytes and mode transactionally; the selected PIF canonical source is never Restore-owned, while non-source fallback mirrors and the surgical security-patch boundary are transactional",
     "impact_classification": "upstream movement is classified by changed source surface; only a docs/CI-only source delta with byte/mode-identical installable module evidence may advance the monitor baseline automatically"
   },
   "conflicts": {
@@ -162,30 +162,28 @@
     "playintegrityfix": {
       "target_role": "MANAGED",
       "compatibility_basis": "STRUCTURE_SENSITIVE_TRANSFORM",
-      "profile_ownership": "PIF_OWNED_MUTABLE_CONFIGURATION",
+      "profile_ownership": "CANONICAL_SOURCE_WITH_TRANSACTIONAL_FALLBACK_MIRRORS",
       "accepted_hashes": {
-        "autopif.sh": [
-          "1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1",
-          "67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a",
-          "04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213"
-        ],
-        "autopif_ota.sh": [
-          "cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1"
-        ],
         "security_patch.sh": [
           "a21fa1444ad870ad2ba09cb2a45a0576361df6062369d13f05fbf0db78f29476",
           "f24517231c21856c4603f14e9d1ad8d38af5e6753a8060837320e66337ed5012"
         ]
       },
       "managed_paths": [
-        "autopif.sh",
-        "autopif_ota.sh",
-        "security_patch.sh",
-        "system.prop"
+        "security_patch.sh"
+      ],
+      "conditional_managed_paths": [
+        "pif.prop"
       ],
       "observed_paths": [
         "/data/adb/pif.prop",
-        "pif.prop"
+        "autopif.sh",
+        "autopif_ota.sh"
+      ],
+      "canonical_profile_precedence": [
+        "/data/adb/pif.prop",
+        "/data/adb/modules/playintegrityfix/pif.prop",
+        "/data/adb/modules_update/playintegrityfix/pif.prop"
       ],
       "profile_runtime_precedence": [
         "/data/adb/pif.prop",
@@ -211,10 +209,7 @@
           "module/module.prop"
         ],
         "structure_sensitive": [
-          "module/autopif.sh",
-          "module/autopif_ota.sh",
-          "module/security_patch.sh",
-          "module/system.prop"
+          "module/security_patch.sh"
         ],
         "native_dependency": [
           "zygisk/**",
@@ -229,6 +224,9 @@
           "module/post-fs-data.sh",
           "module/service.sh",
           "module/common_func.sh",
+          "module/autopif.sh",
+          "module/autopif_ota.sh",
+          "module/system.prop",
           "webui/**",
           "module/webroot/**",
           "module/pif.prop"
@@ -243,6 +241,14 @@
         ]
       },
       "observed_only_hashes": {
+        "autopif.sh": [
+          "1077b90d7e5ff7191ae7d9238c7f6eeb121470aed249a1b0d083366d04e589b1",
+          "67d456a70f6195a9b423e28859845b7fd42dd1bb3bec8596f45f55fe0d492a4a",
+          "04192e43776fb23ff0e132da0f2cb07e99ac0c243d785ace100a64d4ddecd213"
+        ],
+        "autopif_ota.sh": [
+          "cf26c37ae06524e557e4bd6e9262c965ad2c52e93d5d027a0f027933373751d1"
+        ],
         "action.sh": [
           "245168235a0e36172bf77a58fe0b39b5d3e2faf83c8845d90b404cfca3bc07af"
         ],
@@ -258,6 +264,8 @@
         "post-fs-data.sh",
         "service.sh",
         "common_func.sh",
+        "autopif.sh",
+        "autopif_ota.sh",
         "webroot/**",
         "zygisk/**"
       ],
@@ -284,10 +292,10 @@
         },
         {
           "commit": "73552eec78f1e733573192333e9a7453b8de0662",
-          "ref": "inject_s security_patch.sh resetprop rebuild support reviewed 2026-09-08; only the structure-sensitive security-patch writer changed. Exact writer SHA-256 f24517231c21856c4603f14e9d1ad8d38af5e6753a8060837320e66337ed5012 is accepted because OTAST's adapter exits before the retained upstream resetprop/system.prop body while preserving marker enable/disable semantics"
+          "ref": "inject_s security_patch.sh resetprop rebuild support reviewed 2026-09-08; security_patch.sh remains exact-hash gated because OTAST now surgically suppresses only its TrickyStore/system.prop/resetprop write domains while preserving marker and profile-selection flow"
         }
       ],
-      "strategy": "PIF custom and module-local pif.prop are separate mutable custom/fallback configuration layers and are not OTAST-managed or mirrored. OTAST exact-hash manages only reviewed AutoPIF/self-update/security-patch writer surfaces plus OTA-derived PIF system.prop. AutoPIF profile refresh remains functional; executable self-update is review-gated; profile SPL can never become OTA platform or TrickyStore SPL authority."
+      "strategy": "Select one canonical PIF profile in global > active > staged order without rewriting its identity to OTA values. Transactionally mirror that canonical profile only into non-source active/staged fallbacks. Preserve upstream autopif.sh and autopif_ota.sh lifecycle/self-update. Exact-hash transform only security_patch.sh, suppressing profile-derived TrickyStore/system.prop/resetprop writes while preserving marker/profile control. OTA system/vendor SPL remain separate platform authority."
     },
     "ta-utl": {
       "target_role": "MANAGED",
