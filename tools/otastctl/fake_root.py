@@ -434,8 +434,14 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
         _run(entry, adb_root, "verify")
         logs.append("## PIF global reset\n" + fallback_preflight.stdout + fallback_apply.stdout + fallback_report.stdout)
 
+        # The active fallback was released from mirror ownership when it became
+        # canonical. If a global source later reappears, re-acquiring the active
+        # path as a mirror must use this current PIF-owned value as the new
+        # Restore baseline, not the ancient pre-v1 packaged fallback.
+        active_reacquire_original = (adb_root / "modules/playintegrityfix/pif.prop").read_bytes()
         _write(adb_root / "pif.prop", global_original.decode("utf-8"), 0o600)
         _run(entry, adb_root, "apply")
+        originals["modules/playintegrityfix/pif.prop"] = active_reacquire_original
 
         semantic_live = adb_root / "live.prop"
         semantic_original = semantic_live.read_text(encoding="utf-8")
@@ -669,6 +675,7 @@ def qualify_fake_root(repo_root: Path, output_dir: Path) -> dict[str, object]:
                 "pif_fallback_mirrors_reconciled": True,
                 "pif_custom_profile_refresh_requires_reconcile": refresh_verify.returncode == 1,
                 "pif_global_reset_promotes_active_source": True,
+                "pif_mirror_reacquire_uses_current_source_baseline": True,
                 "pif_security_patch_surgical_boundary": True,
                 "ta_non_vbmeta_behaviour_preserved": True,
                 "yurikey_keybox_writer_neutralized": True,
