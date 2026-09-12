@@ -30,6 +30,7 @@ OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 . "$MODDIR/profiles.sh" || exit 70
 . "$MODDIR/architecture-v2.sh" || exit 70
 . "$MODDIR/pif-migration-v2.sh" || exit 70
+. "$MODDIR/capabilities-v3.sh" || exit 70
 . "$MODDIR/report.sh" || exit 70
 [ ! -f "$MODDIR/../otast.conf" ] || . "$MODDIR/../otast.conf" || exit 70
 
@@ -48,6 +49,7 @@ _otast_load() {
   otast_enforce_runtime_policy || return 1
   otast_validate_trickystore_oss || return 1
   otast_trickystore_collect_health || return 1
+  otast_validate_capability_ownership || return 1
 }
 
 _otast_validate_source() {
@@ -147,6 +149,7 @@ _otast_verify() {
   otast_compare_live_managed_vbmeta || return 1
   otast_compare_live_strict_runtime_identity || return 1
   otast_verify_trickystore_health || return 1
+  otast_verify_capability_ownership || return 1
   otast_verify_managed
 }
 
@@ -175,7 +178,8 @@ _otast_report() {
   otast_pif_inspect_legacy_profile_state || return 1
   otast_report || return 1
   otast_report_strict_runtime_identity || return 1
-  otast_report_trickystore_health
+  otast_report_trickystore_health || return 1
+  otast_report_capability_ownership
 }
 
 _otast_boot_recover() {
