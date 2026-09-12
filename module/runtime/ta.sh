@@ -12,24 +12,41 @@ OTAST_TA_WEBUI_MARKER='        # OTAST owns boot_hash and ro.boot.vbmeta.digest;
 
 otast_transform_ta_prop() {
   local source output temp line skip guard_inserted vbmeta_inserted
+  local guard_begin_count guard_end_count vbmeta_begin_count vbmeta_end_count
   source=$1
   output=$2
   [ -f "$source" ] && [ ! -L "$source" ] || return 1
 
-  if grep -Fxq "$OTAST_TA_GUARD_BEGIN" "$source" 2>/dev/null && \
-     grep -Fxq "$OTAST_TA_GUARD_END" "$source" 2>/dev/null && \
-     grep -Fxq "$OTAST_TA_BEGIN" "$source" 2>/dev/null && \
-     grep -Fxq "$OTAST_TA_END" "$source" 2>/dev/null; then
+  guard_begin_count=$(grep -Fxc "$OTAST_TA_GUARD_BEGIN" "$source" 2>/dev/null || true)
+  guard_end_count=$(grep -Fxc "$OTAST_TA_GUARD_END" "$source" 2>/dev/null || true)
+  vbmeta_begin_count=$(grep -Fxc "$OTAST_TA_BEGIN" "$source" 2>/dev/null || true)
+  vbmeta_end_count=$(grep -Fxc "$OTAST_TA_END" "$source" 2>/dev/null || true)
+
+  case "$guard_begin_count:$guard_end_count" in
+    0:0|1:1) ;;
+    *) return 1 ;;
+  esac
+  case "$vbmeta_begin_count:$vbmeta_end_count" in
+    0:0|1:1) ;;
+    *) return 1 ;;
+  esac
+
+  if [ "$guard_begin_count" -eq 1 ] && [ "$vbmeta_begin_count" -eq 1 ]; then
     cat "$source" >"$output" || return 1
     chmod 0600 "$output" || return 1
     otast_shell_file_valid "$output"
     return $?
   fi
 
+  # An early-guard-only file is not a recognised historical OTAST state. The
+  # prior v2 adapter always published the VBMeta ownership markers, so accepting
+  # this shape would turn an unexplained partial transform into trusted state.
+  [ "$guard_begin_count" -eq 0 ] || return 1
+
   temp=${output}.new.$$
   skip=0
   guard_inserted=0
-  vbmeta_inserted=0
+  vbmeta_inserted=$vbmeta_begin_count
   : >"$temp" || return 1
   while IFS= read -r line || [ -n "$line" ]; do
     if [ "$guard_inserted" -eq 0 ]; then
@@ -51,7 +68,7 @@ EOF_GUARD
       esac
     fi
 
-    if [ "$skip" -eq 0 ] && [ "$line" = '# Reset vbmeta related prop' ]; then
+    if [ "$vbmeta_inserted" -eq 0 ] && [ "$skip" -eq 0 ] && [ "$line" = '# Reset vbmeta related prop' ]; then
       cat >>"$temp" <<EOF_OWNER
 $OTAST_TA_BEGIN
 # Defense in depth: even if the external guard is later removed, TA UTL's
