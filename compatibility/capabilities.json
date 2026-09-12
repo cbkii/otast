@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "governing_invariant": "One authoritative writer per exclusive global property or external contract; separate identity domains are permitted where their scopes genuinely differ.",
+  "capabilities": {
+    "installed_ota_static_identity": {
+      "exclusive": true,
+      "authoritative_owner": "stock-os+ota-authority",
+      "mutable": false,
+      "transaction": "read-only validation",
+      "reboot_boundary": "OTA boot boundary",
+      "validation": ["ota.prop authority", "static partition properties", "live device/build identity"]
+    },
+    "raw_boot_avb_evidence": {
+      "exclusive": true,
+      "authoritative_owner": "bootloader+libavb",
+      "mutable": false,
+      "transaction": "read-only evidence",
+      "reboot_boundary": "boot",
+      "validation": ["bootconfig", "verified-boot error evidence", "vbmeta digest/version evidence"]
+    },
+    "global_sensitive_props": {
+      "exclusive": true,
+      "authoritative_owner": "selected-pif-provider",
+      "mutable": true,
+      "transaction": "provider-owned; OTAST verifies conflicts",
+      "reboot_boundary": "zygote/process and reboot dependent",
+      "validation": ["effective PIF provider", "no competing reviewed property governor", "verified-boot presentation consistency"]
+    },
+    "pif_profile": {
+      "exclusive": true,
+      "authoritative_owner": "selected-pif-provider+user-profile",
+      "mutable": true,
+      "transaction": "provider-owned canonical source; OTAST transactionally owns non-source mirrors only",
+      "reboot_boundary": "GMS process restart; module update may require reboot",
+      "validation": ["canonical profile validator", "global > effective active > effective staged precedence", "mirror coherence"]
+    },
+    "platform_system_spl": {
+      "exclusive": true,
+      "authoritative_owner": "otast-from-ota-authority",
+      "mutable": true,
+      "transaction": "OTAST managed system.prop",
+      "reboot_boundary": "reboot after Apply",
+      "validation": ["ota.prop system SPL", "live ro.build.version.security_patch"]
+    },
+    "platform_vendor_spl": {
+      "exclusive": true,
+      "authoritative_owner": "otast-from-ota-authority",
+      "mutable": true,
+      "transaction": "OTAST managed system.prop",
+      "reboot_boundary": "reboot after Apply",
+      "validation": ["ota.prop vendor SPL", "live ro.vendor.build.security_patch"]
+    },
+    "trickystore_patch": {
+      "exclusive": true,
+      "authoritative_owner": "otast",
+      "mutable": true,
+      "transaction": "OTAST external-contract transaction",
+      "reboot_boundary": "consumer dependent",
+      "validation": ["TrickyStore OSS identity", "/data/adb/tricky_store/security_patch.txt managed state"]
+    },
+    "key_attestation": {
+      "exclusive": true,
+      "authoritative_owner": "trickystore-oss",
+      "mutable": true,
+      "transaction": "provider-owned; OTAST observes health only",
+      "reboot_boundary": "provider dependent",
+      "validation": ["TrickyStore OSS identity", "keybox structural health", "TEE status"]
+    },
+    "vbmeta_digest": {
+      "exclusive": true,
+      "authoritative_owner": "otast-boot-hash-contract",
+      "mutable": true,
+      "transaction": "OTAST external-contract transaction",
+      "reboot_boundary": "boot/runtime consumer dependent",
+      "validation": ["ota.prop vbmeta digest", "/data/adb/boot_hash", "raw bootconfig evidence"]
+    },
+    "target_list": {
+      "exclusive": false,
+      "authoritative_owner": "trickystore-target-data",
+      "mutable": true,
+      "transaction": "external user/provider data; compatibility UIs may edit",
+      "reboot_boundary": "none unless consumer requires it",
+      "validation": ["target.txt structural health", "no identity writer implied by UI presence"]
+    },
+    "package_provenance": {
+      "exclusive": true,
+      "authoritative_owner": "better-known-installed-when-enabled",
+      "mutable": true,
+      "transaction": "BKI-owned; OTAST read-only/non-target",
+      "reboot_boundary": "BKI lifecycle",
+      "validation": ["module identity/version when present", "never infer unrecoverable pre-v1.6 provenance"]
+    },
+    "zygisk_provider": {
+      "exclusive": true,
+      "authoritative_owner": "one-effective-zygisk-provider",
+      "mutable": false,
+      "transaction": "external root-framework configuration",
+      "reboot_boundary": "reboot",
+      "validation": ["effective provider inventory", "native ABI/page-size compatibility"]
+    },
+    "root_concealment": {
+      "exclusive": false,
+      "authoritative_owner": "external-concealment-modules",
+      "mutable": false,
+      "transaction": "observed only",
+      "reboot_boundary": "provider dependent",
+      "validation": ["module inventory", "bounded configuration evidence"]
+    },
+    "lsposed_environment": {
+      "exclusive": false,
+      "authoritative_owner": "vector-or-other-framework",
+      "mutable": false,
+      "transaction": "observed only",
+      "reboot_boundary": "reboot/zygote",
+      "validation": ["framework identity", "scope evidence where available"]
+    }
+  },
+  "integrations": {
+    "otast": {
+      "role": "AUTHORITY_COORDINATOR",
+      "writes": ["platform_system_spl", "platform_vendor_spl", "trickystore_patch", "vbmeta_digest"],
+      "observes": ["installed_ota_static_identity", "raw_boot_avb_evidence", "global_sensitive_props", "pif_profile", "key_attestation", "target_list", "package_provenance", "zygisk_provider", "root_concealment", "lsposed_environment"]
+    },
+    "playintegrityfix": {
+      "role": "PROVIDER",
+      "module_ids": ["playintegrityfix"],
+      "writes": ["pif_profile", "global_sensitive_props"],
+      "compatibility_adapter": "OTAST suppresses PIF security-patch/system-SPL writer domains while preserving PIF profile ownership and AutoPIF lifecycle"
+    },
+    "trickystore": {
+      "role": "PROVIDER",
+      "module_ids": ["tricky_store"],
+      "writes": ["key_attestation"],
+      "external_contracts": ["trickystore_patch", "target_list"]
+    },
+    "ta-utl": {
+      "role": "COMPATIBILITY_ADAPTER",
+      "module_ids": ["TA_utl", ".TA_utl"],
+      "allowed": ["target_list"],
+      "neutralized_writers": ["global_sensitive_props", "vbmeta_digest"],
+      "preferred": false,
+      "reason": "Current upstream applies boot_hash before disable_prop_handler and otherwise writes global sensitive properties; OTAST must suppress the property-governor path and direct WebUI boot-hash writer."
+    },
+    "yurikey": {
+      "role": "LEGACY_COMPATIBILITY_ADAPTER",
+      "module_ids": ["Yurikey"],
+      "neutralized_writers": ["global_sensitive_props", "pif_profile", "trickystore_patch", "key_attestation", "vbmeta_digest", "target_list"],
+      "preferred": false,
+      "reason": "Its reviewed writer surfaces overlap capabilities already owned by OTAST, the PIF provider and TrickyStore; existing installs remain transactionally neutralized/restorable."
+    },
+    "vbmeta-fixer": {
+      "role": "LEGACY_COMPATIBILITY_ADAPTER",
+      "module_ids": ["vbmeta-fixer"],
+      "neutralized_writers": ["vbmeta_digest"],
+      "preferred": false,
+      "reason": "Its runtime service competes with the OTAST boot-hash/VBMeta contract; existing reviewed installs remain transactionally neutralized/restorable."
+    },
+    "better-known-installed": {
+      "role": "NON_TARGET_PROVIDER",
+      "module_ids": ["BetterKnownInstalled", "BKI"],
+      "writes": ["package_provenance"],
+      "otast_mode": "READ_ONLY",
+      "preferred": "optional"
+    },
+    "ashrexcue": {
+      "role": "NON_TARGET_OPERATIONAL_DEPENDENCY",
+      "module_ids": ["AshLooper", "AshReXcue"],
+      "otast_mode": "READ_ONLY",
+      "preferred": "optional",
+      "reason": "Boot/recovery protection, not an identity/property governor."
+    },
+    "vector": {
+      "role": "NON_TARGET_FRAMEWORK",
+      "module_ids": ["vector"],
+      "writes": ["lsposed_environment"],
+      "otast_mode": "READ_ONLY"
+    },
+    "rezygisk": {
+      "role": "NON_TARGET_PROVIDER",
+      "module_ids": ["rezygisk"],
+      "writes": ["zygisk_provider"],
+      "otast_mode": "READ_ONLY"
+    }
+  },
+  "preferred_stack": {
+    "required_or_primary": ["otast", "trickystore", "one-pif-provider", "one-zygisk-provider"],
+    "optional": ["better-known-installed", "vector", "root-concealment", "ashrexcue"],
+    "not_preferred": ["yurikey", "vbmeta-fixer", "ta-utl-property-governor", "multiple-pif-providers", "multiple-zygisk-providers", "multiple-key-attestation-providers"]
+  }
+}
