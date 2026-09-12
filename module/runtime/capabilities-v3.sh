@@ -6,8 +6,6 @@
 
 OTAST_CAPABILITY_ARCHITECTURE=exclusive-writer-v1
 OTAST_TA_PROP_GUARD=$ADB_ROOT/disable_prop_handler
-OTAST_TA_EARLY_GUARD_BEGIN='# --- otast target-only prop guard BEGIN ---'
-OTAST_TA_EARLY_GUARD_END='# --- otast target-only prop guard END ---'
 
 _otast_cap_effective_role_dir() {
   local id role dir
@@ -49,53 +47,11 @@ otast_validate_capability_ownership() {
   return 0
 }
 
-# Current upstream TA UTL reads /data/adb/boot_hash and writes sensitive props
-# before/around its late disable_prop_handler check. Move the existing supported
-# guard to the earliest executable boundary while keeping the exact reviewed
-# source shape otherwise intact. The planner remains exact-hash gated.
-otast_transform_ta_prop() {
-  local source output line inserted
-  source=$1
-  output=$2
-  [ -f "$source" ] && [ ! -L "$source" ] || return 1
-
-  if grep -Fxq "$OTAST_TA_EARLY_GUARD_BEGIN" "$source" 2>/dev/null && \
-     grep -Fxq "$OTAST_TA_EARLY_GUARD_END" "$source" 2>/dev/null; then
-    cat "$source" >"$output" || return 1
-    chmod 0600 "$output" || return 1
-    otast_shell_file_valid "$output"
-    return $?
-  fi
-
-  : >"$output" || return 1
-  inserted=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    printf '%s\n' "$line" >>"$output" || { rm -f "$output"; return 1; }
-    if [ "$inserted" -eq 0 ]; then
-      case "$line" in
-        '#!'*)
-          cat >>"$output" <<EOF_GUARD
-$OTAST_TA_EARLY_GUARD_BEGIN
-# OTAST owns global sensitive-property and VBMeta-digest capability boundaries.
-# Presence of disable_prop_handler turns TA UTL into target-list/UI-only mode.
-if [ -f "/data/adb/disable_prop_handler" ]; then
-    exit 0
-fi
-$OTAST_TA_EARLY_GUARD_END
-EOF_GUARD
-          inserted=1
-          ;;
-      esac
-    fi
-  done <"$source"
-  [ "$inserted" -eq 1 ] || { rm -f "$output"; return 1; }
-  chmod 0600 "$output" || return 1
-  otast_shell_file_valid "$output"
-}
-
 # Override the v2 TA planner with a target-list-only compatibility adapter. The
-# WebUI boot-hash writer remains exact-neutralized because upstream exposes no
-# clean target-only switch for that independent save path.
+# exact transform lives in ta.sh and combines an early disable_prop_handler
+# boundary with defense-in-depth removal of the reviewed trailing VBMeta writer.
+# The independent WebUI boot-hash writer remains exact-neutralized because
+# upstream exposes no clean target-only switch for that save path.
 otast_plan_ta_utl() {
   local id dir role id_tag candidate webui_found guard_source ta_found
   ta_found=0
