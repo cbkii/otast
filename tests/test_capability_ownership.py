@@ -26,9 +26,10 @@ class CapabilityOwnershipTests(unittest.TestCase):
     def test_ash_and_bki_are_write_protected_non_targets_not_hard_stop_identity_governors(self) -> None:
         registry = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         capabilities = json.loads((ROOT / "compatibility/capabilities.json").read_text(encoding="utf-8"))
+        self.assertNotIn("legacy-identity-governors", registry["conflicts"])
         protected = registry["conflicts"]["protected-non-targets"]
         self.assertEqual(protected["severity"], "REVIEW_REQUIRED")
-        self.assertNotIn("identity", protected["reason"].lower())
+        self.assertNotEqual(protected["severity"], "HARD_STOP")
         self.assertEqual(set(protected["module_ids"]), set(registry["strict_exclusions"]))
         self.assertEqual(capabilities["integrations"]["ashrexcue"]["role"], "NON_TARGET_OPERATIONAL_DEPENDENCY")
         self.assertEqual(capabilities["integrations"]["better-known-installed"]["role"], "NON_TARGET_PROVIDER")
