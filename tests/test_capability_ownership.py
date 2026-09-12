@@ -46,31 +46,55 @@ class CapabilityOwnershipTests(unittest.TestCase):
         self.assertIn("yurikey", capabilities["preferred_stack"]["not_preferred"])
         self.assertIn("vbmeta-fixer", capabilities["preferred_stack"]["not_preferred"])
 
-    def test_effective_ta_transform_moves_disable_guard_before_every_property_writer(self) -> None:
+    @staticmethod
+    def _transform_ta(source: Path, output: Path) -> None:
         pif_runtime = ROOT / "module/runtime/pif.sh"
         ta_runtime = ROOT / "module/runtime/ta.sh"
-        capability_runtime = ROOT / "module/runtime/capabilities-v3.sh"
+        command = f'''
+            ADB_ROOT=/data/adb
+            otast_stop() {{ printf '%s\\n' "$*" >&2; }}
+            . "{pif_runtime}" || exit 1
+            . "{ta_runtime}" || exit 2
+            otast_transform_ta_prop "{source}" "{output}" || exit 3
+        '''
+        subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+
+    def test_effective_ta_transform_moves_disable_guard_before_every_fixture_property_writer(self) -> None:
         fixture = FIXTURES / "ta-utl-prop-v4.4.sh"
         with tempfile.TemporaryDirectory(prefix="otast-cap-ta-") as raw:
             output = Path(raw) / "prop.out"
-            command = f'''
-                ADB_ROOT=/data/adb
-                otast_stop() {{ printf '%s\\n' "$*" >&2; }}
-                . "{pif_runtime}" || exit 1
-                . "{ta_runtime}" || exit 2
-                . "{capability_runtime}" || exit 3
-                otast_transform_ta_prop "{fixture}" "{output}" || exit 4
-            '''
-            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+            self._transform_ta(fixture, output)
             text = output.read_text(encoding="utf-8")
             guard = text.index("# --- otast target-only prop guard BEGIN ---")
             first_runtime_write = text.index("resetprop -w sys.boot_completed 0")
-            boot_hash = text.index('if [ -f "/data/adb/boot_hash" ]; then')
             sensitive = text.index('check_reset_prop "ro.boot.verifiedbootstate" "green"')
             self.assertLess(guard, first_runtime_write)
-            self.assertLess(guard, boot_hash)
             self.assertLess(guard, sensitive)
             self.assertIn('if [ -f "/data/adb/disable_prop_handler" ]; then', text)
+            self.assertIn("# --- otast vbmeta ownership BEGIN ---", text)
+
+    def test_prior_v2_ta_adapter_is_migrated_without_requiring_removed_upstream_block(self) -> None:
+        fixture = FIXTURES / "ta-utl-prop-v4.4.sh"
+        with tempfile.TemporaryDirectory(prefix="otast-cap-ta-migrate-") as raw:
+            root = Path(raw)
+            current = root / "current.sh"
+            self._transform_ta(fixture, current)
+            text = current.read_text(encoding="utf-8")
+            begin = text.index("# --- otast target-only prop guard BEGIN ---")
+            end_marker = "# --- otast target-only prop guard END ---\n"
+            end = text.index(end_marker, begin) + len(end_marker)
+            prior = root / "prior-v2.sh"
+            prior.write_text(text[:begin] + text[end:], encoding="utf-8")
+            prior.chmod(0o755)
+            self.assertIn("# --- otast vbmeta ownership BEGIN ---", prior.read_text(encoding="utf-8"))
+            self.assertNotIn("# Reset vbmeta related prop", prior.read_text(encoding="utf-8"))
+
+            migrated = root / "migrated.sh"
+            self._transform_ta(prior, migrated)
+            migrated_text = migrated.read_text(encoding="utf-8")
+            self.assertIn("# --- otast target-only prop guard BEGIN ---", migrated_text)
+            self.assertIn("# --- otast vbmeta ownership BEGIN ---", migrated_text)
+            self.assertNotIn("# Reset vbmeta related prop", migrated_text)
 
     def test_ta_guard_is_transactionally_managed_and_webui_writer_remains_neutralized(self) -> None:
         runtime = (ROOT / "module/runtime/capabilities-v3.sh").read_text(encoding="utf-8")
