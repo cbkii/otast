@@ -172,6 +172,9 @@ _otast_restore() {
 }
 
 _otast_report() {
+  # Report remains read-only and must explain ownership conflicts rather than
+  # hiding them behind Preflight's fail-closed gate.
+  OTAST_CAPABILITY_REPORT_ONLY=1
   _otast_load || return 1
   otast_require_no_legacy_governors || return 1
   otast_validate_pif_profiles_current || return 1
