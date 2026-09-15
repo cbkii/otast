@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from tools.otastctl.capabilities import render_capability_ownership, validate_capabilities
+from tools.otastctl.util import OtastError
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures/upstream"
@@ -18,10 +20,30 @@ class CapabilityOwnershipTests(unittest.TestCase):
         self.assertEqual(result["schema_version"], 1)
         self.assertIn("pif_profile", result["exclusive_capabilities"])
         self.assertIn("package_provenance", result["exclusive_capabilities"])
+        self.assertEqual(result["direct_writers"]["pif_profile"], ["playintegrityfix"])
+        self.assertEqual(result["direct_writers"]["platform_system_spl"], ["otast"])
         self.assertEqual(
             (ROOT / "docs/CAPABILITY-OWNERSHIP.md").read_text(encoding="utf-8"),
             render_capability_ownership(ROOT),
         )
+
+    def test_static_registry_rejects_two_direct_integrations_for_exclusive_capability(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="otast-cap-registry-") as raw:
+            root = Path(raw)
+            (root / "compatibility").mkdir()
+            (root / "docs").mkdir()
+            shutil.copy2(ROOT / "compatibility/supported-targets.json", root / "compatibility/supported-targets.json")
+            document = json.loads((ROOT / "compatibility/capabilities.json").read_text(encoding="utf-8"))
+            document["integrations"]["second-pif-writer"] = {
+                "role": "PROVIDER",
+                "module_ids": ["second_pif_writer"],
+                "writes": ["pif_profile"],
+            }
+            (root / "compatibility/capabilities.json").write_text(
+                json.dumps(document, indent=2) + "\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(OtastError, "exclusive capability has multiple direct writer integrations"):
+                validate_capabilities(root)
 
     def test_ash_and_bki_are_write_protected_non_targets_not_hard_stop_identity_governors(self) -> None:
         registry = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
@@ -45,6 +67,35 @@ class CapabilityOwnershipTests(unittest.TestCase):
         self.assertFalse(registry["targets"]["vbmeta-fixer"]["preferred"])
         self.assertIn("yurikey", capabilities["preferred_stack"]["not_preferred"])
         self.assertIn("vbmeta-fixer", capabilities["preferred_stack"]["not_preferred"])
+
+    def test_runtime_generic_conflict_handles_alias_disable_and_staged_transition(self) -> None:
+        common = ROOT / "module/runtime/common.sh"
+        runtime = ROOT / "module/runtime/capabilities-v3.sh"
+        with tempfile.TemporaryDirectory(prefix="otast-cap-runtime-") as raw:
+            adb_root = Path(raw) / "data/adb"
+            active = adb_root / "modules"
+            staged = adb_root / "modules_update"
+            (active / "BetterKnownInstalled").mkdir(parents=True)
+            (active / "BKI").mkdir(parents=True)
+            command = f'''
+                ADB_ROOT="{adb_root}"
+                . "{common}" || exit 1
+                . "{runtime}" || exit 2
+                if otast_validate_capability_ownership; then exit 10; fi
+                OTAST_CAPABILITY_REPORT_ONLY=1
+                otast_validate_capability_ownership || exit 11
+                case "$OTAST_CAPABILITY_LAST_CONFLICT" in *package_provenance*) ;; *) exit 12 ;; esac
+                OTAST_CAPABILITY_REPORT_ONLY=0
+                touch "$ADB_ROOT/modules/BKI/disable" || exit 13
+                otast_validate_capability_ownership || exit 14
+                mkdir -p "$ADB_ROOT/modules_update/BetterKnownInstalled" || exit 15
+                otast_validate_capability_ownership || exit 16
+                rm -f "$ADB_ROOT/modules/BKI/disable" || exit 17
+                touch "$ADB_ROOT/modules/BKI/remove" || exit 18
+                otast_validate_capability_ownership || exit 19
+            '''
+            subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
+            self.assertTrue((staged / "BetterKnownInstalled").is_dir())
 
     @staticmethod
     def _transform_ta(source: Path, output: Path) -> None:
@@ -119,6 +170,7 @@ class CapabilityOwnershipTests(unittest.TestCase):
         self.assertIn("otast_validate_capability_ownership", entry)
         self.assertIn("otast_verify_capability_ownership", entry)
         self.assertIn("otast_report_capability_ownership", entry)
+        self.assertIn("OTAST_CAPABILITY_REPORT_ONLY=1", entry)
         installer = (ROOT / "module/customize.sh").read_text(encoding="utf-8")
         self.assertIn("runtime/capabilities-v3.sh", installer)
 
