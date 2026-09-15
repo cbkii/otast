@@ -41,12 +41,11 @@ _otast_cap_count_ta_role() {
   printf '%s\n' "$count"
 }
 
-# This runtime table mirrors only direct write integrations in
-# compatibility/capabilities.json. Provider implementations that are mutually
-# exclusive behind one integration belong inside that provider adapter rather
-# than becoming independent capability owners.
+# Runtime-inspected direct writers. Strict-exclusion/non-target module identities
+# are deliberately absent: their trees remain path-protected and are inspected
+# only by host/qualification tooling, never made runtime write targets.
 _otast_cap_writer_integrations() {
-  printf '%s\n' otast playintegrityfix trickystore better-known-installed vector rezygisk
+  printf '%s\n' otast playintegrityfix trickystore vector rezygisk
 }
 
 _otast_cap_integration_module_ids() {
@@ -54,7 +53,6 @@ _otast_cap_integration_module_ids() {
     otast) return 0 ;;
     playintegrityfix) printf '%s\n' playintegrityfix ;;
     trickystore) printf '%s\n' tricky_store ;;
-    better-known-installed) printf '%s\n' BetterKnownInstalled BKI ;;
     vector) printf '%s\n' vector ;;
     rezygisk) printf '%s\n' rezygisk ;;
     *) return 1 ;;
@@ -66,7 +64,6 @@ _otast_cap_integration_writes() {
     otast) printf '%s\n' platform_system_spl platform_vendor_spl trickystore_patch vbmeta_digest ;;
     playintegrityfix) printf '%s\n' pif_profile global_sensitive_props ;;
     trickystore) printf '%s\n' key_attestation ;;
-    better-known-installed) printf '%s\n' package_provenance ;;
     vector) printf '%s\n' lsposed_environment ;;
     rezygisk) printf '%s\n' zygisk_provider ;;
     *) return 1 ;;
@@ -176,9 +173,9 @@ otast_validate_capability_ownership() {
     done
   done
 
-  # Generic effective-writer arbitration. Every exclusive capability resolves to
-  # zero or one enabled direct integration; adapters whose writers are neutralized
-  # are deliberately absent from this direct-writer table.
+  # Generic effective-writer arbitration. Every runtime-inspected exclusive
+  # capability resolves to zero or one enabled direct integration; compatibility
+  # adapters whose writers are neutralized are deliberately absent here.
   for capability in $(_otast_cap_exclusive_ids); do
     writers=$(_otast_cap_writer_list "$capability") || return 1
     [ "$writers" = NONE ] && continue
@@ -291,6 +288,7 @@ _otast_cap_report_row() {
   selected=$(_otast_cap_writer_list "$capability") || selected=UNKNOWN
   case "$capability" in
     installed_ota_static_identity|raw_boot_avb_evidence) state=EXTERNAL_AUTHORITY ;;
+    package_provenance) state=EXTERNAL_NON_TARGET_OBSERVED ;;
     *) if [ "$selected" = NONE ]; then state=UNOWNED_OR_NOT_INSTALLED; else state=WRITER_EFFECTIVE; fi ;;
   esac
   conflict=NONE
@@ -322,7 +320,7 @@ otast_report_capability_ownership() {
   _otast_cap_report_row trickystore_patch OTAST
   _otast_cap_report_row key_attestation TRICKYSTORE_OSS
   _otast_cap_report_row vbmeta_digest OTAST_BOOT_HASH_CONTRACT
-  _otast_cap_report_row package_provenance BETTER_KNOWN_INSTALLED_WHEN_ENABLED
+  _otast_cap_report_row package_provenance EXTERNAL_NON_TARGET_PROVIDER
   _otast_cap_report_row zygisk_provider ONE_EFFECTIVE_ZYGISK_PROVIDER
 
   # Backward-compatible summary keys retained for existing tooling.
