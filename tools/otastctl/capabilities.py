@@ -106,14 +106,24 @@ def validate_capabilities(root: Path) -> dict[str, object]:
         if role in WRITE_ROLES:
             for capability in writes:
                 direct_writers[capability].append(integration_id)
-        for module_id in _string_list(record.get("module_ids", []), f"integration {integration_id} module_ids", allow_empty=True):
+        ids = _string_list(record.get("module_ids", []), f"integration {integration_id} module_ids", allow_empty=True)
+        if role in WRITE_ROLES - {"AUTHORITY_COORDINATOR"} and writes and not ids:
+            raise OtastError(f"external writer integration has no runtime module identity: {integration_id}")
+        for module_id in ids:
             if module_id in module_ids:
                 raise OtastError(f"module ID belongs to multiple capability integrations: {module_id}")
             module_ids[module_id] = integration_id
 
-    # Static claims may name conditional owners (for example OTAST vs a provider),
-    # but no preferred stack may select multiple direct implementations for an
-    # exclusive capability. Runtime enforces the effective-device instance.
+    # A provider abstraction is one integration even when it has multiple reviewed
+    # implementations. Two separate direct integrations may not both claim an
+    # exclusive capability: runtime selection belongs inside that provider contract.
+    for capability_id, writers in direct_writers.items():
+        record = capabilities[capability_id]
+        if isinstance(record, dict) and record.get("exclusive") and len(writers) > 1:
+            raise OtastError(
+                f"exclusive capability has multiple direct writer integrations: {capability_id}: {sorted(writers)}"
+            )
+
     preferred = document.get("preferred_stack")
     if not isinstance(preferred, dict):
         raise OtastError("preferred_stack is missing")
@@ -148,6 +158,7 @@ def validate_capabilities(root: Path) -> dict[str, object]:
         "exclusive_capabilities": sorted(
             capability for capability, record in capabilities.items() if isinstance(record, dict) and record.get("exclusive")
         ),
+        "direct_writers": {capability: sorted(writers) for capability, writers in sorted(direct_writers.items())},
     }
 
 
