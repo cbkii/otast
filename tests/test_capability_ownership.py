@@ -68,34 +68,54 @@ class CapabilityOwnershipTests(unittest.TestCase):
         self.assertIn("yurikey", capabilities["preferred_stack"]["not_preferred"])
         self.assertIn("vbmeta-fixer", capabilities["preferred_stack"]["not_preferred"])
 
-    def test_runtime_generic_conflict_handles_alias_disable_and_staged_transition(self) -> None:
+    def test_runtime_generic_conflict_handles_disable_staged_and_report_only(self) -> None:
         common = ROOT / "module/runtime/common.sh"
         runtime = ROOT / "module/runtime/capabilities-v3.sh"
         with tempfile.TemporaryDirectory(prefix="otast-cap-runtime-") as raw:
             adb_root = Path(raw) / "data/adb"
             active = adb_root / "modules"
             staged = adb_root / "modules_update"
-            (active / "BetterKnownInstalled").mkdir(parents=True)
-            (active / "BKI").mkdir(parents=True)
+            (active / "synthetic_zygisk_a").mkdir(parents=True)
+            (active / "synthetic_zygisk_b").mkdir(parents=True)
             command = f'''
                 ADB_ROOT="{adb_root}"
                 . "{common}" || exit 1
                 . "{runtime}" || exit 2
+                _otast_cap_writer_integrations() {{ printf '%s\\n' provider-a provider-b; }}
+                _otast_cap_integration_module_ids() {{
+                  case "$1" in
+                    provider-a) printf '%s\\n' synthetic_zygisk_a ;;
+                    provider-b) printf '%s\\n' synthetic_zygisk_b ;;
+                    *) return 1 ;;
+                  esac
+                }}
+                _otast_cap_integration_writes() {{
+                  case "$1" in
+                    provider-a|provider-b) printf '%s\\n' zygisk_provider ;;
+                    *) return 1 ;;
+                  esac
+                }}
                 if otast_validate_capability_ownership; then exit 10; fi
                 OTAST_CAPABILITY_REPORT_ONLY=1
                 otast_validate_capability_ownership || exit 11
-                case "$OTAST_CAPABILITY_LAST_CONFLICT" in *package_provenance*) ;; *) exit 12 ;; esac
+                case "$OTAST_CAPABILITY_LAST_CONFLICT" in *zygisk_provider*) ;; *) exit 12 ;; esac
                 OTAST_CAPABILITY_REPORT_ONLY=0
-                touch "$ADB_ROOT/modules/BKI/disable" || exit 13
+                touch "$ADB_ROOT/modules/synthetic_zygisk_b/disable" || exit 13
                 otast_validate_capability_ownership || exit 14
-                mkdir -p "$ADB_ROOT/modules_update/BetterKnownInstalled" || exit 15
+                mkdir -p "$ADB_ROOT/modules_update/synthetic_zygisk_a" || exit 15
                 otast_validate_capability_ownership || exit 16
-                rm -f "$ADB_ROOT/modules/BKI/disable" || exit 17
-                touch "$ADB_ROOT/modules/BKI/remove" || exit 18
+                rm -f "$ADB_ROOT/modules/synthetic_zygisk_b/disable" || exit 17
+                touch "$ADB_ROOT/modules/synthetic_zygisk_b/remove" || exit 18
                 otast_validate_capability_ownership || exit 19
             '''
             subprocess.run(["busybox", "sh", "-c", command], check=True, timeout=20)
-            self.assertTrue((staged / "BetterKnownInstalled").is_dir())
+            self.assertTrue((staged / "synthetic_zygisk_a").is_dir())
+
+    def test_runtime_does_not_name_strict_exclusion_non_targets(self) -> None:
+        runtime = (ROOT / "module/runtime/capabilities-v3.sh").read_text(encoding="utf-8")
+        registry = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
+        for module_id in registry["strict_exclusions"]:
+            self.assertNotIn(module_id, runtime)
 
     @staticmethod
     def _transform_ta(source: Path, output: Path) -> None:
