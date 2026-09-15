@@ -45,6 +45,35 @@ class CapabilityOwnershipTests(unittest.TestCase):
             with self.assertRaisesRegex(OtastError, "exclusive capability has multiple direct writer integrations"):
                 validate_capabilities(root)
 
+    def test_runtime_writer_table_matches_registry_except_protected_non_targets(self) -> None:
+        registry = json.loads((ROOT / "compatibility/capabilities.json").read_text(encoding="utf-8"))
+        supported = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
+        strict = set(supported["strict_exclusions"])
+        expected: set[str] = set()
+        for integration_id, record in registry["integrations"].items():
+            if not record.get("writes"):
+                continue
+            module_ids = set(record.get("module_ids", []))
+            if module_ids & strict:
+                continue
+            expected.add(integration_id)
+
+        runtime = ROOT / "module/runtime/capabilities-v3.sh"
+        command = f'''
+            ADB_ROOT=/data/adb
+            otast_stop() {{ :; }}
+            . "{runtime}" || exit 1
+            _otast_cap_writer_integrations
+        '''
+        result = subprocess.run(
+            ["busybox", "sh", "-c", command],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            timeout=20,
+        )
+        self.assertEqual(set(result.stdout.split()), expected)
+
     def test_ash_and_bki_are_write_protected_non_targets_not_hard_stop_identity_governors(self) -> None:
         registry = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         capabilities = json.loads((ROOT / "compatibility/capabilities.json").read_text(encoding="utf-8"))
