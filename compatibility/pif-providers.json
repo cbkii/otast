@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "module_id": "playintegrityfix",
+  "selection_policy": "exact-reviewed-provider-evidence",
+  "preferred_provider": "kowx-inject-s",
+  "preference_gate": "A provider preference change requires exact-stack physical Pixel qualification; repository support alone is insufficient.",
+  "providers": {
+    "kowx-inject-s": {
+      "status": "SUPPORTED_PREFERRED",
+      "repository": "KOWX712/PlayIntegrityFix",
+      "ref": "inject_s",
+      "reviewed_commit": "73552eec78f1e733573192333e9a7453b8de0662",
+      "module_prop_git_blob": "9f2a5937749655eb5e7dbf9fea2bfaacb81c067e",
+      "module_prop_sha256": "95c5869147960b3689c2effc84dfbc68bedde7b8e22ae29a55ea17a4092ee80a",
+      "module_identity": {
+        "id": "playintegrityfix",
+        "name": "Play Integrity Fix [INJECT]",
+        "version": "v4.7-1-inject-s",
+        "version_code": 471
+      },
+      "profile": {
+        "format": "prop",
+        "validator": "inject_prop_v1",
+        "canonical_precedence": [
+          "/data/adb/pif.prop",
+          "/data/adb/modules/playintegrityfix/pif.prop",
+          "/data/adb/modules_update/playintegrityfix/pif.prop"
+        ],
+        "otast_mutation": "canonical source never mutated; non-source active/staged fallbacks may be transactional mirrors"
+      },
+      "sensitive_property_writers": [
+        "module/service.sh"
+      ],
+      "security_patch_behavior": {
+        "mode": "SURGICAL_REVIEWED_BOUNDARY",
+        "writer": "module/security_patch.sh",
+        "marker": "/data/adb/tricky_store/pif_auto_security_patch",
+        "otast_contract": "preserve marker/profile-selection behavior while suppressing TrickyStore, module system.prop and resetprop SPL writes"
+      },
+      "lifecycle": {
+        "profile_refresh": "module/autopif.sh",
+        "self_update": "module/autopif_ota.sh",
+        "otast_policy": "preserve upstream executables"
+      },
+      "preserved_configuration": [
+        "/data/adb/pif.prop",
+        "module/pif.prop"
+      ],
+      "reboot_requirement": "profile process restart may suffice; module/provider update requires reboot",
+      "impact_policy": {
+        "module_identity": ["module/module.prop"],
+        "target_writer": ["module/security_patch.sh"],
+        "native_dependency": ["zygisk/**", "gradle/**", "build.gradle.kts", "settings.gradle.kts", "gradle.properties", ".gitmodules"],
+        "preserved_surface": ["module/action.sh", "module/post-fs-data.sh", "module/service.sh", "module/common_func.sh", "module/autopif.sh", "module/autopif_ota.sh", "module/pif.prop", "webui/**", "module/webroot/**"],
+        "docs_ci": [".github/**", "README.md", "CHANGELOG.md", "LICENSE", ".gitattributes", ".gitignore"]
+      }
+    },
+    "osm0sis-fork-v18": {
+      "status": "SUPPORTED_CANDIDATE_PHYSICAL_QUALIFICATION_REQUIRED",
+      "repository": "osm0sis/PlayIntegrityFork",
+      "ref": "v18",
+      "reviewed_commit": "6d2307ff5037519982205e66bda1132d0d8cc4da",
+      "release_asset": "PlayIntegrityFork-v18.zip",
+      "release_asset_sha256": "625ebe65631f761e1521009f10a205d74255adf2e35732923d65106643cad9a6",
+      "module_prop_git_blob": "c3146113eb426319366db909e9a83d359d410f7f",
+      "module_prop_sha256": "59c698ce888105f09c248b11ccea3f545806c25b8b54ec2cda69c1d286f8e64b",
+      "module_identity": {
+        "id": "playintegrityfix",
+        "name": "Play Integrity Fork",
+        "version": "v18",
+        "version_code": 180000
+      },
+      "profile": {
+        "format": "custom prop",
+        "validator": "fork_prop_v18",
+        "canonical_precedence": [
+          "/data/adb/modules/playintegrityfix/custom.pif.prop",
+          "/data/adb/modules_update/playintegrityfix/custom.pif.prop"
+        ],
+        "upstream_runtime_precedence": [
+          "custom.pif.prop",
+          "custom.pif.json",
+          "pif.prop",
+          "pif.json"
+        ],
+        "json_compatibility": "upstream loads custom.pif.prop before custom.pif.json; OTAST supports the reviewed prop authority and fails closed only when configuration is JSON-only",
+        "otast_mutation": "profile is provider/user-owned and never mirrored or rewritten by OTAST"
+      },
+      "sensitive_property_writers": [
+        "module/post-fs-data.sh",
+        "module/service.sh"
+      ],
+      "security_patch_behavior": {
+        "mode": "SURGICAL_REVIEWED_BOUNDARY",
+        "writer": "module/autopif4.sh",
+        "writer_git_blob": "a0c3433ad5f89f0f8753a875ca28fb370ded0cfc",
+        "otast_contract": "preserve profile generation/install, TEESimulator/OhMyKeyMint warning flow and killpi lifecycle while suppressing only the direct TrickyStore security_patch.txt mutation branch"
+      },
+      "lifecycle": {
+        "profile_refresh": "module/autopif4.sh",
+        "action": "module/action.sh invokes autopif4.sh -m",
+        "otast_policy": "exact reviewed autopif4 writer boundary; no automatic provider switch"
+      },
+      "preserved_configuration": [
+        "module/custom.pif.prop",
+        "module/custom.pif.json",
+        "module/custom.app_replace_list.txt",
+        "module/skipdelprop",
+        "module/skippersistprop"
+      ],
+      "reboot_requirement": "profile process restart may suffice; provider install/update requires reboot",
+      "preference_qualification": "UNQUALIFIED_ON_TEGU_EXACT_STACK",
+      "impact_policy": {
+        "module_identity": ["module/module.prop"],
+        "target_writer": ["module/autopif4.sh"],
+        "new_writer_capability": ["module/*.sh", "module/**/*.sh", "zygisk/**"],
+        "native_dependency": ["zygisk/**", "app/**", "gradle/**", "build.gradle.kts", "settings.gradle.kts", "gradle.properties", ".gitmodules"],
+        "preserved_surface": ["module/action.sh", "module/post-fs-data.sh", "module/service.sh", "module/common_func.sh", "module/migrate.sh", "module/killpi.sh", "module/example.pif.prop"],
+        "docs_ci": [".github/**", "README.md", "CHANGELOG.md", "LICENSE", ".gitattributes", ".gitignore"]
+      }
+    }
+  }
+}
