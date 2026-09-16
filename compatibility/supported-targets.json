@@ -1,5 +1,6 @@
 {
   "schema_version": 5,
+  "capability_registry": "compatibility/capabilities.json",
   "support_model": {
     "device_family": "Google Pixel",
     "supported_platform_profiles": [
@@ -61,15 +62,15 @@
     "impact_classification": "upstream movement is classified by changed source surface; only a docs/CI-only source delta with byte/mode-identical installable module evidence may advance the monitor baseline automatically"
   },
   "conflicts": {
-    "legacy-identity-governors": {
-      "severity": "HARD_STOP",
+    "protected-non-targets": {
+      "severity": "REVIEW_REQUIRED",
       "module_ids": [
         "AshLooper",
         "AshReXcue",
         "BetterKnownInstalled",
         "BKI"
       ],
-      "reason": "These integrations can overlap OTAST-owned identity/property state. Runtime discovery does not traverse them; explicit coexistence is rejected by the established policy boundary."
+      "reason": "Write-path protection only: these modules may coexist with OTAST and are not identity governors. Runtime discovery must not traverse or mutate their trees; any future proposal to manage them requires explicit review."
     }
   },
   "observed_dependencies": {
@@ -161,6 +162,7 @@
   "targets": {
     "playintegrityfix": {
       "target_role": "MANAGED",
+      "management_role": "PROVIDER_WITH_TRANSACTIONAL_COMPATIBILITY_BOUNDARY",
       "compatibility_basis": "STRUCTURE_SENSITIVE_TRANSFORM",
       "profile_ownership": "CANONICAL_SOURCE_WITH_TRANSACTIONAL_FALLBACK_MIRRORS",
       "accepted_hashes": {
@@ -299,6 +301,7 @@
     },
     "ta-utl": {
       "target_role": "MANAGED",
+      "management_role": "COMPATIBILITY_ADAPTER",
       "compatibility_basis": "STRUCTURE_SENSITIVE_TRANSFORM",
       "accepted_hashes": {
         "prop.sh": [
@@ -309,6 +312,7 @@
         ]
       },
       "managed_paths": [
+        "/data/adb/disable_prop_handler",
         "prop.sh",
         "webui/assets/boot_hash-C0kIcwCH.js"
       ],
@@ -358,7 +362,7 @@
           "LICENSE"
         ]
       },
-      "preserved_scope": "all non-vbmeta prop.sh behaviour and all TA UTL WebUI functionality except the reviewed Boot Hash save backend; the Boot Hash field remains readable but its direct save writer is neutralized while OTAST owns VBMeta state",
+      "preserved_scope": "target-list and unrelated WebUI functionality; OTAST-managed early disable_prop_handler guard suppresses TA UTL's property/VBMeta handler, while the reviewed WebUI Boot Hash save backend remains a no-op",
       "reviewed_sources": [
         {
           "commit": "5d852b6ae087758178c42e56f98a4cde9c696f49",
@@ -369,11 +373,12 @@
           "ref": "v4.4 workflow artifact source; generated boot_hash-C0kIcwCH.js SHA-256 bedb09d2538e28d636ea592a58d2a2234849351d49a95175d54c4de7ccf4d5cc"
         }
       ],
-      "reviewed_ref": "v4.4 source and generated WebUI writer reviewed 2026-08-31; prop.sh and boot_hash-C0kIcwCH.js are both exact-hash managed; GitHub release-asset digest corrected against release metadata 2026-09-06",
-      "strategy": "exact v4.4 transformations: remove the reviewed prop.sh competing VBMeta block and make the reviewed WebUI Boot Hash save backend a no-op; exact hashes remain necessary because these are structure-sensitive surgical transforms"
+      "reviewed_ref": "v4.4 source and generated WebUI writer reviewed 2026-08-31; current main cf167849 only changes README; prop.sh still consumes boot_hash before its late disable_prop_handler guard",
+      "strategy": "compatibility adapter: exact-transform prop.sh so disable_prop_handler exits before any boot_hash or sensitive-property write, transactionally own that guard while TA is installed, and keep the reviewed WebUI Boot Hash save backend a no-op; target-list UI remains available"
     },
     "trickystore": {
       "target_role": "MANAGED",
+      "management_role": "EXTERNAL_CONTRACT_PROVIDER",
       "compatibility_basis": "EXACT_REVIEWED_ARTIFACT",
       "implementation": "Tricky Store OSS",
       "module_ids": [
@@ -449,6 +454,8 @@
     },
     "vbmeta-fixer": {
       "target_role": "MANAGED",
+      "management_role": "LEGACY_COMPATIBILITY_ADAPTER",
+      "preferred": false,
       "compatibility_basis": "EXACT_REVIEWED_ARTIFACT",
       "managed_templates": {
         "service.sh": "4a0313507955de8893bc149630b2abb6746b9b6d1c9ca3beb5f3d159730e9365"
@@ -485,10 +492,12 @@
         ]
       },
       "reviewed_commit": "520b25657a4c4473a88afa9c5f24b3f119febd6f",
-      "strategy": "neutralize the reviewed upstream runtime writer; preserve bootloader/libavb runtime VBMeta values; this target remains exact-hash gated because no version-range compatibility contract has yet been separately qualified"
+      "strategy": "legacy compatibility adapter only: neutralize the reviewed upstream VBMeta runtime writer and preserve exact Restore provenance; do not treat the module as a preferred VBMeta authority or synthesize unrelated AVB values"
     },
     "yurikey": {
       "target_role": "MANAGED",
+      "management_role": "LEGACY_COMPATIBILITY_ADAPTER",
+      "preferred": false,
       "compatibility_basis": "WHOLE_FILE_VERSION_RANGE",
       "managed_templates": {
         "action.sh": "c4914d13f27802c5df06cb1547d80110cc4747218367f4f55a91476eae4ba0fd",
@@ -576,7 +585,7 @@
           "ref": "upstream remote keybox payload rotation reviewed 2026-09-06; Module tree unchanged at 4fedee5292ed56665938c117225c0405650a4b42; active key material remains external and Yurikey unattended updater remains neutralized by OTAST"
         }
       ],
-      "strategy": "Yurikey 3.0.x whole-file high-risk writers are neutralized by module identity + reviewed version range + safe path checks, not brittle source-file hashes; exact original bytes/mode are preserved for Restore"
+      "strategy": "legacy compatibility adapter only: Yurikey 3.0.x reviewed high-risk writers remain transactionally neutralized/restorable for existing installs, but Yurikey is not a preferred identity, key-attestation, PIF, target-list or VBMeta authority"
     }
   }
 }

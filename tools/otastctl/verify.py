@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .build import ENTRYPOINTS, build_module, module_metadata
+from .capabilities import validate_capabilities
 from .compatibility import validate_registry
 from .privacy import require_public_safe
 from .qualification import validate_qualification_registry
@@ -26,6 +27,7 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
         raise OtastError(f"repository root is missing or unsafe: {root}")
 
     compatibility = validate_registry(root)
+    capabilities = validate_capabilities(root)
     qualification = validate_qualification_registry(root)
     metadata = module_metadata(root / "module/module.prop")
     update = load_update_metadata(root / "update.json")
@@ -77,6 +79,7 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
         "privacy": "PASS",
         "deterministic": True,
         "compatibility": compatibility,
+        "capabilities": capabilities,
         "qualification": qualification,
     }
     if full:
