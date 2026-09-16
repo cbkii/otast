@@ -8,10 +8,13 @@ from pathlib import Path
 from .build import ENTRYPOINTS, build_module, module_metadata
 from .capabilities import validate_capabilities
 from .compatibility import validate_registry
+from .pif_providers import validate_pif_providers
 from .privacy import require_public_safe
 from .qualification import validate_qualification_registry
 from .release import UPDATE_JSON_URL, load_update_metadata, version_core
 from .runtime_digest import runtime_digest_from_zip
+from .stack_observers import validate_stack_observers
+from .stack_qualification import validate_stack_bound_qualification
 from .util import OtastError, sha256_file
 
 
@@ -28,7 +31,10 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
 
     compatibility = validate_registry(root)
     capabilities = validate_capabilities(root)
+    pif_providers = validate_pif_providers(root)
+    stack_observers = validate_stack_observers(root)
     qualification = validate_qualification_registry(root)
+    stack_qualification = validate_stack_bound_qualification(root)
     metadata = module_metadata(root / "module/module.prop")
     update = load_update_metadata(root / "update.json")
     current_version = metadata["version"]
@@ -80,7 +86,10 @@ def verify_repository(root: Path, *, full: bool = False) -> dict[str, object]:
         "deterministic": True,
         "compatibility": compatibility,
         "capabilities": capabilities,
+        "pif_providers": pif_providers,
+        "stack_observers": stack_observers,
         "qualification": qualification,
+        "stack_qualification": stack_qualification,
     }
     if full:
         _run(["python3", "-m", "unittest", "discover", "-s", "tests", "-v"], root, timeout=600)
