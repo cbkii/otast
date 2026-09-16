@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "stack_binding_schema_version": 1,
   "runtime_digest_algorithm": "otast-runtime-v1",
   "release_reference": {
     "device": "tegu",
@@ -25,7 +26,7 @@
       "proof_sha256": "ab38846b5f3cca3f0a64d8904f50e356243b5f21916d51e1f065c06422ad0e6b",
       "qualification_date": "2026-09-01",
       "current_state": "STALE_RUNTIME_DIGEST_UNBOUND",
-      "stale_reason": "Legacy physical proof predates canonical runtime-digest binding. Batch 1 also changes the shipping module runtime, so this proof cannot qualify a later candidate without new physical evidence.",
+      "stale_reason": "Legacy physical proof predates canonical runtime-digest and full-stack binding. Batch 1 and later provider/capability work change the shipping runtime, so this proof cannot qualify a later candidate without new physical evidence.",
       "page_size_qualification": {
         "4096": "UNQUALIFIED",
         "16384": "UNQUALIFIED"
