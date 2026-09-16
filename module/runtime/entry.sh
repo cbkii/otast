@@ -30,7 +30,9 @@ OTAST_LIVE_PROP_FILE=${OTAST_LIVE_PROP_FILE:-}
 . "$MODDIR/profiles.sh" || exit 70
 . "$MODDIR/architecture-v2.sh" || exit 70
 . "$MODDIR/pif-migration-v2.sh" || exit 70
+. "$MODDIR/pif-provider-v4.sh" || exit 70
 . "$MODDIR/capabilities-v3.sh" || exit 70
+. "$MODDIR/stack-observers-v4.sh" || exit 70
 . "$MODDIR/report.sh" || exit 70
 [ ! -f "$MODDIR/../otast.conf" ] || . "$MODDIR/../otast.conf" || exit 70
 
@@ -47,6 +49,7 @@ _otast_load() {
   otast_ensure_dir "$OTAST_TMP_ROOT" || return 1
   otast_validate_authority_file || return 1
   otast_enforce_runtime_policy || return 1
+  otast_validate_pif_provider || return 1
   otast_validate_trickystore_oss || return 1
   otast_trickystore_collect_health || return 1
   otast_validate_capability_ownership || return 1
@@ -180,9 +183,22 @@ _otast_report() {
   otast_validate_pif_profiles_current || return 1
   otast_pif_inspect_legacy_profile_state || return 1
   otast_report || return 1
+  otast_report_pif_provider || return 1
   otast_report_strict_runtime_identity || return 1
   otast_report_trickystore_health || return 1
-  otast_report_capability_ownership
+  otast_report_capability_ownership || return 1
+  otast_report_stack_observers
+}
+
+_otast_qualify() {
+  # Qualification adds external-stack preconditions to normal OTAST Verify. It
+  # remains read-only and does not substitute one external acceptance result for
+  # another.
+  _otast_verify || return 1
+  otast_validate_qualification_environment || return 1
+  otast_report_pif_provider || return 1
+  otast_report_stack_observers || return 1
+  printf '%s\n' 'QUALIFICATION_ENVIRONMENT_READY'
 }
 
 _otast_boot_recover() {
@@ -196,9 +212,10 @@ case ${1:-report} in
   verify) _otast_verify ;;
   restore) _otast_restore ;;
   report|status) _otast_report ;;
+  qualify) _otast_qualify ;;
   boot-recover) _otast_boot_recover ;;
   *)
-    printf 'Usage: %s {preflight|apply|verify|restore|report|boot-recover}\n' "$0" >&2
+    printf 'Usage: %s {preflight|apply|verify|restore|report|qualify|boot-recover}\n' "$0" >&2
     exit 64
     ;;
 esac
