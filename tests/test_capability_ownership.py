@@ -49,21 +49,41 @@ class CapabilityOwnershipTests(unittest.TestCase):
         registry = json.loads((ROOT / "compatibility/capabilities.json").read_text(encoding="utf-8"))
         supported = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
         strict = set(supported["strict_exclusions"])
-        expected: set[str] = set()
+        expected_integrations: dict[str, dict[str, set[str]]] = {}
         for integration_id, record in registry["integrations"].items():
-            if not record.get("writes"):
+            writes = set(record.get("writes", []))
+            if not writes:
                 continue
             module_ids = set(record.get("module_ids", []))
             if module_ids & strict:
                 continue
-            expected.add(integration_id)
+            expected_integrations[integration_id] = {
+                "module_ids": module_ids,
+                "writes": writes,
+            }
+        expected_exclusive = {
+            capability_id
+            for capability_id, record in registry["capabilities"].items()
+            if record.get("exclusive") is True
+        }
 
         runtime = ROOT / "module/runtime/capabilities-v3.sh"
         command = f'''
             ADB_ROOT=/data/adb
             otast_stop() {{ :; }}
             . "{runtime}" || exit 1
-            _otast_cap_writer_integrations
+            for integration in $(_otast_cap_writer_integrations); do
+              printf 'integration=%s\\n' "$integration"
+              for module_id in $(_otast_cap_integration_module_ids "$integration"); do
+                printf 'module=%s:%s\\n' "$integration" "$module_id"
+              done
+              for capability in $(_otast_cap_integration_writes "$integration"); do
+                printf 'write=%s:%s\\n' "$integration" "$capability"
+              done
+            done
+            for capability in $(_otast_cap_exclusive_ids); do
+              printf 'exclusive=%s\\n' "$capability"
+            done
         '''
         result = subprocess.run(
             ["busybox", "sh", "-c", command],
@@ -72,7 +92,32 @@ class CapabilityOwnershipTests(unittest.TestCase):
             stdout=subprocess.PIPE,
             timeout=20,
         )
-        self.assertEqual(set(result.stdout.split()), expected)
+        actual_integrations: set[str] = set()
+        actual_modules: dict[str, set[str]] = {}
+        actual_writes: dict[str, set[str]] = {}
+        actual_exclusive: set[str] = set()
+        for line in result.stdout.splitlines():
+            if line.startswith("integration="):
+                integration = line.split("=", 1)[1]
+                actual_integrations.add(integration)
+                actual_modules.setdefault(integration, set())
+                actual_writes.setdefault(integration, set())
+            elif line.startswith("module="):
+                integration, module_id = line.split("=", 1)[1].split(":", 1)
+                actual_modules.setdefault(integration, set()).add(module_id)
+            elif line.startswith("write="):
+                integration, capability = line.split("=", 1)[1].split(":", 1)
+                actual_writes.setdefault(integration, set()).add(capability)
+            elif line.startswith("exclusive="):
+                actual_exclusive.add(line.split("=", 1)[1])
+            else:
+                self.fail(f"unexpected runtime capability parity output: {line}")
+
+        self.assertEqual(actual_integrations, set(expected_integrations))
+        self.assertEqual(actual_exclusive, expected_exclusive)
+        for integration_id, expected in expected_integrations.items():
+            self.assertEqual(actual_modules.get(integration_id, set()), expected["module_ids"])
+            self.assertEqual(actual_writes.get(integration_id, set()), expected["writes"])
 
     def test_ash_and_bki_are_write_protected_non_targets_not_hard_stop_identity_governors(self) -> None:
         registry = json.loads((ROOT / "compatibility/supported-targets.json").read_text(encoding="utf-8"))
