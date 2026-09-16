@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "zygisk_provider": {
+    "exclusive": true,
+    "known_module_ids": ["rezygisk", "zygisksu"],
+    "zero_module_provider_state": "EXTERNAL_OR_BUILTIN_UNRESOLVED",
+    "policy": "Exactly one effective module-based provider is allowed. Zero module providers are reported unresolved because Magisk built-in Zygisk is outside module-tree discovery; physical qualification must bind the actual provider explicitly."
+  },
+  "observers": {
+    "vector": {
+      "module_ids": ["vector"],
+      "domain": "lsposed_environment",
+      "mode": "READ_ONLY"
+    },
+    "treat-wheel": {
+      "module_ids": ["treat_wheel"],
+      "domain": "root_concealment",
+      "mode": "READ_ONLY",
+      "reviewed_upstream": "PerformanC/Treat-Wheel-Zygisk@2e24b0f965b687c811f87d293360934cd834aaa1"
+    },
+    "zygisk-detach": {
+      "module_ids": ["zygisk-detach"],
+      "domain": "play_store_relationship",
+      "mode": "READ_ONLY",
+      "reviewed_upstream": "j-hc/zygisk-detach@607b0bf589ddae48d448eb79f383863034f69138",
+      "config_path": "/data/adb/zygisk-detach/detach.bin",
+      "config_format": "length-prefixed alternating-byte package names as implemented by reviewed CLI",
+      "critical_packages": [
+        "com.google.android.gms",
+        "com.android.vending",
+        "com.google.android.apps.walletnfcrel"
+      ]
+    }
+  },
+  "runtime_non_targets": "Protected BKI/Ash strict exclusions remain outside this runtime observer inventory and are bound only by host/physical qualification evidence."
+}
