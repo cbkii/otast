@@ -28,7 +28,7 @@ if [ ! -f /data/adb/ota.prop ] || [ -L /data/adb/ota.prop ]; then
   ui_print '! Missing or unsafe authority: /data/adb/ota.prop'
   _otast_install_failed=1
 fi
-for _otast_required in action.sh post-fs-data.sh service.sh uninstall.sh runtime/entry.sh runtime/common.sh runtime/platform.sh runtime/authority.sh runtime/transaction.sh runtime/profiles.sh runtime/pif.sh runtime/ta.sh runtime/architecture-v2.sh runtime/pif-migration-v2.sh runtime/capabilities-v3.sh runtime/report.sh; do
+for _otast_required in action.sh post-fs-data.sh service.sh uninstall.sh runtime/entry.sh runtime/common.sh runtime/platform.sh runtime/authority.sh runtime/transaction.sh runtime/profiles.sh runtime/pif.sh runtime/ta.sh runtime/architecture-v2.sh runtime/pif-migration-v2.sh runtime/pif-provider-v4.sh runtime/capabilities-v3.sh runtime/stack-observers-v4.sh runtime/report.sh; do
   if [ ! -f "$MODPATH/$_otast_required" ] || [ -L "$MODPATH/$_otast_required" ]; then
     ui_print "! Missing or unsafe package file: $_otast_required"
     _otast_install_failed=1
@@ -62,4 +62,5 @@ ui_print '  3. Select Preflight (read-only).'
 ui_print '  4. If Preflight passes, run Action again and select Apply.'
 ui_print '  5. If Apply reports REBOOT_REQUIRED, reboot again.'
 ui_print '  6. Run Action > Verify (read-only) after that reboot.'
+ui_print '- For release qualification, run runtime/entry.sh qualify after Verify passes.'
 ui_print '- Do not run Apply before the first reboot.'
